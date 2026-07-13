@@ -1,0 +1,165 @@
+---
+source: query_engine/src/ast/test/mod.rs
+expression: ast
+---
+Expr {
+    kind: Object(
+        Object {
+            fields: [
+                ObjectField {
+                    key: Ident {
+                        symbol: Symbol(
+                            Spur(1),
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 3,
+                                absolute: 2,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 7,
+                                absolute: 6,
+                            },
+                        },
+                    },
+                    val: Expr {
+                        kind: Literal(
+                            Str(
+                                StringLit {
+                                    value: Symbol(
+                                        Spur(2),
+                                    ),
+                                    kind: Normal,
+                                },
+                            ),
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 1,
+                                absolute: 0,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 15,
+                                absolute: 14,
+                            },
+                        },
+                    },
+                },
+                ObjectField {
+                    key: Ident {
+                        symbol: Symbol(
+                            Spur(3),
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 17,
+                                absolute: 16,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 20,
+                                absolute: 19,
+                            },
+                        },
+                    },
+                    val: Expr {
+                        kind: Binary(
+                            BinaryExpr {
+                                op: Add,
+                                left: Expr {
+                                    kind: Literal(
+                                        Int(
+                                            IntegerLit {
+                                                value: Symbol(
+                                                    Spur(4),
+                                                ),
+                                                suffix: None,
+                                            },
+                                        ),
+                                    ),
+                                    span: Span {
+                                        start: Position {
+                                            line: 1,
+                                            column: 1,
+                                            absolute: 0,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 24,
+                                            absolute: 23,
+                                        },
+                                    },
+                                },
+                                right: Expr {
+                                    kind: Literal(
+                                        Int(
+                                            IntegerLit {
+                                                value: Symbol(
+                                                    Spur(5),
+                                                ),
+                                                suffix: None,
+                                            },
+                                        ),
+                                    ),
+                                    span: Span {
+                                        start: Position {
+                                            line: 1,
+                                            column: 1,
+                                            absolute: 0,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 28,
+                                            absolute: 27,
+                                        },
+                                    },
+                                },
+                            },
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 1,
+                                absolute: 0,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 28,
+                                absolute: 27,
+                            },
+                        },
+                    },
+                },
+            ],
+            span: Span {
+                start: Position {
+                    line: 1,
+                    column: 1,
+                    absolute: 0,
+                },
+                end: Position {
+                    line: 1,
+                    column: 30,
+                    absolute: 29,
+                },
+            },
+        },
+    ),
+    span: Span {
+        start: Position {
+            line: 1,
+            column: 1,
+            absolute: 0,
+        },
+        end: Position {
+            line: 1,
+            column: 30,
+            absolute: 29,
+        },
+    },
+}

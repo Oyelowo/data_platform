@@ -1,0 +1,19 @@
+[package]
+name = "yelang-lexer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-interner = { path = "../yelang-interner" }
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+rstest = { workspace = true }

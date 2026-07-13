@@ -1,0 +1,143 @@
+---
+source: query_engine/src/ast/test/other.rs
+expression: ast
+---
+Stmt {
+    kind: TermExpr(
+        Expr {
+            kind: Query(
+                Query {
+                    kind: Select(
+                        SelectQ {
+                            projection: Expr {
+                                kind: Path(
+                                    Path {
+                                        segments: [
+                                            PathSegment {
+                                                ident: Ident {
+                                                    symbol: Symbol(
+                                                        Spur(1),
+                                                    ),
+                                                    span: Span {
+                                                        start: Position {
+                                                            line: 1,
+                                                            column: 8,
+                                                            absolute: 7,
+                                                        },
+                                                        end: Position {
+                                                            line: 1,
+                                                            column: 12,
+                                                            absolute: 11,
+                                                        },
+                                                    },
+                                                },
+                                                args: None,
+                                            },
+                                        ],
+                                        is_absolute: false,
+                                        span: Span {
+                                            start: Position {
+                                                line: 1,
+                                                column: 8,
+                                                absolute: 7,
+                                            },
+                                            end: Position {
+                                                line: 1,
+                                                column: 17,
+                                                absolute: 16,
+                                            },
+                                        },
+                                    },
+                                ),
+                                span: Span {
+                                    start: Position {
+                                        line: 1,
+                                        column: 8,
+                                        absolute: 7,
+                                    },
+                                    end: Position {
+                                        line: 1,
+                                        column: 17,
+                                        absolute: 16,
+                                    },
+                                },
+                            },
+                            from: [
+                                FromNode {
+                                    var: Some(
+                                        Ident {
+                                            symbol: Symbol(
+                                                Spur(2),
+                                            ),
+                                            span: Span {
+                                                start: Position {
+                                                    line: 1,
+                                                    column: 18,
+                                                    absolute: 17,
+                                                },
+                                                end: Position {
+                                                    line: 1,
+                                                    column: 22,
+                                                    absolute: 21,
+                                                },
+                                            },
+                                        },
+                                    ),
+                                    bind: None,
+                                    ty: None,
+                                    modifiers: Modifiers {
+                                        filter: None,
+                                        order: None,
+                                        range: None,
+                                    },
+                                },
+                            ],
+                            links: [],
+                            post_links_for: [],
+                            where_clause: None,
+                            group_by: None,
+                            order_by: None,
+                            range: None,
+                        },
+                    ),
+                    span: Span {
+                        start: Position {
+                            line: 1,
+                            column: 1,
+                            absolute: 0,
+                        },
+                        end: Position {
+                            line: 1,
+                            column: 23,
+                            absolute: 22,
+                        },
+                    },
+                },
+            ),
+            span: Span {
+                start: Position {
+                    line: 1,
+                    column: 1,
+                    absolute: 0,
+                },
+                end: Position {
+                    line: 1,
+                    column: 23,
+                    absolute: 22,
+                },
+            },
+        },
+    ),
+    span: Span {
+        start: Position {
+            line: 1,
+            column: 1,
+            absolute: 0,
+        },
+        end: Position {
+            line: 1,
+            column: 23,
+            absolute: 22,
+        },
+    },
+}

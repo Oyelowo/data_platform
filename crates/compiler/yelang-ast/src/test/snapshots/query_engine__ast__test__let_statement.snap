@@ -1,0 +1,97 @@
+---
+source: query_engine/src/ast/test/mod.rs
+expression: ast
+---
+Stmt {
+    kind: Let(
+        LetStmt {
+            pattern: Pattern {
+                pattern: Binding {
+                    name: Ident {
+                        symbol: Symbol(
+                            Spur(1),
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 5,
+                                absolute: 4,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 6,
+                                absolute: 5,
+                            },
+                        },
+                    },
+                    mutability: Immutable,
+                    subpattern: None,
+                },
+                span: Span {
+                    start: Position {
+                        line: 1,
+                        column: 1,
+                        absolute: 0,
+                    },
+                    end: Position {
+                        line: 1,
+                        column: 6,
+                        absolute: 5,
+                    },
+                },
+            },
+            ty: None,
+            init: Some(
+                Expr {
+                    kind: Literal(
+                        Int(
+                            IntegerLit {
+                                value: Symbol(
+                                    Spur(2),
+                                ),
+                                suffix: None,
+                            },
+                        ),
+                    ),
+                    span: Span {
+                        start: Position {
+                            line: 1,
+                            column: 1,
+                            absolute: 0,
+                        },
+                        end: Position {
+                            line: 1,
+                            column: 11,
+                            absolute: 10,
+                        },
+                    },
+                },
+            ),
+            span: Span {
+                start: Position {
+                    line: 1,
+                    column: 1,
+                    absolute: 0,
+                },
+                end: Position {
+                    line: 1,
+                    column: 12,
+                    absolute: 11,
+                },
+            },
+            attrs: [],
+        },
+    ),
+    span: Span {
+        start: Position {
+            line: 1,
+            column: 1,
+            absolute: 0,
+        },
+        end: Position {
+            line: 1,
+            column: 12,
+            absolute: 11,
+        },
+    },
+}

@@ -1,0 +1,28 @@
+[package]
+name = "yelang-interner"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+indexmap = { workspace = true }
+slotmap = { workspace = true }
+rustc-hash = { workspace = true }
+fxhash = { workspace = true }
+lasso = { workspace = true }
+ropey = { workspace = true }
+annotate-snippets = { workspace = true }
+memchr = { workspace = true }
+lexical = { workspace = true }
+lexical-core = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }

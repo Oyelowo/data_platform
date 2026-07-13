@@ -1,0 +1,596 @@
+---
+source: crates/lang/yelang-ast/src/test/other.rs
+expression: ast
+---
+Stmt {
+    kind: TermExpr(
+        Expr {
+            kind: ArrayAccess(
+                ArrayAccess {
+                    base: Expr {
+                        kind: ArrayAccess(
+                            ArrayAccess {
+                                base: Expr {
+                                    kind: ArrayAccess(
+                                        ArrayAccess {
+                                            base: Expr {
+                                                kind: ArrayAccess(
+                                                    ArrayAccess {
+                                                        base: Expr {
+                                                            kind: ArrayAccess(
+                                                                ArrayAccess {
+                                                                    base: Expr {
+                                                                        kind: BindAt(
+                                                                            BindAtExpr {
+                                                                                base: Expr {
+                                                                                    kind: Path(
+                                                                                        Path {
+                                                                                            segments: [
+                                                                                                PathSegment {
+                                                                                                    ident: Ident {
+                                                                                                        symbol: Symbol(
+                                                                                                            Spur(1),
+                                                                                                        ),
+                                                                                                        span: Span {
+                                                                                                            start: Position {
+                                                                                                                line: 1,
+                                                                                                                column: 1,
+                                                                                                                absolute: 0,
+                                                                                                            },
+                                                                                                            end: Position {
+                                                                                                                line: 1,
+                                                                                                                column: 6,
+                                                                                                                absolute: 5,
+                                                                                                            },
+                                                                                                        },
+                                                                                                    },
+                                                                                                    args: None,
+                                                                                                },
+                                                                                            ],
+                                                                                            is_absolute: false,
+                                                                                            span: Span {
+                                                                                                start: Position {
+                                                                                                    line: 1,
+                                                                                                    column: 1,
+                                                                                                    absolute: 0,
+                                                                                                },
+                                                                                                end: Position {
+                                                                                                    line: 1,
+                                                                                                    column: 7,
+                                                                                                    absolute: 6,
+                                                                                                },
+                                                                                            },
+                                                                                        },
+                                                                                    ),
+                                                                                    span: Span {
+                                                                                        start: Position {
+                                                                                            line: 1,
+                                                                                            column: 1,
+                                                                                            absolute: 0,
+                                                                                        },
+                                                                                        end: Position {
+                                                                                            line: 1,
+                                                                                            column: 7,
+                                                                                            absolute: 6,
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                                at: Ident {
+                                                                                    symbol: Symbol(
+                                                                                        Spur(2),
+                                                                                    ),
+                                                                                    span: Span {
+                                                                                        start: Position {
+                                                                                            line: 1,
+                                                                                            column: 7,
+                                                                                            absolute: 6,
+                                                                                        },
+                                                                                        end: Position {
+                                                                                            line: 1,
+                                                                                            column: 8,
+                                                                                            absolute: 7,
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                        span: Span {
+                                                                            start: Position {
+                                                                                line: 1,
+                                                                                column: 6,
+                                                                                absolute: 5,
+                                                                            },
+                                                                            end: Position {
+                                                                                line: 1,
+                                                                                column: 8,
+                                                                                absolute: 7,
+                                                                            },
+                                                                        },
+                                                                    },
+                                                                    index: Range(
+                                                                        RangeItem {
+                                                                            start: Some(
+                                                                                Expr {
+                                                                                    kind: Literal(
+                                                                                        Int(
+                                                                                            IntegerLit {
+                                                                                                value: Symbol(
+                                                                                                    Spur(3),
+                                                                                                ),
+                                                                                                suffix: None,
+                                                                                            },
+                                                                                        ),
+                                                                                    ),
+                                                                                    span: Span {
+                                                                                        start: Position {
+                                                                                            line: 1,
+                                                                                            column: 9,
+                                                                                            absolute: 8,
+                                                                                        },
+                                                                                        end: Position {
+                                                                                            line: 1,
+                                                                                            column: 10,
+                                                                                            absolute: 9,
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                            ),
+                                                                            end: Some(
+                                                                                Expr {
+                                                                                    kind: Path(
+                                                                                        Path {
+                                                                                            segments: [
+                                                                                                PathSegment {
+                                                                                                    ident: Ident {
+                                                                                                        symbol: Symbol(
+                                                                                                            Spur(6),
+                                                                                                        ),
+                                                                                                        span: Span {
+                                                                                                            start: Position {
+                                                                                                                line: 1,
+                                                                                                                column: 13,
+                                                                                                                absolute: 12,
+                                                                                                            },
+                                                                                                            end: Position {
+                                                                                                                line: 1,
+                                                                                                                column: 18,
+                                                                                                                absolute: 17,
+                                                                                                            },
+                                                                                                        },
+                                                                                                    },
+                                                                                                    args: None,
+                                                                                                },
+                                                                                            ],
+                                                                                            is_absolute: false,
+                                                                                            span: Span {
+                                                                                                start: Position {
+                                                                                                    line: 1,
+                                                                                                    column: 13,
+                                                                                                    absolute: 12,
+                                                                                                },
+                                                                                                end: Position {
+                                                                                                    line: 1,
+                                                                                                    column: 19,
+                                                                                                    absolute: 18,
+                                                                                                },
+                                                                                            },
+                                                                                        },
+                                                                                    ),
+                                                                                    span: Span {
+                                                                                        start: Position {
+                                                                                            line: 1,
+                                                                                            column: 13,
+                                                                                            absolute: 12,
+                                                                                        },
+                                                                                        end: Position {
+                                                                                            line: 1,
+                                                                                            column: 19,
+                                                                                            absolute: 18,
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                            ),
+                                                                            inclusive: true,
+                                                                        },
+                                                                    ),
+                                                                },
+                                                            ),
+                                                            span: Span {
+                                                                start: Position {
+                                                                    line: 1,
+                                                                    column: 8,
+                                                                    absolute: 7,
+                                                                },
+                                                                end: Position {
+                                                                    line: 1,
+                                                                    column: 19,
+                                                                    absolute: 18,
+                                                                },
+                                                            },
+                                                        },
+                                                        index: GroupBy(
+                                                            GroupBySelector {
+                                                                keys: [
+                                                                    GroupBySelectorKey {
+                                                                        name: Ident {
+                                                                            symbol: Symbol(
+                                                                                Spur(4),
+                                                                            ),
+                                                                            span: Span {
+                                                                                start: Position {
+                                                                                    line: 1,
+                                                                                    column: 31,
+                                                                                    absolute: 30,
+                                                                                },
+                                                                                end: Position {
+                                                                                    line: 1,
+                                                                                    column: 35,
+                                                                                    absolute: 34,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                        expr: Expr {
+                                                                            kind: MemberAccess(
+                                                                                MemberAccess {
+                                                                                    base: Expr {
+                                                                                        kind: Path(
+                                                                                            Path {
+                                                                                                segments: [
+                                                                                                    PathSegment {
+                                                                                                        ident: Ident {
+                                                                                                            symbol: Symbol(
+                                                                                                                Spur(2),
+                                                                                                            ),
+                                                                                                            span: Span {
+                                                                                                                start: Position {
+                                                                                                                    line: 1,
+                                                                                                                    column: 37,
+                                                                                                                    absolute: 36,
+                                                                                                                },
+                                                                                                                end: Position {
+                                                                                                                    line: 1,
+                                                                                                                    column: 38,
+                                                                                                                    absolute: 37,
+                                                                                                                },
+                                                                                                            },
+                                                                                                        },
+                                                                                                        args: None,
+                                                                                                    },
+                                                                                                ],
+                                                                                                is_absolute: false,
+                                                                                                span: Span {
+                                                                                                    start: Position {
+                                                                                                        line: 1,
+                                                                                                        column: 37,
+                                                                                                        absolute: 36,
+                                                                                                    },
+                                                                                                    end: Position {
+                                                                                                        line: 1,
+                                                                                                        column: 39,
+                                                                                                        absolute: 38,
+                                                                                                    },
+                                                                                                },
+                                                                                            },
+                                                                                        ),
+                                                                                        span: Span {
+                                                                                            start: Position {
+                                                                                                line: 1,
+                                                                                                column: 37,
+                                                                                                absolute: 36,
+                                                                                            },
+                                                                                            end: Position {
+                                                                                                line: 1,
+                                                                                                column: 39,
+                                                                                                absolute: 38,
+                                                                                            },
+                                                                                        },
+                                                                                    },
+                                                                                    member: Ident {
+                                                                                        symbol: Symbol(
+                                                                                            Spur(4),
+                                                                                        ),
+                                                                                        span: Span {
+                                                                                            start: Position {
+                                                                                                line: 1,
+                                                                                                column: 39,
+                                                                                                absolute: 38,
+                                                                                            },
+                                                                                            end: Position {
+                                                                                                line: 1,
+                                                                                                column: 43,
+                                                                                                absolute: 42,
+                                                                                            },
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                            ),
+                                                                            span: Span {
+                                                                                start: Position {
+                                                                                    line: 1,
+                                                                                    column: 38,
+                                                                                    absolute: 37,
+                                                                                },
+                                                                                end: Position {
+                                                                                    line: 1,
+                                                                                    column: 43,
+                                                                                    absolute: 42,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                    },
+                                                                    GroupBySelectorKey {
+                                                                        name: Ident {
+                                                                            symbol: Symbol(
+                                                                                Spur(5),
+                                                                            ),
+                                                                            span: Span {
+                                                                                start: Position {
+                                                                                    line: 1,
+                                                                                    column: 45,
+                                                                                    absolute: 44,
+                                                                                },
+                                                                                end: Position {
+                                                                                    line: 1,
+                                                                                    column: 49,
+                                                                                    absolute: 48,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                        expr: Expr {
+                                                                            kind: MemberAccess(
+                                                                                MemberAccess {
+                                                                                    base: Expr {
+                                                                                        kind: Path(
+                                                                                            Path {
+                                                                                                segments: [
+                                                                                                    PathSegment {
+                                                                                                        ident: Ident {
+                                                                                                            symbol: Symbol(
+                                                                                                                Spur(2),
+                                                                                                            ),
+                                                                                                            span: Span {
+                                                                                                                start: Position {
+                                                                                                                    line: 1,
+                                                                                                                    column: 51,
+                                                                                                                    absolute: 50,
+                                                                                                                },
+                                                                                                                end: Position {
+                                                                                                                    line: 1,
+                                                                                                                    column: 52,
+                                                                                                                    absolute: 51,
+                                                                                                                },
+                                                                                                            },
+                                                                                                        },
+                                                                                                        args: None,
+                                                                                                    },
+                                                                                                ],
+                                                                                                is_absolute: false,
+                                                                                                span: Span {
+                                                                                                    start: Position {
+                                                                                                        line: 1,
+                                                                                                        column: 51,
+                                                                                                        absolute: 50,
+                                                                                                    },
+                                                                                                    end: Position {
+                                                                                                        line: 1,
+                                                                                                        column: 53,
+                                                                                                        absolute: 52,
+                                                                                                    },
+                                                                                                },
+                                                                                            },
+                                                                                        ),
+                                                                                        span: Span {
+                                                                                            start: Position {
+                                                                                                line: 1,
+                                                                                                column: 51,
+                                                                                                absolute: 50,
+                                                                                            },
+                                                                                            end: Position {
+                                                                                                line: 1,
+                                                                                                column: 53,
+                                                                                                absolute: 52,
+                                                                                            },
+                                                                                        },
+                                                                                    },
+                                                                                    member: Ident {
+                                                                                        symbol: Symbol(
+                                                                                            Spur(5),
+                                                                                        ),
+                                                                                        span: Span {
+                                                                                            start: Position {
+                                                                                                line: 1,
+                                                                                                column: 53,
+                                                                                                absolute: 52,
+                                                                                            },
+                                                                                            end: Position {
+                                                                                                line: 1,
+                                                                                                column: 57,
+                                                                                                absolute: 56,
+                                                                                            },
+                                                                                        },
+                                                                                    },
+                                                                                },
+                                                                            ),
+                                                                            span: Span {
+                                                                                start: Position {
+                                                                                    line: 1,
+                                                                                    column: 52,
+                                                                                    absolute: 51,
+                                                                                },
+                                                                                end: Position {
+                                                                                    line: 1,
+                                                                                    column: 57,
+                                                                                    absolute: 56,
+                                                                                },
+                                                                            },
+                                                                        },
+                                                                    },
+                                                                ],
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                                span: Span {
+                                                    start: Position {
+                                                        line: 1,
+                                                        column: 19,
+                                                        absolute: 18,
+                                                    },
+                                                    end: Position {
+                                                        line: 1,
+                                                        column: 60,
+                                                        absolute: 59,
+                                                    },
+                                                },
+                                            },
+                                            index: Enumerate,
+                                        },
+                                    ),
+                                    span: Span {
+                                        start: Position {
+                                            line: 1,
+                                            column: 60,
+                                            absolute: 59,
+                                        },
+                                        end: Position {
+                                            line: 1,
+                                            column: 71,
+                                            absolute: 70,
+                                        },
+                                    },
+                                },
+                                index: Distinct,
+                            },
+                        ),
+                        span: Span {
+                            start: Position {
+                                line: 1,
+                                column: 71,
+                                absolute: 70,
+                            },
+                            end: Position {
+                                line: 1,
+                                column: 81,
+                                absolute: 80,
+                            },
+                        },
+                    },
+                    index: DistinctBy(
+                        Expr {
+                            kind: MemberAccess(
+                                MemberAccess {
+                                    base: Expr {
+                                        kind: Path(
+                                            Path {
+                                                segments: [
+                                                    PathSegment {
+                                                        ident: Ident {
+                                                            symbol: Symbol(
+                                                                Spur(2),
+                                                            ),
+                                                            span: Span {
+                                                                start: Position {
+                                                                    line: 1,
+                                                                    column: 94,
+                                                                    absolute: 93,
+                                                                },
+                                                                end: Position {
+                                                                    line: 1,
+                                                                    column: 95,
+                                                                    absolute: 94,
+                                                                },
+                                                            },
+                                                        },
+                                                        args: None,
+                                                    },
+                                                ],
+                                                is_absolute: false,
+                                                span: Span {
+                                                    start: Position {
+                                                        line: 1,
+                                                        column: 94,
+                                                        absolute: 93,
+                                                    },
+                                                    end: Position {
+                                                        line: 1,
+                                                        column: 96,
+                                                        absolute: 95,
+                                                    },
+                                                },
+                                            },
+                                        ),
+                                        span: Span {
+                                            start: Position {
+                                                line: 1,
+                                                column: 94,
+                                                absolute: 93,
+                                            },
+                                            end: Position {
+                                                line: 1,
+                                                column: 96,
+                                                absolute: 95,
+                                            },
+                                        },
+                                    },
+                                    member: Ident {
+                                        symbol: Symbol(
+                                            Spur(4),
+                                        ),
+                                        span: Span {
+                                            start: Position {
+                                                line: 1,
+                                                column: 96,
+                                                absolute: 95,
+                                            },
+                                            end: Position {
+                                                line: 1,
+                                                column: 100,
+                                                absolute: 99,
+                                            },
+                                        },
+                                    },
+                                },
+                            ),
+                            span: Span {
+                                start: Position {
+                                    line: 1,
+                                    column: 95,
+                                    absolute: 94,
+                                },
+                                end: Position {
+                                    line: 1,
+                                    column: 100,
+                                    absolute: 99,
+                                },
+                            },
+                        },
+                    ),
+                },
+            ),
+            span: Span {
+                start: Position {
+                    line: 1,
+                    column: 81,
+                    absolute: 80,
+                },
+                end: Position {
+                    line: 1,
+                    column: 101,
+                    absolute: 100,
+                },
+            },
+        },
+    ),
+    span: Span {
+        start: Position {
+            line: 1,
+            column: 1,
+            absolute: 0,
+        },
+        end: Position {
+            line: 1,
+            column: 102,
+            absolute: 101,
+        },
+    },
+}

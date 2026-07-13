@@ -1,0 +1,6 @@
+/target
+*/target
+**/target
+.local/
+.local
+crates/compiler/notes/architectures

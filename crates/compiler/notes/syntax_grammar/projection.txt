@@ -1,0 +1,139 @@
+Some more context(there might be misteke and nothing is set in stone yet, so i am open to ideas). 
+Okay, here is an explanation prompt designed to convey the core semantics of your query language's binding, item_varing, and iteration model. The goal is to be clear, precise, and provide enough context to understand the unique aspects compared to standard SQL.
+
+Prompt for Explaining Query Language Semantics to another LLM:
+
+Subject: Explanation of Binding, Aliasing, and Iteration Semantics for a Document/Collection-Oriented Query Language
+
+Context:
+You are analyzing a query language designed for querying document or graph-like data structures. Unlike traditional SQL which operates primarily row-by-row on flat relations, this language treats collections (represented as arrays of objects/documents) as first-class citizens. A key design goal is to provide intuitive, predictable, and expressive ways to navigate and transform these collections, drawing inspiration from functional programming concepts like map and filter, while maintaining strict typing.
+
+Core Concepts:
+
+Collections vs. Items: Variables can refer to either an entire collection (e.g., users representing Array<UserObject>) or a single item from a collection during iteration (e.g., u representing a single UserObject).
+
+Scope: The language uses lexical scoping. Variables defined in outer scopes (like from or preceding links steps) are accessible in inner scopes (like where clauses or sub-expressions within projections), subject to potential shadowing.
+
+Projection Defines Output: The final select <projection_expr> determines the shape and cardinality of the entire query result. The from/links/where/etc. clauses primarily establish the context (available variables and their data) for evaluating the <projection_expr>. There is no implicit “row-by-row” mapping from from into select — per-element results require explicit selectors like [*], [where ...], [n], slices, or [**]. A query like select 5 from users@u:User returns the single value 5. A query like select users@u[*].name from users@u:User returns an Array<String>.
+
+Key Syntactic Elements and Their Semantics:
+
+Binding (@item_var): collection_expr@item_var
+
+Purpose: To bind a name (item_var) to represent individual items during iteration or to name a specific object/scalar result.
+
+Behavior:
+
+If collection_expr evaluates to Array<T>, then within an immediately following selector/iteration context ([*], [where ...], [order by ...], slicing, [**], etc.), the item_var refers to the current item of type T.
+
+If collection_expr evaluates to a single object or scalar T, then item_var refers to that single value T.
+
+Scope: The item_var is introduced into the scope immediately following the @item_var construct, primarily for use within subsequent accessors or expressions operating on the bound value(s).
+
+Requirement: Using @item_var is required if you need to reference the item(s) within a subsequent filter ([where item_var.field > ...]), projection (.{ item_var.field }), or other expression. It is optional if you are only performing a simple field map (collection[*].field).
+
+Iteration/Mapping Accessor ([*]): collection_expr[*]
+
+Purpose: Signals an operation that processes each element of the collection_expr (which must evaluate to Array<T>).
+
+Behavior: Conceptually creates a stream or context for element-wise operations. It does not inherently bind an item_var.
+
+Usage: Typically followed by .field (for mapping) or .{...} (for projecting an object per element, requires an @item_var before the [*]).
+
+Type: If collection_expr is Array<T>, then collection_expr[*] conceptually represents the sequence of T items ready for mapping/projection. The result type depends on the subsequent operation (e.g., Array<FieldType> for [*].field).
+
+Filtering Accessor ([where predicate]): collection_expr[where predicate]
+
+Purpose: Filters the elements of a collection.
+
+Behavior: Evaluates the predicate for each item in the collection_expr. Requires an @item_var before the [ if the predicate needs to refer to the current item (e.g., collection@item[where item.field > 10]).
+
+Type: If collection_expr is Array<T>, the result is Array<T>.
+
+Indexing Accessor ([index]): collection_expr[index]
+
+Purpose: Accesses a single element by its positional index (0-based, negative indices allowed).
+
+Behavior: Extracts the specific element.
+
+Type: If collection_expr is Array<T>, the result is T (or Nullable<T> to handle out-of-bounds access gracefully).
+
+Slicing Accessor ([start:end]): collection_expr[start:end]
+
+Purpose: Extracts a sub-sequence of the array.
+
+Behavior: Returns a new array containing elements from start up to (but not including) end.
+
+Type: If collection_expr is Array<T>, the result is Array<T>.
+
+Flattening Accessor ([**]): collection_expr[**]
+
+Purpose: Flattens a nested array one level.
+
+Behavior: Takes an Array<Array<T>> and produces Array<T>.
+
+Type: Input must be Array<Array<T>> (or Any), result is Array<T> (or Array<Any>).
+
+Member Access (.field): expr.field
+
+Purpose: Accesses a named field.
+
+Behavior:
+
+If expr evaluates to Object(T) or LinkOne(T), it accesses the field field on that object. Result type is FieldType (or Nullable).
+
+If expr evaluates to Array<T> or LinkMany<T>: TYPE ERROR. Direct field access on collections is disallowed.
+
+Implicit Map: The mapping behavior occurs when .field follows an iterating array accessor, e.g., collection[*].field. The type checker resolves collection[*] to Array<T>, then sees .field applied to it, looks up field on T (getting FieldType), and determines the final type is Array<FieldType>.
+
+Document Projection (.{...}): expr.{...}
+
+Purpose: Creates a new object based on the fields specified.
+
+Behavior:
+
+If expr evaluates to Object(T) or LinkOne(T), it creates a single new object based on the projection rules applied to the source object. An @item_var before the .{ (e.g., source_obj@o.{...}) makes the source object available via the item_var inside the {...}.
+
+If expr evaluates to Array<T> or LinkMany<T>: TYPE ERROR. Requires an iterating accessor first (e.g., array[*] @item .{...}).
+
+Example Breakdown:
+
+select users@u[*].{ name: u.name, blogs: u.blogs@b[where b.views > 1000][*].title } from users@u:User links (users@u)->(blogs@b:Blog)
+
+from (users@u:User): Introduces users (Array<Object(User)>) and reserves the binder identity u for element contexts.
+The binder u becomes a “current element” only inside selector contexts like users@u[*] or segment predicates evaluated per element.
+
+links (users@u)->(blogs@b:Blog): For each u, finds related blogs and binds them to b. Conceptually adds blogs: Array<Object(Blog)> to the data associated with u.
+
+select users@u[*].{...}: Iterates through the final users collection (after links/where). u inside {...} refers to the current user item.
+
+name: u.name: Accesses the name field of the current u. Type: String.
+
+blogs: u.blogs@b[where b.views > 1000][*].title:
+
+u.blogs: Accesses the linked blogs for the current u. Type: Array<Object(Blog)>.
+
+@b: Binds the item item_var b (type Object(Blog)) for the following accessor.
+
+[where b.views > 1000]: Filters the blogs for the current u. b is used here. Result type: Array<Object(Blog)>.
+
+[*]: Iterates over the filtered blogs.
+
+.title: Maps the title field from each filtered blog. Result type: Array<String>.
+
+Final Result Type: Array<Object({ name: String, blogs: Array<String> })).
+
+Summary for LLM:
+The language uses explicit syntax ([*], [index], [WHERE], [**], .{...}, .field, @item_var) to differentiate between operating on collections, accessing single items, mapping, filtering, and binding names. Direct field/document access (.field, .{...}) is only valid on single objects, not arrays. Iteration over arrays is explicit using [*], [WHERE], etc. The @item_var construct binds names to items during iteration for use in subsequent filters or projections. Subqueries used in projections evaluate within the outer item's context and return a value (scalar, object, or array) determined by their own projection. Decorrelation transforms correlated subqueries into efficient join-like operations while respecting these semantics.
+
+
+
+
+
+---
+fairly correct and also nothing is set in stone and i am open to ideas that can improve the designs and even any of the existing implementations. a few nuances:
+
+query returned data shape is exclusively determined by the projection. so even limit 1, returns array or one of the document, and even `select 3 from user:User`; should return just 3 despite the scanning of entire users. the projection determines the shape and data returned and can be navigated. so it could be `select user[*].name ...`  or `select user[0].{..} from ...` or just about any valid expression and can be nested. can even just be select [1,2,6] from ...`. and you can also access any downstream table declarations in links. node to node can be linked via edge implicitly using the from and to fields on the edge and you can also have node to node directly or edge to edge but the subsequent segment must have an explicit filter in that case ideally referencing the previous. also you can link directly to a foreign table and select any or all fields since all ids are stored as <table>:<id_value> e.g user:1 so you can directly access foreign tables without explicit joins within the projection almost like its an embedded object.
+when you use <entire_table_collection_var@each_item>:<TableName> format in `from` or link segment, you can reference any of the variable and item_var downstream and can reference the entire table var within projections also. the idea is that @item_var is meant to represent each item whenever you are doing array operations like filter or order or even range and also within nested projection to reference each item of the item_vared entire array, but if it is an object or even a scalar, it refers to the whole thing. although in my scan and link segment, i might have used the word item_var, it infact is almost like a variable declaration binding to entire collection returned for the scan or segment even if limit 1 used, an array will be returned. @item_var is responsible for binding to array item or entire object along an array/object navigation and makes it possible to be able to reference anywhere along the navigation within a projection or array operation without re-typing the entire thing over and over if you need only something along the path of the object/array already navigated. it is the one using LogicalBindAtExpr wrapping the expression which usually is an identifier that can refer to an entire collection, or object or scalar or anything else you think is reasonable. my language is designed to be expression-driven rather than statements and keywords. the reason i do things unlike typical relational where projection does row by row is that i want to give users more flexibility, freedom and intuitiveness, so that they can have access to both the entire collection scanned and also drive the iteration themselves via array operations like e.g users[*].{}, or users[where ..][*].{}, or users[5:8][*].name or users@u[order by u.age].name or anything like that and this can be chained and deeply nested but similar principle applied so, you can have users@u[*][5:8][where u.age > 90].info@i[*].config@c[0].{title, reassigned_or_new_stuff_can_even_be_a_block_expr: 4 + 6, nested_normal_object: {} , nested_with_cess: u.embedded_array_or_obj[*].title } . so you must always use such array access/map before the records. and you can flatten using users[**] or even method users.flatten() but the previous of using [] in projection is more idiomatic but i support every valid expression.
+ scoping is what we used to manage variable references and this is an entirely typed language, i have provided example of what schemas could look like in terms of definitions:
+

@@ -1,0 +1,222 @@
+---
+source: crates/lang/yelang-ast/src/test/other.rs
+expression: ast
+---
+Stmt {
+    kind: Let(
+        LetStmt {
+            pattern: Pattern {
+                pattern: Record {
+                    fields: [
+                        FieldPattern {
+                            name: Ident {
+                                symbol: Symbol(
+                                    Spur(1),
+                                ),
+                                span: Span {
+                                    start: Position {
+                                        line: 1,
+                                        column: 7,
+                                        absolute: 6,
+                                    },
+                                    end: Position {
+                                        line: 1,
+                                        column: 12,
+                                        absolute: 11,
+                                    },
+                                },
+                            },
+                            pattern: Pattern {
+                                pattern: Binding {
+                                    name: Ident {
+                                        symbol: Symbol(
+                                            Spur(1),
+                                        ),
+                                        span: Span {
+                                            start: Position {
+                                                line: 1,
+                                                column: 7,
+                                                absolute: 6,
+                                            },
+                                            end: Position {
+                                                line: 1,
+                                                column: 12,
+                                                absolute: 11,
+                                            },
+                                        },
+                                    },
+                                    mutability: Immutable,
+                                    subpattern: None,
+                                },
+                                span: Span {
+                                    start: Position {
+                                        line: 1,
+                                        column: 7,
+                                        absolute: 6,
+                                    },
+                                    end: Position {
+                                        line: 1,
+                                        column: 12,
+                                        absolute: 11,
+                                    },
+                                },
+                            },
+                            is_shorthand: true,
+                            is_placeholder: false,
+                        },
+                        FieldPattern {
+                            name: Ident {
+                                symbol: Symbol(
+                                    Spur(2),
+                                ),
+                                span: Span {
+                                    start: Position {
+                                        line: 1,
+                                        column: 14,
+                                        absolute: 13,
+                                    },
+                                    end: Position {
+                                        line: 1,
+                                        column: 19,
+                                        absolute: 18,
+                                    },
+                                },
+                            },
+                            pattern: Pattern {
+                                pattern: Binding {
+                                    name: Ident {
+                                        symbol: Symbol(
+                                            Spur(3),
+                                        ),
+                                        span: Span {
+                                            start: Position {
+                                                line: 1,
+                                                column: 21,
+                                                absolute: 20,
+                                            },
+                                            end: Position {
+                                                line: 1,
+                                                column: 25,
+                                                absolute: 24,
+                                            },
+                                        },
+                                    },
+                                    mutability: Immutable,
+                                    subpattern: None,
+                                },
+                                span: Span {
+                                    start: Position {
+                                        line: 1,
+                                        column: 21,
+                                        absolute: 20,
+                                    },
+                                    end: Position {
+                                        line: 1,
+                                        column: 26,
+                                        absolute: 25,
+                                    },
+                                },
+                            },
+                            is_shorthand: false,
+                            is_placeholder: false,
+                        },
+                    ],
+                    rest: true,
+                },
+                span: Span {
+                    start: Position {
+                        line: 1,
+                        column: 5,
+                        absolute: 4,
+                    },
+                    end: Position {
+                        line: 1,
+                        column: 31,
+                        absolute: 30,
+                    },
+                },
+            },
+            ty: None,
+            init: Some(
+                Expr {
+                    kind: Path(
+                        Path {
+                            segments: [
+                                PathSegment {
+                                    ident: Ident {
+                                        symbol: Symbol(
+                                            Spur(4),
+                                        ),
+                                        span: Span {
+                                            start: Position {
+                                                line: 1,
+                                                column: 34,
+                                                absolute: 33,
+                                            },
+                                            end: Position {
+                                                line: 1,
+                                                column: 37,
+                                                absolute: 36,
+                                            },
+                                        },
+                                    },
+                                    args: None,
+                                },
+                            ],
+                            is_absolute: false,
+                            span: Span {
+                                start: Position {
+                                    line: 1,
+                                    column: 34,
+                                    absolute: 33,
+                                },
+                                end: Position {
+                                    line: 1,
+                                    column: 38,
+                                    absolute: 37,
+                                },
+                            },
+                        },
+                    ),
+                    span: Span {
+                        start: Position {
+                            line: 1,
+                            column: 34,
+                            absolute: 33,
+                        },
+                        end: Position {
+                            line: 1,
+                            column: 38,
+                            absolute: 37,
+                        },
+                    },
+                },
+            ),
+            span: Span {
+                start: Position {
+                    line: 1,
+                    column: 1,
+                    absolute: 0,
+                },
+                end: Position {
+                    line: 1,
+                    column: 38,
+                    absolute: 37,
+                },
+            },
+            attrs: [],
+        },
+    ),
+    span: Span {
+        start: Position {
+            line: 1,
+            column: 1,
+            absolute: 0,
+        },
+        end: Position {
+            line: 1,
+            column: 38,
+            absolute: 37,
+        },
+    },
+}

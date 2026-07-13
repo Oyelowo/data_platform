@@ -1,0 +1,21 @@
+[package]
+name = "yelang-ast"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-lexer = { path = "../yelang-lexer" }
+yelang-interner = { path = "../yelang-interner" }
+serde = { workspace = true, features = ["derive"] }
+rustc-hash = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+insta = { workspace = true }
