@@ -1,3 +1,4 @@
+pub mod associated;
 pub mod def_collector;
 pub mod early;
 pub mod error;
@@ -13,6 +14,7 @@ pub mod scope;
 #[cfg(test)]
 pub mod tests;
 
+pub use associated::*;
 pub use def_collector::*;
 pub use early::*;
 pub use error::*;
@@ -43,6 +45,10 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
     let collector = def_collector::DefCollector::new(interner).collect(ast);
     let mut resolver = scope::Resolver::new(interner, collector.module_tree, collector.definitions);
     resolver.errors = collector.errors;
+    // Transfer impl indexes from collector to resolver
+    resolver.inherent_impls = collector.inherent_impls;
+    resolver.trait_impls = collector.trait_impls;
+    resolver.impl_item_names = collector.impl_item_names;
 
     let early = early::EarlyResolver::new(&mut resolver);
     early.resolve(ast);

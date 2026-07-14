@@ -1,3 +1,4 @@
+mod associated;
 mod basic;
 mod errors;
 mod generics;

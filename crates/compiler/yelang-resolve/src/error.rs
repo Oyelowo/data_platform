@@ -68,4 +68,18 @@ pub enum ResolutionError {
     ContinueOutsideLoop {
         span: Span,
     },
+
+    #[error("ambiguous associated item `{name:?}`")]
+    AmbiguousAssociatedItem {
+        name: Symbol,
+        span: Span,
+        candidates: Vec<DefId>,
+    },
+
+    #[error("no associated item `{name:?}` found for type `{type_name:?}`")]
+    AssociatedItemNotFound {
+        name: Symbol,
+        type_name: Symbol,
+        span: Span,
+    },
 }

@@ -21,6 +21,15 @@ pub struct Resolver<'a> {
     pub errors: Vec<ResolutionError>,
     pub definitions: FxHashMap<DefId, Definition>,
     pub current_module: DefId,
+    /// Maps type name ( Symbol) to the DefId of impl blocks for that type
+    pub inherent_impls: FxHashMap<Symbol, Vec<DefId>>,
+    /// Maps (trait_name, type_name) to DefId of trait impl blocks
+    pub trait_impls: FxHashMap<(Symbol, Symbol), Vec<DefId>>,
+    /// Maps impl DefId to the names of its items (for fast lookup)
+    pub impl_item_names: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
+    /// The actual type name being implemented when inside an `impl` block.
+    /// Used to resolve `Self::item` paths.
+    pub self_type: Option<Symbol>,
 }
 
 impl<'a> Resolver<'a> {
@@ -40,6 +49,10 @@ impl<'a> Resolver<'a> {
             errors: Vec::new(),
             definitions,
             current_module: DefId::new(1),
+            inherent_impls: FxHashMap::default(),
+            trait_impls: FxHashMap::default(),
+            impl_item_names: FxHashMap::default(),
+            self_type: None,
         }
     }
 

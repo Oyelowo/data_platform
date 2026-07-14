@@ -14,6 +14,22 @@ pub fn resolve_path(
         return None;
     }
 
+    // Try standard path resolution first.
+    let result = resolve_path_standard(resolver, path, ns);
+
+    // If standard path resolution fails, try associated item resolution.
+    if result.is_none() && (path.qself.is_some() || path.segments.len() >= 2) {
+        crate::associated::resolve_associated_item(resolver, path, ns)
+    } else {
+        result
+    }
+}
+
+fn resolve_path_standard(
+    resolver: &Resolver,
+    path: &Path,
+    ns: Namespace,
+) -> Option<Resolution> {
     let first = &path.segments[0];
     let first_str = first.ident.as_str(resolver.interner);
 
@@ -61,7 +77,7 @@ pub fn resolve_path(
     match first_res {
         Some(Resolution::Local { .. }) if path.segments.len() == 1 => {
             // Single-segment local variable path – return immediately.
-            return first_res;
+            first_res
         }
         Some(Resolution::Def { def_id }) => {
             // Continue resolving remaining segments through the module tree.
@@ -77,7 +93,7 @@ pub fn resolve_path(
                     None => return None,
                 }
             }
-            return Some(Resolution::Def { def_id: current });
+            Some(Resolution::Def { def_id: current })
         }
         _ => {
             // First segment was an anchor (crate/self/super) with no resolution yet.
@@ -106,12 +122,13 @@ pub fn resolve_path(
                                 None => return None,
                             }
                         }
-                        return Some(Resolution::Def { def_id: cur });
+                        Some(Resolution::Def { def_id: cur })
                     }
-                    None => return None,
+                    None => None,
                 }
+            } else {
+                None
             }
-            None
         }
     }
 }

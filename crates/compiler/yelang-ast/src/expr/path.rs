@@ -271,8 +271,79 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for ExprPath {
         //
         // We *do* allow Rust-like turbofish `::<...>` because the leading `::`
         // removes the ambiguity.
+        //
+        // We also support qualified self paths `<Type as Trait>::item` because
+        // `<` at the start of an atomic expression is unambiguously a qself path.
         let checkpoint = stream.checkpoint();
 
+        // Try qself: `<Type as Trait>::segment` or `<Type>::segment`
+        let qself_checkpoint = stream.checkpoint();
+        if stream.parse::<Option<T![<]>>()?.is_some() {
+            let ty = stream.parse::<Type>()?;
+
+            let as_trait = if stream.parse::<Option<T![as]>>()?.is_some() {
+                Some(Box::new(stream.parse::<Path>()?))
+            } else {
+                None
+            };
+
+            stream.parse::<T![>]>()?;
+            let qself_span = stream.span_since(qself_checkpoint);
+
+            // Must be followed by ::<segment>
+            stream.parse::<T![::]>()?;
+            let mut segments: Vec<PathSegment> = Vec::new();
+            let first_ident = parse_path_ident(stream)?;
+            let first_args = {
+                let cp = stream.checkpoint();
+                if let Ok((_, ab)) = stream.parse::<(T![::], AngleBracketedArgs)>() {
+                    Some(GenericArgs::AngleBracketed(ab))
+                } else {
+                    stream.restore(cp);
+                    None
+                }
+            };
+            segments.push(PathSegment {
+                ident: first_ident,
+                args: first_args,
+            });
+
+            while stream.parse::<Option<T![::]>>()?.is_some() {
+                let ident = parse_path_ident(stream)?;
+                let args = {
+                    let cp = stream.checkpoint();
+                    if let Ok((_, ab)) = stream.parse::<(T![::], AngleBracketedArgs)>() {
+                        Some(GenericArgs::AngleBracketed(ab))
+                    } else {
+                        stream.restore(cp);
+                        None
+                    }
+                };
+                segments.push(PathSegment { ident, args });
+            }
+
+            if segments.is_empty() {
+                return Err(TokenError::SyntaxError {
+                    message: "Expected at least one segment in path".to_string(),
+                    span: stream.span_since(checkpoint),
+                    source: None,
+                });
+            }
+
+            return Ok(ExprPath(Path {
+                qself: Some(Box::new(QSelf {
+                    ty,
+                    as_trait,
+                    span: qself_span,
+                })),
+                segments,
+                is_absolute: false,
+                span: stream.span_since(checkpoint),
+            }));
+        }
+        stream.restore(qself_checkpoint);
+
+        // Check for leading :: (absolute path)
         let is_absolute = stream.parse::<Option<T![::]>>()?.is_some();
 
         // Parse segments manually so each can optionally carry `::<...>`.

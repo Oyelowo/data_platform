@@ -53,8 +53,8 @@ use crate::{
     error::ResolutionError,
     module_tree::{ModuleNode, ModuleTree},
 };
-use yelang_ast::{FnDef, Ident, Item, ItemKind, ModDef, ModKind};
-use yelang_ast::item::{Const, Enum, Impl, Static, Struct, Trait, TypeAlias, Use};
+use yelang_ast::{FnDef, Ident, Item, ItemKind, ModDef, ModKind, Type, TypeKind};
+use yelang_ast::item::{Const, Enum, Impl, ImplItemKind, Static, Struct, Trait, TypeAlias, Use};
 use yelang_interner::Interner;
 
 pub struct DefCollector<'a> {
@@ -64,6 +64,12 @@ pub struct DefCollector<'a> {
     pub module_tree: ModuleTree,
     pub current_module: DefId,
     pub errors: Vec<ResolutionError>,
+    /// Maps type name (as Symbol) to the DefId of impl blocks for that type
+    pub inherent_impls: FxHashMap<Symbol, Vec<DefId>>,
+    /// Maps (trait_name, type_name) to DefId of trait impl blocks
+    pub trait_impls: FxHashMap<(Symbol, Symbol), Vec<DefId>>,
+    /// Maps impl DefId to the names of its items (for fast lookup)
+    pub impl_item_names: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
 }
 
 impl<'a> DefCollector<'a> {
@@ -90,6 +96,9 @@ impl<'a> DefCollector<'a> {
             module_tree: ModuleTree::new(root_node),
             current_module: root_id,
             errors: Vec::new(),
+            inherent_impls: FxHashMap::default(),
+            trait_impls: FxHashMap::default(),
+            impl_item_names: FxHashMap::default(),
         };
         collector.seed_primitives();
         collector
@@ -241,12 +250,60 @@ impl<'a> DefCollector<'a> {
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
-    fn collect_impl(&mut self, _i: &Impl, span: Span, visibility: Visibility) {
+    fn collect_impl(&mut self, i: &Impl, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         // Impl blocks don't have a single name; use a synthetic name.
         let name = self.interner.get_or_intern("<impl>");
         self.add_def(def_id, name, span, DefKind::Impl, visibility);
-        // Impl items are not added to the module namespace directly.
+
+        // Extract type name from self_ty
+        let type_name = Self::extract_type_name(&i.self_ty);
+
+        // Extract trait name if this is a trait impl
+        let trait_name = i.trait_impl.as_ref().and_then(|path| {
+            path.segments.last().map(|s| s.ident.symbol)
+        });
+
+        if let Some(type_name) = type_name {
+            if let Some(trait_name) = trait_name {
+                // Trait impl
+                let key = (trait_name, type_name);
+                self.trait_impls.entry(key).or_default().push(def_id);
+            } else {
+                // Inherent impl
+                self.inherent_impls.entry(type_name).or_default().push(def_id);
+            }
+        }
+
+        // Collect impl items
+        let mut item_names = FxHashMap::default();
+        for item in &i.items {
+            let item_def_id = self.next_def_id();
+            let (item_name, item_kind, item_span) = match &item.item {
+                ImplItemKind::Method(fn_def) => {
+                    (fn_def.name.symbol, DefKind::Fn, fn_def.name.span())
+                }
+                ImplItemKind::AssociatedType(ty_binding) => {
+                    (ty_binding.name.symbol, DefKind::TypeAlias, ty_binding.span)
+                }
+                ImplItemKind::Constant(const_def) => {
+                    (const_def.name.symbol, DefKind::Const, const_def.span)
+                }
+            };
+            self.add_def(item_def_id, item_name, item_span, item_kind, item.visibility.clone());
+            item_names.insert(item_name, item_def_id);
+        }
+        self.impl_item_names.insert(def_id, item_names);
+    }
+
+    fn extract_type_name(ty: &Type) -> Option<Symbol> {
+        match &ty.kind {
+            TypeKind::Named(path) => {
+                path.segments.first().map(|s| s.ident.symbol)
+            }
+            TypeKind::Ref { ty, .. } => Self::extract_type_name(ty),
+            _ => None,
+        }
     }
 
     fn collect_use(&mut self, _u: &Use, span: Span, visibility: Visibility) {
