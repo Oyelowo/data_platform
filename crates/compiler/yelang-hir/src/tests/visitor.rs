@@ -35,11 +35,31 @@ fn parse_program(src: &str) -> (Program, Interner) {
     (program, interner)
 }
 
+fn stub_resolved() -> ResolvedCrate {
+    let root_id = DefId::new(1);
+    let root_name = yelang_interner::Symbol::from(0u32);
+    let root_node = yelang_resolve::ModuleNode::new(
+        root_id,
+        root_name,
+        None,
+        yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
+    );
+    let mut modules = yelang_util::FxHashMap::default();
+    modules.insert(root_id, root_node);
+    let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
+    ResolvedCrate {
+        module_tree,
+        definitions: yelang_util::FxHashMap::default(),
+        errors: vec![],
+        def_resolutions: yelang_util::FxHashMap::default(),
+    }
+}
+
 #[test]
 fn visitor_counts_expressions() {
     let src = "fn main() { 1 + 2 }";
     let (program, interner) = parse_program(src);
-    let resolved = ResolvedCrate::new(DefId::new(1));
+    let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let mut counter = ExprCounter { count: 0, crate_hir: &crate_hir };

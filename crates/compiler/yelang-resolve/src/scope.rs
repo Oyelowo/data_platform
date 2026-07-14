@@ -37,6 +37,11 @@ pub struct Resolver<'a> {
     pub prelude: Option<Prelude>,
     /// Registry of language items discovered during def collection.
     pub lang_items: LangItems,
+    /// Maps enum DefId to a map of (variant_name -> variant DefId).
+    pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
+    /// Maps path spans to resolved DefIds for non-local paths.
+    /// Populated during late resolution and consumed by HIR lowering.
+    pub def_resolutions: FxHashMap<Span, DefId>,
 }
 
 impl<'a> Resolver<'a> {
@@ -46,6 +51,7 @@ impl<'a> Resolver<'a> {
         definitions: FxHashMap<DefId, Definition>,
         prelude: Option<Prelude>,
         lang_items: LangItems,
+        enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
     ) -> Self {
         Self {
             interner,
@@ -64,6 +70,8 @@ impl<'a> Resolver<'a> {
             self_type: None,
             prelude,
             lang_items,
+            enum_variants,
+            def_resolutions: FxHashMap::default(),
         }
     }
 

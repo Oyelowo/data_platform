@@ -57,23 +57,5 @@ pub enum FloatTy {
     F64,
 }
 
-/// Stub for the resolved crate.  
-/// In the full compiler this lives in `yelang-resolve`; while that crate is
-/// still being bootstrapped we keep a minimal definition here so that the HIR
-/// lowering pipeline can compile.
-#[derive(Debug, Clone)]
-pub struct ResolvedCrate {
-    pub root_module: DefId,
-}
-
-impl ResolvedCrate {
-    pub fn new(root_module: DefId) -> Self {
-        Self { root_module }
-    }
-}
-
-impl Default for ResolvedCrate {
-    fn default() -> Self {
-        Self { root_module: DefId::new(1) }
-    }
-}
+/// Re-export the real resolved crate from `yelang-resolve`.
+pub use yelang_resolve::ResolvedCrate;

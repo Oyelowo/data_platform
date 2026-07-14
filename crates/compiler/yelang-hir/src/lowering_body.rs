@@ -1,6 +1,6 @@
 //! Lowering of AST blocks into HIR `Body` values.
 
-use yelang_ast::BlockExpr;
+use yelang_ast::{BlockExpr, Expr as AstExpr};
 use yelang_lexer::Span;
 
 use crate::ids::BodyId;
@@ -87,6 +87,20 @@ pub fn lower_block_as_body(
         span: block_span,
     };
 
+    ctx.crate_hir.bodies.insert(body_id, body);
+    body_id
+}
+
+/// Lower a single AST expression into a standalone `Body`.
+/// Used for const/static initializers and other expression bodies.
+pub fn lower_expr_as_body(ctx: &mut LoweringContext, expr: &AstExpr) -> BodyId {
+    let body_id = ctx.next_body_id();
+    let value = crate::lowering_expr::lower_expr(ctx, expr);
+    let body = Body {
+        params: vec![],
+        value,
+        span: expr.span,
+    };
     ctx.crate_hir.bodies.insert(body_id, body);
     body_id
 }

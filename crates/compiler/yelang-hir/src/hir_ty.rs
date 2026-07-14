@@ -29,7 +29,7 @@ pub enum TyKind {
     FnPtr { sig: Box<FnSig> },
     /// Anonymous struct type: `{ x: i32, y: i32 }`
     AnonStruct { fields: Vec<AnonField> },
-    /// Type literal: `200 | 404 | 500`
+    /// Type literal: `"pending" | "active"`
     TypeLit { variants: Vec<Lit> },
     /// Utility type: `Omit<T, K>`
     Utility { kind: UtilityKind, args: Vec<Ty> },
@@ -37,6 +37,14 @@ pub enum TyKind {
     Ref { mutability: yelang_ast::Mutability, ty: Box<Ty> },
     /// Raw pointer: `*mut T` or `*const T`
     RawPtr { mutability: yelang_ast::Mutability, ty: Box<Ty> },
+    /// Higher-ranked type: `for<T> fn(T) -> T`
+    ForAll { params: Vec<crate::hir::GenericParam>, ty: Box<Ty> },
+    /// Union type: `i32 | string | bool`
+    Union { tys: Vec<Ty> },
+    /// `impl Trait` opaque type.
+    ImplTrait { path: Res },
+    /// `dyn Trait` trait object type.
+    DynTrait { path: Res },
     /// Type inference variable.
     Infer,
     /// Error recovery.

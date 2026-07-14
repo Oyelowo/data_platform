@@ -79,6 +79,9 @@ pub struct DefCollector<'a> {
     pub prelude: Option<Prelude>,
     /// Registry of language items discovered during def collection.
     pub lang_items: LangItems,
+    /// Maps enum DefId to a map of (variant_name -> variant DefId).
+    /// Used for resolving `MyEnum::Variant` paths.
+    pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
 }
 
 impl<'a> DefCollector<'a> {
@@ -122,6 +125,7 @@ impl<'a> DefCollector<'a> {
             impl_item_names: FxHashMap::default(),
             prelude,
             lang_items,
+            enum_variants: FxHashMap::default(),
         };
         collector.seed_primitives();
         collector
@@ -215,6 +219,7 @@ impl<'a> DefCollector<'a> {
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
         // Variants are definitions in both the type and value namespaces.
         // Inherit visibility from the parent enum.
+        let mut variant_map = FxHashMap::default();
         for variant in &e.variants {
             let vdef_id = self.next_def_id();
             let vname = variant.name.symbol;
@@ -226,7 +231,9 @@ impl<'a> DefCollector<'a> {
             self.add_def(vdef_id, vname, variant.span, DefKind::EnumVariant, variant_vis);
             self.add_to_module(crate::namespaces::Namespace::Type, vname, vdef_id, variant.span);
             self.add_to_module(crate::namespaces::Namespace::Value, vname, vdef_id, variant.span);
+            variant_map.insert(vname, vdef_id);
         }
+        self.enum_variants.insert(def_id, variant_map);
     }
 
     fn collect_type_alias(&mut self, ta: &TypeAlias, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {

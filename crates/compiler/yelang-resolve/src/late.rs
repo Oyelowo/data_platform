@@ -517,12 +517,64 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             self.push_breakable(label, false, block.label.as_ref().unwrap().span);
         }
         self.push_rib(RibKind::Block);
+
+        // Hoist item names into the block rib so they are visible throughout
+        // the entire block (including before their declaration), matching Rust
+        // semantics (RFC 2103 / item hoisting).
+        for stmt in &block.statements {
+            if let StmtKind::Item(item) = &stmt.kind {
+                self.hoist_block_item(item);
+            }
+        }
+
         for stmt in &block.statements {
             self.resolve_stmt(stmt);
         }
         self.pop_rib();
         if has_label {
             self.pop_breakable();
+        }
+    }
+
+    /// Add item names from a block-local item into the current rib before
+    /// the item is actually resolved.  This enables forward references like:
+    /// `fn foo() { bar(); fn bar() {} }`
+    fn hoist_block_item(&mut self, item: &Item) {
+        match &item.kind {
+            ItemKind::Fn(func) => {
+                self.add_value_binding(func.name.symbol, func.name.span());
+            }
+            ItemKind::Struct(s) => {
+                self.add_type_binding(s.name.symbol, s.name.span());
+            }
+            ItemKind::Enum(e) => {
+                self.add_type_binding(e.name.symbol, e.name.span());
+                // Enum variants are also visible in the same scope as the enum.
+                for variant in &e.variants {
+                    self.add_type_binding(variant.name.symbol, variant.span);
+                    self.add_value_binding(variant.name.symbol, variant.span);
+                }
+            }
+            ItemKind::TypeAlias(ta) => {
+                self.add_type_binding(ta.name.symbol, ta.name.span());
+            }
+            ItemKind::Trait(t) => {
+                self.add_type_binding(t.name.symbol, t.name.span());
+            }
+            ItemKind::Module(_) => {
+                // Modules inside blocks are not supported for forward
+                // reference hoisting.  (Rust does not allow `mod` inside
+                // functions; we follow the same restriction for now.)
+            }
+            ItemKind::Const(c) => {
+                self.add_value_binding(c.name.symbol, c.name.span());
+            }
+            ItemKind::Static(s) => {
+                self.add_value_binding(s.name.symbol, s.name.span());
+            }
+            ItemKind::Impl(_) | ItemKind::Use(_) => {
+                // Impls have no namespace binding; uses are resolved separately.
+            }
         }
     }
 
@@ -691,6 +743,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_type_path(&mut self, path: &Path) {
         if let Some(res) = resolve_type_path(self.resolver, path) {
+            self.record_path_resolution(path, &res);
             self.check_path_privacy(path, &res);
         } else if !path.segments.is_empty() {
             let name = path.segments[0].ident.symbol;
@@ -701,11 +754,20 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_value_path(&mut self, path: &Path) {
         if let Some(res) = resolve_value_path(self.resolver, path) {
+            self.record_path_resolution(path, &res);
             self.check_path_privacy(path, &res);
         } else if !path.segments.is_empty() {
             let name = path.segments[0].ident.symbol;
             let span = path.span;
             self.resolver.errors.push(ResolutionError::NotFound { name, span });
+        }
+    }
+
+    /// If a path resolved to a definition (not a local), record it in
+    /// `def_resolutions` so HIR lowering can look it up by span.
+    fn record_path_resolution(&mut self, path: &Path, res: &Resolution) {
+        if let Resolution::Def { def_id } = res {
+            self.resolver.def_resolutions.insert(path.span, *def_id);
         }
     }
 

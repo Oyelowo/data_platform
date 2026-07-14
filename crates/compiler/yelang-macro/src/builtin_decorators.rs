@@ -1,6 +1,6 @@
 use yelang_ast::{
-    Attribute, AttributeArgs, BlockExpr, Expr, ExprKind, Ident, ImplItem, ImplItemKind,
-    Item, ItemKind, Literal, Param, Path, PathSegment, Stmt, StmtKind, StructFields, Type, TypeKind,
+    Attribute, AttributeArgs, BlockExpr, Expr, ExprKind, FieldAssign, Ident, ImplItem, ImplItemKind,
+    Item, ItemKind, Literal, Param, Path, PathSegment, Stmt, StmtKind, StructExpr, StructFields, Type, TypeKind,
     Visibility,
 };
 use yelang_interner::Interner;
@@ -211,15 +211,30 @@ fn generate_clone_impl(
 ) -> Item {
     let body = match fields {
         StructFields::Named(fields) => {
-            let field_inits: Vec<Expr> = fields
+            let self_path = path_from_str("Self", span, interner);
+            let field_assigns: Vec<FieldAssign> = fields
                 .iter()
                 .map(|f| {
-                    let field_name = interner.resolve(&f.name.symbol);
-                    expr_from_str(&format!("self.{}.clone()", field_name), span, interner)
+                    let field_name_str = interner.resolve(&f.name.symbol);
+                    let value = expr_from_str(&format!("self.{}.clone()", field_name_str), span, interner);
+                    FieldAssign {
+                        name: f.name.clone(),
+                        value,
+                        is_shorthand: false,
+                        span,
+                    }
                 })
                 .collect();
+            let struct_expr = Expr {
+                kind: ExprKind::Struct(StructExpr {
+                    path: self_path,
+                    fields: field_assigns,
+                    rest: None,
+                }),
+                span,
+            };
             let stmts = vec![Stmt {
-                kind: StmtKind::TermExpr(Box::new(struct_literal(&self_ty, field_inits, span, interner))),
+                kind: StmtKind::TermExpr(Box::new(struct_expr)),
                 span,
             }];
             BlockExpr { label: None, statements: stmts }
@@ -495,24 +510,6 @@ fn expr_from_str(src: &str, span: Span, interner: &Interner) -> Expr {
     // In a production compiler we'd build the Expr directly.
     let mut stream = yelang_lexer::TokenKind::tokenize(src, interner).expect("tokenize expr");
     stream.parse::<Expr>().expect("parse expr")
-}
-
-fn struct_literal(self_ty: &Type, fields: Vec<Expr>, span: Span, interner: &Interner) -> Expr {
-    // Build `Self { field0: expr0, ... }`
-    // For simplicity we use a path expr for Self.
-    let _field_assigns: Vec<yelang_ast::FieldAssign> = match &self_ty.kind {
-        TypeKind::Named(_path) => {
-            // We don't have field names here, so this helper is a bit limited.
-            // In a full implementation we'd thread field names through.
-            vec![]
-        }
-        _ => vec![],
-    };
-    // Simplification: just return `Self` for MVP.
-    Expr {
-        kind: ExprKind::Path(path_from_str("Self", span, interner)),
-        span,
-    }
 }
 
 fn tuple_literal(elements: Vec<Expr>, span: Span, _interner: &Interner) -> Expr {

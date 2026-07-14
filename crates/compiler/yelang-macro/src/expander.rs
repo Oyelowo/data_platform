@@ -1,6 +1,6 @@
 use yelang_ast::{
     ArrayAccess, AssignEqExpr, AssignOpExpr, BinaryExpr, BlockExpr, Expr, ExprKind, ForLoopExpr,
-    IfExpr, Item, ItemKind, LambdaExpr, LoopExpr, MacroInvocation, MatchExpr, MemberAccess,
+    IfExpr, ImplItemKind, Item, ItemKind, LambdaExpr, LoopExpr, MacroInvocation, MatchExpr, MemberAccess,
     Program, RangeExpr, Stmt, StmtKind, TernaryExpr, UnaryExpr, WhileExpr,
 };
 use yelang_interner::Interner;
@@ -1169,5 +1169,96 @@ mod tests {
         let (program, interner) = parse_program(src);
         let result = crate::expand_program(&program, &interner);
         assert!(!result.errors.is_empty(), "expected error for unsupported derive trait");
+    }
+
+    #[test]
+    fn derive_clone_named_struct_produces_struct_literal() {
+        // Verify that @derive(Clone) on a named struct generates a method
+        // whose body contains `Self { field: self.field.clone(), ... }`.
+        let src = r#"
+            @derive(Clone)
+            struct Point { x: i32, y: i32 }
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.program.items.len(), 2, "expected struct + impl Clone");
+
+        let impl_item = result.program.items.iter()
+            .find(|i| matches!(i.kind, ItemKind::Impl(_)))
+            .expect("impl Clone expected");
+        let ItemKind::Impl(impl_block) = &impl_item.kind else { unreachable!() };
+        assert_eq!(impl_block.items.len(), 1, "Clone impl should have clone method");
+
+        let method = &impl_block.items[0];
+        let ImplItemKind::Method(fn_def) = &method.item else {
+            panic!("expected method in Clone impl");
+        };
+
+        // The body should be a block with a single terminating expression.
+        assert_eq!(fn_def.body.statements.len(), 1);
+        let StmtKind::TermExpr(expr) = &fn_def.body.statements[0].kind else {
+            panic!("expected term expr in clone body");
+        };
+
+        // The expression must be a struct literal, not just a path.
+        let ExprKind::Struct(struct_expr) = &expr.kind else {
+            panic!("expected ExprKind::Struct in clone body, got {:?}", expr.kind);
+        };
+
+        // Path should be `Self`.
+        assert_eq!(struct_expr.path.segments.len(), 1);
+        assert_eq!(
+            interner.resolve(&struct_expr.path.segments[0].ident.symbol),
+            "Self"
+        );
+
+        // Should have exactly two field assignments.
+        assert_eq!(struct_expr.fields.len(), 2, "expected 2 field assignments");
+        assert_eq!(
+            interner.resolve(&struct_expr.fields[0].name.symbol),
+            "x"
+        );
+        assert_eq!(
+            interner.resolve(&struct_expr.fields[1].name.symbol),
+            "y"
+        );
+
+        // Each field value should be a method call (self.field.clone()).
+        assert!(
+            matches!(struct_expr.fields[0].value.kind, ExprKind::MethodCall(_)),
+            "expected method call for field clone"
+        );
+        assert!(
+            matches!(struct_expr.fields[1].value.kind, ExprKind::MethodCall(_)),
+            "expected method call for field clone"
+        );
+    }
+
+    #[test]
+    fn derive_clone_unit_struct_uses_self_path() {
+        let src = r#"
+            @derive(Clone)
+            struct Unit;
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+
+        let impl_item = result.program.items.iter()
+            .find(|i| matches!(i.kind, ItemKind::Impl(_)))
+            .expect("impl Clone expected");
+        let ItemKind::Impl(impl_block) = &impl_item.kind else { unreachable!() };
+        let method = &impl_block.items[0];
+        let ImplItemKind::Method(fn_def) = &method.item else { panic!("expected method"); };
+
+        let StmtKind::TermExpr(expr) = &fn_def.body.statements[0].kind else {
+            panic!("expected term expr");
+        };
+        assert!(
+            matches!(expr.kind, ExprKind::Path(_)),
+            "unit struct clone should return Self path, got {:?}",
+            expr.kind
+        );
     }
 }

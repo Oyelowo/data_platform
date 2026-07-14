@@ -32,7 +32,6 @@ use yelang_interner::Interner;
 use yelang_util::{DefId, FxHashMap};
 
 use crate::def_collector::Definition;
-use crate::module_tree::ModuleTree;
 
 /// Result of resolving a crate.
 #[derive(Debug, Clone)]
@@ -40,6 +39,9 @@ pub struct ResolvedCrate {
     pub module_tree: ModuleTree,
     pub definitions: FxHashMap<DefId, Definition>,
     pub errors: Vec<ResolutionError>,
+    /// Maps path spans to resolved DefIds for non-local paths.
+    /// Populated during late resolution and consumed by HIR lowering.
+    pub def_resolutions: FxHashMap<yelang_lexer::Span, DefId>,
 }
 
 /// The main entry point for name resolution.
@@ -61,6 +63,7 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         definitions,
         collector.prelude,
         collector.lang_items,
+        collector.enum_variants,
     );
     resolver.errors = collector.errors;
     // Transfer impl indexes from collector to resolver
@@ -78,5 +81,6 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         module_tree: resolver.module_tree,
         definitions: resolver.definitions,
         errors: resolver.errors,
+        def_resolutions: resolver.def_resolutions,
     }
 }

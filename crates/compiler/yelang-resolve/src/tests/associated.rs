@@ -191,7 +191,7 @@ fn resolve_qualified_assoc_fn_directly() {
     "#;
     let (program, interner) = parse_program(src);
     let collector = def_collector::DefCollector::new(&interner).collect(&program);
-    let mut resolver = scope::Resolver::new(&interner, collector.module_tree, collector.definitions, collector.prelude, collector.lang_items);
+    let mut resolver = scope::Resolver::new(&interner, collector.module_tree, collector.definitions, collector.prelude, collector.lang_items, collector.enum_variants);
     resolver.inherent_impls = collector.inherent_impls;
     resolver.trait_impls = collector.trait_impls;
     resolver.impl_item_names = collector.impl_item_names;
@@ -457,6 +457,83 @@ fn self_in_return_type_of_impl_method() {
             fn clone(&self) -> Self { Self { x: self.x } }
         }
         fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+// ============================================================================
+// Enum variant resolution through type path
+// ============================================================================
+
+#[test]
+fn enum_variant_through_type_path_unit() {
+    let src = r#"
+        enum Option { Some(i32), None }
+        fn main() { Option::None; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn enum_variant_through_type_path_tuple() {
+    let src = r#"
+        enum Option { Some(i32), None }
+        fn main() { Option::Some(1); }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn enum_variant_through_type_path_struct() {
+    let src = r#"
+        enum Message { Quit, Move { x: i32, y: i32 } }
+        fn main() { Message::Move { x: 1, y: 2 }; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn enum_variant_cross_module_type_path() {
+    let src = r#"
+        mod inner {
+            pub enum Status { Ok, Err }
+        }
+        fn main() { inner::Status::Ok; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn enum_variant_type_path_not_found() {
+    let src = r#"
+        enum Option { Some(i32), None }
+        fn main() { Option::Nonexistent; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(
+        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        "expected NotFound: {:?}",
+        resolved.errors
+    );
+}
+
+#[test]
+fn enum_variant_qualified_self_type_path() {
+    // `<Option>::Some` should also work (qself with no trait).
+    let src = r#"
+        enum Option { Some(i32), None }
+        fn main() { <Option>::Some(1); }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);

@@ -3,6 +3,7 @@ use yelang_util::DefId;
 use yelang_ast::Path;
 
 use crate::{
+    def_collector::DefKind,
     namespaces::Namespace,
     rib::Resolution,
     scope::Resolver,
@@ -56,8 +57,119 @@ fn resolve_inherent_associated_item(
         }
     }
 
+    // Check if the type prefix resolves to an enum, and if the item is a variant.
+    // Handles `Enum::Variant` and `module::Enum::Variant`.
+    if let Some(enum_def_id) = resolve_type_prefix_to_def_id(resolver, path) {
+        if let Some(def) = resolver.definitions.get(&enum_def_id) {
+            if def.kind == DefKind::Enum {
+                if let Some(variants) = resolver.enum_variants.get(&enum_def_id) {
+                    if let Some(&variant_def_id) = variants.get(&item_name) {
+                        return Some(Resolution::Def { def_id: variant_def_id });
+                    }
+                }
+            }
+        }
+    }
+
     // Fallback: search trait impls for this type (e.g. Foo::show where impl Show for Foo)
     search_trait_impls_for_type(resolver, type_name, item_name)
+}
+
+/// Try to resolve all-but-last segments of a path to a DefId.
+/// This is used for associated item resolution to identify the type
+/// prefix of a path like `a::b::Enum::Variant`.
+fn resolve_type_prefix_to_def_id(resolver: &Resolver, path: &Path) -> Option<DefId> {
+    if path.segments.len() < 2 {
+        return None;
+    }
+
+    let first = &path.segments[0];
+    let first_str = first.ident.as_str(resolver.interner);
+    let ns = Namespace::Type;
+
+    let (mut current, start_idx) = if path.is_absolute {
+        let def_id = resolver
+            .resolve_name_in_module(resolver.module_tree.root.def_id, ns, first.ident.symbol)
+            .or_else(|| {
+                resolver.resolve_name_in_module(
+                    resolver.module_tree.root.def_id,
+                    Namespace::Value,
+                    first.ident.symbol,
+                )
+            })?;
+        (def_id, 1)
+    } else if first_str == "crate" {
+        let def_id = resolver
+            .resolve_name_in_module(
+                resolver.module_tree.root.def_id,
+                ns,
+                path.segments.get(1)?.ident.symbol,
+            )
+            .or_else(|| {
+                resolver.resolve_name_in_module(
+                    resolver.module_tree.root.def_id,
+                    Namespace::Value,
+                    path.segments.get(1)?.ident.symbol,
+                )
+            })?;
+        (def_id, 2)
+    } else if first_str == "self" {
+        let def_id = resolver
+            .resolve_name_in_module(resolver.current_module, ns, path.segments.get(1)?.ident.symbol)
+            .or_else(|| {
+                resolver.resolve_name_in_module(
+                    resolver.current_module,
+                    Namespace::Value,
+                    path.segments.get(1)?.ident.symbol,
+                )
+            })?;
+        (def_id, 2)
+    } else if first_str == "super" {
+        let module = resolver
+            .module_tree
+            .modules
+            .get(&resolver.current_module)
+            .and_then(|m| m.parent)
+            .unwrap_or(resolver.module_tree.root.def_id);
+        let def_id = resolver
+            .resolve_name_in_module(module, ns, path.segments.get(1)?.ident.symbol)
+            .or_else(|| {
+                resolver.resolve_name_in_module(
+                    module,
+                    Namespace::Value,
+                    path.segments.get(1)?.ident.symbol,
+                )
+            })?;
+        (def_id, 2)
+    } else {
+        let def_id = resolver
+            .resolve_name(ns, first.ident.symbol)
+            .and_then(|res| match res {
+                Resolution::Def { def_id } => Some(def_id),
+                _ => None,
+            })
+            .or_else(|| {
+                resolver
+                    .resolve_name_in_module(resolver.current_module, ns, first.ident.symbol)
+                    .or_else(|| {
+                        resolver.resolve_name_in_module(
+                            resolver.current_module,
+                            Namespace::Value,
+                            first.ident.symbol,
+                        )
+                    })
+            })?;
+        (def_id, 1)
+    };
+
+    for seg in &path.segments[start_idx..path.segments.len() - 1] {
+        let next = resolver
+            .resolve_name_in_module(current, ns, seg.ident.symbol)
+            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol))?;
+        current = next;
+    }
+
+    Some(current)
 }
 
 fn resolve_qualified_associated_item(

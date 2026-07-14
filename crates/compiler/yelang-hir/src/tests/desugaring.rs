@@ -10,17 +10,37 @@ use crate::res::ResolvedCrate;
 use crate::lowering::lower_crate;
 
 fn parse_program(src: &str) -> (Program, Interner) {
-    let interner = Interner::new();
-    let mut stream = yelang_lexer::TokenKind::tokenize(src, &interner).expect("tokenize");
+    let mut interner = Interner::new();
+    let mut stream = yelang_lexer::TokenKind::tokenize(src, &mut interner).expect("tokenize");
     let program = stream.parse::<Program>().expect("parse program");
     (program, interner)
+}
+
+fn stub_resolved() -> ResolvedCrate {
+    let root_id = DefId::new(1);
+    let root_name = yelang_interner::Symbol::from(0u32);
+    let root_node = yelang_resolve::ModuleNode::new(
+        root_id,
+        root_name,
+        None,
+        yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
+    );
+    let mut modules = yelang_util::FxHashMap::default();
+    modules.insert(root_id, root_node);
+    let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
+    ResolvedCrate {
+        module_tree,
+        definitions: yelang_util::FxHashMap::default(),
+        errors: vec![],
+        def_resolutions: yelang_util::FxHashMap::default(),
+    }
 }
 
 #[test]
 fn desugar_while() {
     let src = "fn main() { while true { break } }";
     let (program, interner) = parse_program(src);
-    let resolved = ResolvedCrate::new(DefId::new(1));
+    let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().next().unwrap();
@@ -37,7 +57,7 @@ fn desugar_while() {
 fn desugar_for() {
     let src = "fn main() { for x in 0..10 { } }";
     let (program, interner) = parse_program(src);
-    let resolved = ResolvedCrate::new(DefId::new(1));
+    let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().next().unwrap();
@@ -53,7 +73,7 @@ fn desugar_try_operator() {
     // `?` should be lowered to a match expression.
     let src = "fn main() { some()? }";
     let (program, interner) = parse_program(src);
-    let resolved = ResolvedCrate::new(DefId::new(1));
+    let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().next().unwrap();
@@ -76,7 +96,7 @@ fn desugar_let_chain() {
         }
     "#;
     let (program, interner) = parse_program(src);
-    let resolved = ResolvedCrate::new(DefId::new(1));
+    let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().next().unwrap();

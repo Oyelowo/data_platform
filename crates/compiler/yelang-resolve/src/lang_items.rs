@@ -1,6 +1,6 @@
 //! YeLang language-item registry.
 //!
-//! Following rustc's design (rustc-dev-guide § Lang Items), certain types, traits,
+//! certain types, traits,
 //! and functions are "known to the compiler" via the `@lang("...")` decorator.
 //!
 //! The registry is built during DefCollection by scanning for `@lang` attributes

@@ -1,0 +1,355 @@
+//! Exhaustive tests for AST type -> HIR type lowering.
+
+use crate::hir::{ItemKind, GenericParam};
+use crate::hir_ty::{TyKind, UtilityKind};
+use crate::lowering::lower_crate;
+use crate::tests::common::{parse_program, stub_resolved};
+
+fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::FnSig {
+    let item = crate_hir.items.values().next().unwrap();
+    let ItemKind::Fn { sig, .. } = &item.kind else { panic!("expected fn") };
+    sig
+}
+
+// ---------------------------------------------------------------------------
+// Named / path types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_named_type() {
+    let src = "fn foo(x: i32) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::Path { .. }));
+}
+
+#[test]
+fn lower_generic_type() {
+    let src = "fn foo<T>(x: T) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::Path { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Tuple
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_tuple_type() {
+    let src = "fn foo(x: (i32, bool)) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Tuple { tys } => assert_eq!(tys.len(), 2),
+        other => panic!("expected tuple type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Array / Slice
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_array_type() {
+    let src = "fn foo(x: [i32; 5]) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::Array { .. }));
+}
+
+#[test]
+fn lower_slice_type() {
+    let src = "fn foo(x: [i32]) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::Slice { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Reference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_ref_type() {
+    let src = "fn foo(x: &i32) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Ref { mutability, .. } => {
+            assert!(matches!(mutability, yelang_ast::Mutability::Immutable));
+        }
+        other => panic!("expected ref type, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_mut_ref_type() {
+    let src = "fn foo(x: &mut i32) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Ref { mutability, .. } => {
+            assert!(matches!(mutability, yelang_ast::Mutability::Mutable));
+        }
+        other => panic!("expected mut ref type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Function pointer
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_fn_ptr_type() {
+    let src = "fn foo(x: fn(i32) -> bool) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::FnPtr { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// HRTB / ForAll
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_forall_type() {
+    let src = "fn foo(x: for<T> fn(T) -> T) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::ForAll { params, ty } => {
+            assert_eq!(params.len(), 1);
+            assert!(matches!(ty.kind, TyKind::FnPtr { .. }));
+        }
+        other => panic!("expected forall type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Literal type
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_literal_type() {
+    let src = r#"fn foo(x: "hello") {}"#;
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::TypeLit { variants } => {
+            assert_eq!(variants.len(), 1);
+        }
+        other => panic!("expected literal type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structural (anonymous struct)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_structural_type() {
+    let src = "fn foo(x: { a: i32, b: bool }) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::AnonStruct { fields } => {
+            assert_eq!(fields.len(), 2);
+        }
+        other => panic!("expected anon struct type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Union
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_union_type() {
+    let src = "fn foo(x: i32 | string | bool) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Union { tys } => {
+            assert_eq!(tys.len(), 3);
+        }
+        other => panic!("expected union type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Utility types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_return_type_utility() {
+    let src = "fn foo(x: ReturnType<typeof bar>) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Utility { kind, args } => {
+            assert_eq!(*kind, UtilityKind::ReturnType);
+            assert_eq!(args.len(), 1);
+        }
+        other => panic!("expected utility type, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_parameters_utility() {
+    let src = "fn foo(x: Parameters<typeof bar>) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Utility { kind, args } => {
+            assert_eq!(*kind, UtilityKind::Params);
+            assert_eq!(args.len(), 1);
+        }
+        other => panic!("expected utility type, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_pick_utility() {
+    let src = r#"fn foo(x: Pick<{ a: i32, b: string }, "a">) {}"#;
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Utility { kind, args } => {
+            assert_eq!(*kind, UtilityKind::Pick);
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected utility type, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_omit_utility() {
+    let src = r#"fn foo(x: Omit<{ a: i32, b: string }, "a">) {}"#;
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::Utility { kind, args } => {
+            assert_eq!(*kind, UtilityKind::Omit);
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected utility type, got {:?}", other),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// impl Trait / dyn Trait
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_impl_trait_type() {
+    let src = "fn foo() -> impl Clone { 42 }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.output.kind, TyKind::ImplTrait { .. }));
+}
+
+#[test]
+fn lower_dyn_trait_type() {
+    let src = "fn foo(x: dyn Clone) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::DynTrait { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Infer / Never
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_infer_type() {
+    let src = "fn foo(x: _) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    assert!(matches!(sig.inputs[0].kind, TyKind::Infer));
+}
+
+#[test]
+fn lower_never_type() {
+    let src = "fn foo() -> ! { panic!() }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    // Never is lowered to empty tuple for now
+    assert!(matches!(sig.output.kind, TyKind::Tuple { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Generics in items with complex types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_fn_with_complex_generic_bounds() {
+    let src = "fn process<T, U>(x: T, y: U) -> (T, U) where T: Clone, U: Display {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let item = crate_hir.items.values().next().unwrap();
+    let ItemKind::Fn { generics, .. } = &item.kind else { panic!("expected fn") };
+    assert_eq!(generics.params.len(), 2);
+    assert!(generics.where_clause.is_some());
+    let wc = generics.where_clause.as_ref().unwrap();
+    assert_eq!(wc.predicates.len(), 2);
+}
+
+#[test]
+fn lower_hrtb_where_predicate() {
+    let src = "fn foo<T>() where for<U> T: Into<U> {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let item = crate_hir.items.values().next().unwrap();
+    let ItemKind::Fn { generics, .. } = &item.kind else { panic!("expected fn") };
+    let wc = generics.where_clause.as_ref().expect("expected where clause");
+    let pred = wc.predicates.first().expect("expected predicate");
+    match pred {
+        crate::hir::WherePredicate::TraitBound { ty, .. } => {
+            assert!(matches!(ty.kind, TyKind::ForAll { .. }));
+        }
+        other => panic!("expected trait bound, got {:?}", other),
+    }
+}
