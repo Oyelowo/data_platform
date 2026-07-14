@@ -1,0 +1,19 @@
+[package]
+name = "yelang-trait-solver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Yelang next-generation recursive goal-driven trait solver"
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-ty = { path = "../yelang-ty" }
+yelang-infer = { path = "../yelang-infer" }
+yelang-util = { path = "../yelang-util" }
+yelang-interner = { path = "../yelang-interner" }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

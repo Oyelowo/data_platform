@@ -1,0 +1,18 @@
+[package]
+name = "yelang-infer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Yelang type inference engine — custom unification with rollback"
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-ty = { path = "../yelang-ty" }
+yelang-util = { path = "../yelang-util" }
+yelang-interner = { path = "../yelang-interner" }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

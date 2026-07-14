@@ -1,0 +1,22 @@
+[package]
+name = "yelang-tycheck"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Yelang body type checker — expression and pattern checking"
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-ty = { path = "../yelang-ty" }
+yelang-infer = { path = "../yelang-infer" }
+yelang-trait-solver = { path = "../yelang-trait-solver" }
+yelang-hir = { path = "../yelang-hir" }
+yelang-resolve = { path = "../yelang-resolve" }
+yelang-util = { path = "../yelang-util" }
+yelang-interner = { path = "../yelang-interner" }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

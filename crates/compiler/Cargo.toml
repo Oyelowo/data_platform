@@ -7,7 +7,10 @@ members = [
     "yelang-macro",
     "yelang-resolve",
     "yelang-hir",
-    "yelang-tc",
+    "yelang-ty",
+    "yelang-infer",
+    "yelang-trait-solver",
+    "yelang-tycheck",
     "stdlib/core",
 ]
 resolver = "2"

@@ -58,6 +58,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
+name = "bumpalo"
+version = "3.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+
+[[package]]
 name = "byteorder"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -802,6 +808,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-infer"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "rustc-hash",
+ "yelang-interner",
+ "yelang-ty",
+ "yelang-util",
+]
+
+[[package]]
 name = "yelang-interner"
 version = "0.1.0"
 dependencies = [
@@ -860,16 +877,40 @@ name = "yelang-stdlib-core"
 version = "0.1.0"
 
 [[package]]
-name = "yelang-tc"
+name = "yelang-trait-solver"
 version = "0.1.0"
 dependencies = [
- "indexmap",
  "rstest",
- "thiserror",
- "yelang-ast",
+ "rustc-hash",
+ "yelang-infer",
+ "yelang-interner",
+ "yelang-ty",
+ "yelang-util",
+]
+
+[[package]]
+name = "yelang-ty"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "rstest",
+ "rustc-hash",
+ "yelang-interner",
+ "yelang-util",
+]
+
+[[package]]
+name = "yelang-tycheck"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "rustc-hash",
  "yelang-hir",
+ "yelang-infer",
  "yelang-interner",
  "yelang-resolve",
+ "yelang-trait-solver",
+ "yelang-ty",
  "yelang-util",
 ]
 
