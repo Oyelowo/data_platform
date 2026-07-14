@@ -1,0 +1,22 @@
+[package]
+name = "yelang-hir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-ast = { path = "../yelang-ast" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-lexer = { path = "../yelang-lexer" }
+yelang-resolve = { path = "../yelang-resolve" }
+yelang-util = { path = "../yelang-util" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+insta = { workspace = true }

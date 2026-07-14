@@ -1,0 +1,99 @@
+use yelang_interner::{Interner, Symbol};
+use yelang_lexer::Span;
+use yelang_util::{DefId, FxHashMap};
+
+use crate::{
+    def_collector::Definition,
+    error::ResolutionError,
+    module_tree::ModuleTree,
+    namespaces::Namespace,
+    rib::{Rib, Resolution},
+};
+
+pub struct Resolver<'a> {
+    pub interner: &'a Interner,
+    pub module_tree: ModuleTree,
+    pub next_local_id: u32,
+    pub value_ribs: Vec<Rib>,
+    pub type_ribs: Vec<Rib>,
+    pub macro_ribs: Vec<Rib>,
+    pub unresolved_imports: Vec<crate::imports::UnresolvedImport>,
+    pub errors: Vec<ResolutionError>,
+    pub definitions: FxHashMap<DefId, Definition>,
+    pub current_module: DefId,
+}
+
+impl<'a> Resolver<'a> {
+    pub fn new(
+        interner: &'a Interner,
+        module_tree: ModuleTree,
+        definitions: FxHashMap<DefId, Definition>,
+    ) -> Self {
+        Self {
+            interner,
+            module_tree,
+            next_local_id: 1,
+            value_ribs: Vec::new(),
+            type_ribs: Vec::new(),
+            macro_ribs: Vec::new(),
+            unresolved_imports: Vec::new(),
+            errors: Vec::new(),
+            definitions,
+            current_module: DefId::new(1),
+        }
+    }
+
+    pub fn push_rib(&mut self, kind: crate::rib::RibKind) {
+        self.value_ribs.push(Rib::new(kind));
+        self.type_ribs.push(Rib::new(kind));
+        self.macro_ribs.push(Rib::new(kind));
+    }
+
+    pub fn pop_rib(&mut self) {
+        self.value_ribs.pop();
+        self.type_ribs.pop();
+        self.macro_ribs.pop();
+    }
+
+    pub fn resolve_name(&self, ns: Namespace, name: Symbol) -> Option<Resolution> {
+        let ribs = match ns {
+            Namespace::Value => &self.value_ribs,
+            Namespace::Type => &self.type_ribs,
+            Namespace::Macro => &self.macro_ribs,
+        };
+        for rib in ribs.iter().rev() {
+            if let Some(res) = rib.get(ns, name) {
+                return Some(res);
+            }
+        }
+        // If not in ribs, look up in the current module.
+        if let Some(module) = self.module_tree.modules.get(&self.current_module) {
+            if let Some(def_id) = module.get_item(ns, name) {
+                return Some(Resolution::Def { def_id });
+            }
+        }
+        None
+    }
+
+    pub fn resolve_name_in_module(
+        &self,
+        module_id: DefId,
+        ns: Namespace,
+        name: Symbol,
+    ) -> Option<DefId> {
+        self.module_tree
+            .modules
+            .get(&module_id)
+            .and_then(|m| m.get_item(ns, name))
+    }
+
+    pub fn next_local_id(&mut self) -> u32 {
+        let id = self.next_local_id;
+        self.next_local_id += 1;
+        id
+    }
+
+    pub fn record_error(&mut self, err: ResolutionError) {
+        self.errors.push(err);
+    }
+}

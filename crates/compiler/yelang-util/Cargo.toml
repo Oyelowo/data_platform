@@ -1,0 +1,16 @@
+[package]
+name = "yelang-util"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+fxhash = { workspace = true }
+indexmap = { workspace = true }
+rustc-hash = { workspace = true }
+slotmap = { workspace = true }

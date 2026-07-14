@@ -85,7 +85,7 @@ pub struct FieldPattern {
 }
 
 /// Mutability qualifier for bindings.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mutability {
     Immutable,
     Mutable,

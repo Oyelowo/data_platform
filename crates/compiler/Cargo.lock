@@ -788,6 +788,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-hir"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "rstest",
+ "thiserror",
+ "yelang-ast",
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-resolve",
+ "yelang-util",
+]
+
+[[package]]
 name = "yelang-interner"
 version = "0.1.0"
 dependencies = [
@@ -815,6 +829,39 @@ dependencies = [
  "thiserror",
  "tokio",
  "yelang-interner",
+]
+
+[[package]]
+name = "yelang-macro"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "thiserror",
+ "yelang-ast",
+ "yelang-interner",
+ "yelang-util",
+]
+
+[[package]]
+name = "yelang-resolve"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "thiserror",
+ "yelang-ast",
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-util",
+]
+
+[[package]]
+name = "yelang-util"
+version = "0.1.0"
+dependencies = [
+ "fxhash",
+ "indexmap",
+ "rustc-hash",
+ "slotmap",
 ]
 
 [[package]]

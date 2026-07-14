@@ -1,0 +1,19 @@
+[package]
+name = "yelang-macro"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-ast = { path = "../yelang-ast" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-util = { path = "../yelang-util" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
