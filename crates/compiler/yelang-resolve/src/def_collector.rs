@@ -80,13 +80,29 @@ impl<'a> DefCollector<'a> {
                 parent: None,
             },
         );
-        Self {
+        let mut collector = Self {
             interner,
             next_def_id: 2,
             definitions,
             module_tree: ModuleTree::new(root_node),
             current_module: root_id,
             errors: Vec::new(),
+        };
+        collector.seed_primitives();
+        collector
+    }
+
+    fn seed_primitives(&mut self) {
+        let primitives = [
+            "i8", "i16", "i32", "i64", "i128", "isize",
+            "u8", "u16", "u32", "u64", "u128", "usize",
+            "f32", "f64", "bool", "char", "str",
+        ];
+        for name in primitives {
+            let symbol = self.interner.get_or_intern(name);
+            let def_id = self.next_def_id();
+            self.add_def(def_id, symbol, Span::default(), DefKind::TypeAlias);
+            self.add_to_module(crate::namespaces::Namespace::Type, symbol, def_id, Span::default());
         }
     }
 
@@ -141,13 +157,13 @@ impl<'a> DefCollector<'a> {
         let name = e.name.symbol;
         self.add_def(def_id, name, span, DefKind::Enum);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
-        // Variants are also definitions in the type namespace.
+        // Variants are definitions in both the type and value namespaces.
         for variant in &e.variants {
             let vdef_id = self.next_def_id();
             let vname = variant.name.symbol;
             self.add_def(vdef_id, vname, variant.span, DefKind::EnumVariant);
-            // Variants are accessible in the type namespace of the current module.
             self.add_to_module(crate::namespaces::Namespace::Type, vname, vdef_id, variant.span);
+            self.add_to_module(crate::namespaces::Namespace::Value, vname, vdef_id, variant.span);
         }
     }
 

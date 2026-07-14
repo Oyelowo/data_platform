@@ -136,6 +136,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_trait(&mut self, t: &Trait) {
         self.push_rib(RibKind::Opaque);
+        // `Self` is the implicit type parameter of every trait.
+        let self_symbol = self.resolver.interner.get_or_intern("Self");
+        self.add_type_binding(self_symbol, t.name.span);
         for param in &t.generics.params {
             if let yelang_ast::GenericParam::Type(tp) = param {
                 self.add_type_binding(tp.name.symbol, t.name.span);
@@ -181,6 +184,16 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     }
 
     fn resolve_impl(&mut self, i: &yelang_ast::Impl) {
+        self.push_rib(RibKind::Opaque);
+        // `Self` is the type being implemented.
+        let self_symbol = self.resolver.interner.get_or_intern("Self");
+        self.add_type_binding(self_symbol, i.self_ty.span);
+        // Impl generic parameters are in scope for all items.
+        for param in &i.generics.params {
+            if let yelang_ast::GenericParam::Type(tp) = param {
+                self.add_type_binding(tp.name.symbol, tp.name.span);
+            }
+        }
         if let Some(trait_path) = &i.trait_impl {
             self.resolve_type_path(trait_path);
         }
@@ -197,6 +210,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 });
             }
         }
+        self.pop_rib();
     }
 
     fn resolve_param(&mut self, param: &Param) {
@@ -680,8 +694,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     }
 
     fn add_type_binding(&mut self, name: Symbol, _span: Span) {
+        let local_id = self.resolver.next_local_id();
         if let Some(rib) = self.resolver.type_ribs.last_mut() {
-            rib.insert(Namespace::Type, name, Resolution::Err);
+            rib.insert(Namespace::Type, name, Resolution::Local { local_id });
         }
     }
 

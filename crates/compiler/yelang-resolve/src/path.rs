@@ -1,6 +1,4 @@
-use yelang_ast::{Ident, Path, PathSegment};
-use yelang_interner::Symbol;
-use yelang_util::DefId;
+use yelang_ast::Path;
 
 use crate::namespaces::Namespace;
 use crate::rib::Resolution;
@@ -21,13 +19,24 @@ pub fn resolve_path(
 
     let mut current_module = resolver.current_module;
 
+    // Handle the first segment.
     let first_res = if path.is_absolute {
         resolver
             .resolve_name_in_module(resolver.module_tree.root.def_id, ns, first.ident.symbol)
+            .map(|def_id| Resolution::Def { def_id })
     } else if first_str == "crate" {
         current_module = resolver.module_tree.root.def_id;
         None
     } else if first_str == "self" {
+        // `self` can be either a local variable binding (e.g. method receiver)
+        // or a module-relative path anchor (`self::foo`). For single-segment
+        // paths, try the local scope first; otherwise fall through to the
+        // anchor logic below.
+        if path.segments.len() == 1 {
+            if let Some(res) = resolver.resolve_name(ns, first.ident.symbol) {
+                return Some(res);
+            }
+        }
         current_module = resolver.current_module;
         None
     } else if first_str == "super" {
@@ -40,20 +49,39 @@ pub fn resolve_path(
         None
     } else {
         // Try local ribs first, then module.
-        resolver.resolve_name(ns, first.ident.symbol).map(|res| match res {
-            Resolution::Def { def_id } => Some(def_id),
-            _ => None,
-        }).unwrap_or_else(|| {
-            resolver.resolve_name_in_module(current_module, ns, first.ident.symbol)
+        // For value paths, also try the type namespace (e.g. modules are types).
+        resolver.resolve_name(ns, first.ident.symbol).or_else(|| {
+            resolver
+                .resolve_name_in_module(current_module, ns, first.ident.symbol)
+                .or_else(|| resolver.resolve_name_in_module(current_module, Namespace::Type, first.ident.symbol))
+                .map(|def_id| Resolution::Def { def_id })
         })
     };
 
-    let mut current = match first_res {
-        Some(def_id) => def_id,
-        None => {
-            // For self/crate/super, the first segment is just the anchor.
+    match first_res {
+        Some(Resolution::Local { .. }) if path.segments.len() == 1 => {
+            // Single-segment local variable path – return immediately.
+            return first_res;
+        }
+        Some(Resolution::Def { def_id }) => {
+            // Continue resolving remaining segments through the module tree.
+            let mut current = def_id;
+            for seg in &path.segments[1..] {
+                let next = resolver
+                    .resolve_name_in_module(current, ns, seg.ident.symbol)
+                    .or_else(|| {
+                        resolver.resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
+                    });
+                match next {
+                    Some(d) => current = d,
+                    None => return None,
+                }
+            }
+            return Some(Resolution::Def { def_id: current });
+        }
+        _ => {
+            // First segment was an anchor (crate/self/super) with no resolution yet.
             if first_str == "crate" || first_str == "self" || first_str == "super" {
-                // Continue with subsequent segments in the anchored module.
                 if path.segments.len() == 1 {
                     return None;
                 }
@@ -66,7 +94,6 @@ pub fn resolve_path(
                     });
                 match second_res {
                     Some(def_id) => {
-                        // Continue from this def_id for remaining segments.
                         let mut cur = def_id;
                         for seg in &path.segments[2..] {
                             let next = resolver
@@ -84,21 +111,9 @@ pub fn resolve_path(
                     None => return None,
                 }
             }
-            return None;
-        }
-    };
-
-    for seg in &path.segments[1..] {
-        let next = resolver
-            .resolve_name_in_module(current, ns, seg.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Type, seg.ident.symbol));
-        match next {
-            Some(def_id) => current = def_id,
-            None => return None,
+            None
         }
     }
-
-    Some(Resolution::Def { def_id: current })
 }
 
 pub fn resolve_type_path(resolver: &Resolver, path: &Path) -> Option<Resolution> {

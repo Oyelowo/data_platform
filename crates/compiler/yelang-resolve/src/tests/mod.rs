@@ -4,3 +4,13 @@ mod generics;
 mod imports;
 mod namespaces;
 mod shadowing;
+
+use yelang_ast::Program;
+use yelang_interner::Interner;
+
+pub fn parse_program(src: &str) -> (Program, Interner) {
+    let interner = Interner::new();
+    let mut stream = yelang_lexer::TokenKind::tokenize(src, &interner).expect("tokenize");
+    let program = stream.parse::<Program>().expect("parse program");
+    (program, interner)
+}

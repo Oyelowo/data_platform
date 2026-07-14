@@ -1,8 +1,6 @@
-use yelang_interner::Symbol;
 use yelang_lexer::Span;
 use yelang_util::DefId;
 
-use crate::module_tree::ModuleTree;
 use crate::namespaces::Namespace;
 use crate::{ResolutionError, Resolver};
 
@@ -35,11 +33,25 @@ fn resolve_import_tree(
                     .map(|s| s.ident.symbol)
                     .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
                 add_imported_item(resolver, module_id, ns, name, def_id, span);
+            } else {
+                let name = path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.symbol)
+                    .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
+                resolver.errors.push(ResolutionError::NotFound { name, span });
             }
         }
         yelang_ast::UseTree::Rename { path, alias, .. } => {
             if let Some((ns, def_id)) = resolve_import_path(resolver, module_id, path) {
                 add_imported_item(resolver, module_id, ns, alias.symbol, def_id, span);
+            } else {
+                let name = path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.symbol)
+                    .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
+                resolver.errors.push(ResolutionError::NotFound { name, span });
             }
         }
         yelang_ast::UseTree::Glob { path, .. } => {
@@ -47,7 +59,41 @@ fn resolve_import_tree(
         }
         yelang_ast::UseTree::Nested { prefix, items, .. } => {
             for item in items {
-                resolve_import_tree(resolver, module_id, item, item.span());
+                let item_with_prefix = prepend_prefix_to_use_tree(prefix, item.clone());
+                resolve_import_tree(resolver, module_id, &item_with_prefix, item.span());
+            }
+        }
+    }
+}
+
+/// Prepend a path prefix to every path inside a UseTree.
+fn prepend_prefix_to_use_tree(
+    prefix: &yelang_ast::Path,
+    tree: yelang_ast::UseTree,
+) -> yelang_ast::UseTree {
+    match tree {
+        yelang_ast::UseTree::Simple { path, span } => {
+            let mut new_path = prefix.clone();
+            new_path.segments.extend(path.segments);
+            yelang_ast::UseTree::Simple { path: new_path, span }
+        }
+        yelang_ast::UseTree::Rename { path, alias, span } => {
+            let mut new_path = prefix.clone();
+            new_path.segments.extend(path.segments);
+            yelang_ast::UseTree::Rename { path: new_path, alias, span }
+        }
+        yelang_ast::UseTree::Glob { path, span } => {
+            let mut new_path = prefix.clone();
+            new_path.segments.extend(path.segments);
+            yelang_ast::UseTree::Glob { path: new_path, span }
+        }
+        yelang_ast::UseTree::Nested { prefix: inner_prefix, items, span } => {
+            let mut new_prefix = prefix.clone();
+            new_prefix.segments.extend(inner_prefix.segments);
+            yelang_ast::UseTree::Nested {
+                prefix: new_prefix,
+                items,
+                span,
             }
         }
     }
@@ -79,7 +125,6 @@ fn resolve_import_path(
             .and_then(|m| m.parent)
             .unwrap_or(resolver.module_tree.root.def_id);
     } else {
-        // Look up in current module's type namespace for a submodule.
         let found = resolver
             .resolve_name_in_module(current, Namespace::Type, first.ident.symbol)
             .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol));
@@ -90,7 +135,6 @@ fn resolve_import_path(
     }
 
     for seg in &segments[1..] {
-        let seg_str = seg.ident.as_str(resolver.interner);
         let found = resolver
             .resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
             .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol));
@@ -99,9 +143,6 @@ fn resolve_import_path(
             None => return None,
         }
     }
-
-    let last = segments.last().unwrap();
-    let last_str = last.ident.as_str(resolver.interner);
 
     if let Some(ns) = resolver.definitions.get(&current).and_then(|d| d.namespace()) {
         return Some((ns, current));
@@ -156,7 +197,6 @@ fn resolve_glob_import(
         }
     }
 
-    // Find the module that `current` points to.
     let target_module = resolver
         .definitions
         .get(&current)
@@ -164,7 +204,6 @@ fn resolve_glob_import(
             if matches!(d.kind, crate::def_collector::DefKind::Module) {
                 Some(current)
             } else {
-                // If current is a type, we can't glob-import its items for the MVP.
                 None
             }
         });
@@ -184,7 +223,7 @@ fn add_imported_item(
     resolver: &mut Resolver,
     module_id: DefId,
     ns: Namespace,
-    name: Symbol,
+    name: yelang_interner::Symbol,
     def_id: DefId,
     span: Span,
 ) {
