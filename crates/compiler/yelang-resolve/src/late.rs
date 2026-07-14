@@ -463,6 +463,21 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ExprKind::Await(e) => {
                 self.resolve_expr(e);
             }
+            ExprKind::MacroInvocation(inv) => {
+                self.resolve_value_path(&inv.path);
+                match &inv.args {
+                    yelang_ast::MacroArgs::Paren(exprs) | yelang_ast::MacroArgs::Bracket(exprs) => {
+                        for e in exprs {
+                            self.resolve_expr(e);
+                        }
+                    }
+                    yelang_ast::MacroArgs::Brace(stmts) => {
+                        for s in stmts {
+                            self.resolve_stmt(s);
+                        }
+                    }
+                }
+            }
             ExprKind::Err => {}
             ExprKind::Dummy => {}
             ExprKind::Async(async_expr) => {

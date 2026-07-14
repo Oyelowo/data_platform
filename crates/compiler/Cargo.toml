@@ -7,6 +7,8 @@ members = [
     "yelang-macro",
     "yelang-resolve",
     "yelang-hir",
+    "yelang-tc",
+    "stdlib/core",
 ]
 resolver = "2"
 

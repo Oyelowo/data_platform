@@ -137,6 +137,36 @@ impl Codegen for Expr {
                 expr.codegen(f, interner)?;
                 write!(f, ".await")
             }
+            ExprKind::MacroInvocation(inv) => {
+                inv.path.codegen(f, interner)?;
+                write!(f, "!")?;
+                match &inv.args {
+                    crate::expr::MacroArgs::Paren(exprs) => {
+                        write!(f, "(")?;
+                        for (i, expr) in exprs.iter().enumerate() {
+                            if i > 0 { write!(f, ", ")?; }
+                            expr.codegen(f, interner)?;
+                        }
+                        write!(f, ")")
+                    }
+                    crate::expr::MacroArgs::Bracket(exprs) => {
+                        write!(f, "[")?;
+                        for (i, expr) in exprs.iter().enumerate() {
+                            if i > 0 { write!(f, ", ")?; }
+                            expr.codegen(f, interner)?;
+                        }
+                        write!(f, "]")
+                    }
+                    crate::expr::MacroArgs::Brace(stmts) => {
+                        write!(f, " {{ ")?;
+                        for (i, stmt) in stmts.iter().enumerate() {
+                            if i > 0 { write!(f, "; ")?; }
+                            stmt.codegen(f, interner)?;
+                        }
+                        write!(f, " }}")
+                    }
+                }
+            }
             ExprKind::Err => write!(f, "/* error */"),
             ExprKind::Dummy => write!(f, "/* dummy */"),
         }

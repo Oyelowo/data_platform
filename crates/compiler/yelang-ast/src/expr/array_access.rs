@@ -10,8 +10,8 @@ use yelang_lexer::{Either, ParseTokenStream, RepeatMin, TokenResult, TokenStream
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrayAccess {
-    pub(crate) base: Box<Expr>,
-    pub(crate) index: ArrayIndex,
+    pub base: Box<Expr>,
+    pub index: ArrayIndex,
 }
 
 impl ParseTokenStream<crate::tokenizer::TokenKind> for ArrayIndex {
@@ -200,7 +200,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for GroupBySelector {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Index(pub(crate) Box<Expr>);
+pub struct Index(pub Box<Expr>);
 
 impl Index {
     pub fn expr(&self) -> &Expr {

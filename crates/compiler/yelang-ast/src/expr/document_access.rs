@@ -10,8 +10,8 @@ use yelang_lexer::{ArrayCreator, ParseTokenStream, Span, TokenResult, TokenStrea
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocumentAccess {
-    pub(crate) base: Box<Expr>,
-    pub(crate) object: Document,
+    pub base: Box<Expr>,
+    pub object: Document,
 }
 
 impl DocumentAccess {

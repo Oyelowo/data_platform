@@ -1,0 +1,12 @@
+/[package]
+name = "yelang-stdlib-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+description = "Yelang standard library core — primitives, memory, and platform abstractions"
+
+[lib]
+doctest = false
+
+[dependencies]

@@ -8,8 +8,8 @@ use crate::{Expr, Ident};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberAccess {
-    pub(crate) base: Box<Expr>,
-    pub(crate) member: Ident,
+    pub base: Box<Expr>,
+    pub member: Ident,
 }
 
 impl MemberAccess {

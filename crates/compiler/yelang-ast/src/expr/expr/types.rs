@@ -10,8 +10,8 @@ use crate::{
     Array, ArrayAccess, AssignEqExpr, AssignOpExpr, AsyncExpr, BinaryExpr, BindAtExpr, BlockExpr,
     BreakExpr, CallExpr, ComprehensionExpr, ContinueExpr, DestructureAssignExpr, DocumentAccess,
     ForLoopExpr, GroupedExpr, IfExpr, IsTypeExpr, LambdaExpr, LetExpr, Literal, LoopExpr,
-    MatchExpr, MemberAccess, MethodCallExpr, Object, Path, Query, RangeExpr, StructExpr,
-    TernaryExpr, TrySafeAccess, TypeAscription, TypeCast, UnaryExpr, WhileExpr,
+    MacroInvocation, MatchExpr, MemberAccess, MethodCallExpr, Object, Path, Query, RangeExpr,
+    StructExpr, TernaryExpr, TrySafeAccess, TypeAscription, TypeCast, UnaryExpr, WhileExpr,
 };
 use yelang_lexer::Span;
 
@@ -61,6 +61,12 @@ pub enum ExprKind {
     /// std::collections::HashMap
     /// ```
     Path(Path),
+
+    /// Macro invocation: `assert!(true)`, `vec![1, 2, 3]`
+    ///
+    /// Parsed when a path is immediately followed by `!` and a delimited group.
+    /// Expanded to regular AST during the macro expansion phase.
+    MacroInvocation(MacroInvocation),
 
     /// The underscore pattern (`_`), used for ignoring values and types.
     ///

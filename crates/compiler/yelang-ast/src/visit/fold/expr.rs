@@ -58,6 +58,7 @@ pub fn fold_expr<F: Folder + ?Sized>(f: &mut F, expr: Expr) -> Expr {
         ExprKind::MethodCall(m) => ExprKind::MethodCall(f.fold_method_call_expr(m)),
         ExprKind::Gen(g) => ExprKind::Gen(f.fold_gen_expr(g)),
         ExprKind::Await(a) => ExprKind::Await(f.fold_await_expr(a)),
+        ExprKind::MacroInvocation(m) => ExprKind::MacroInvocation(f.fold_macro_invocation(m)),
         ExprKind::Underscore => ExprKind::Underscore,
         ExprKind::Break(b) => ExprKind::Break(BreakExpr {
             label: b.label,
@@ -510,5 +511,21 @@ pub fn fold_path<F: Folder + ?Sized>(f: &mut F, path: Path) -> Path {
             .collect(),
         is_absolute: path.is_absolute,
         span: path.span,
+    }
+}
+
+pub fn fold_macro_invocation<F: Folder + ?Sized>(
+    f: &mut F,
+    m: crate::expr::MacroInvocation,
+) -> crate::expr::MacroInvocation {
+    use crate::expr::MacroArgs;
+    crate::expr::MacroInvocation {
+        path: f.fold_path(m.path),
+        args: match m.args {
+            MacroArgs::Paren(exprs) => MacroArgs::Paren(exprs.into_iter().map(|e| f.fold_expr(e)).collect()),
+            MacroArgs::Bracket(exprs) => MacroArgs::Bracket(exprs.into_iter().map(|e| f.fold_expr(e)).collect()),
+            MacroArgs::Brace(stmts) => MacroArgs::Brace(stmts.into_iter().map(|s| f.fold_stmt(s)).collect()),
+        },
+        span: m.span,
     }
 }

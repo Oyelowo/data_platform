@@ -1,20 +1,21 @@
-[package]
-name = "yelang-macro"
+/[package]
+name = "yelang-tc"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description.workspace = true
-documentation.workspace = true
+description = "Yelang type checker — bidirectional inference with row polymorphism, union types, and utility types"
 
 [lib]
 doctest = false
 
 [dependencies]
 yelang-ast = { path = "../yelang-ast" }
+yelang-hir = { path = "../yelang-hir" }
 yelang-interner = { path = "../yelang-interner" }
-yelang-lexer = { path = "../yelang-lexer" }
+yelang-resolve = { path = "../yelang-resolve" }
 yelang-util = { path = "../yelang-util" }
 thiserror = { workspace = true }
+indexmap = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }

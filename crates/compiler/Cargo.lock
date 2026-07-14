@@ -839,6 +839,7 @@ dependencies = [
  "thiserror",
  "yelang-ast",
  "yelang-interner",
+ "yelang-lexer",
  "yelang-util",
 ]
 
