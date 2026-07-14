@@ -856,6 +856,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-stdlib-core"
+version = "0.1.0"
+
+[[package]]
+name = "yelang-tc"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "rstest",
+ "thiserror",
+ "yelang-ast",
+ "yelang-hir",
+ "yelang-interner",
+ "yelang-resolve",
+ "yelang-util",
+]
+
+[[package]]
 name = "yelang-util"
 version = "0.1.0"
 dependencies = [
