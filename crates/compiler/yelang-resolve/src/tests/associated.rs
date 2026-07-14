@@ -273,3 +273,192 @@ fn trait_impl_method_in_type_position() {
     let resolved = resolve_crate(&program, &interner);
     assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
 }
+
+// ============================================================================
+// Exhaustive edge-case tests for Feature 3: Associated Items
+// ============================================================================
+
+#[test]
+fn self_inherent_method_call() {
+    // `Self::new` inside an inherent impl resolves via self_type.
+    // Uses a single-method impl to avoid a parser limitation.
+    let src = r#"
+        struct Foo { x: i32 }
+        impl Foo {
+            fn foo() -> i32 { Self::foo() }
+        }
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn self_trait_impl_method_call() {
+    // `Self::show` inside a trait impl resolves via self_type + trait_impls.
+    let src = r#"
+        trait Show {
+            fn show(&self) -> i32;
+        }
+        struct Foo {}
+        impl Show for Foo {
+            fn show(&self) -> i32 { 42 }
+            fn delegate(&self) -> i32 { Self::show(self) }
+        }
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn unqualified_trait_assoc_const() {
+    // `Foo::MAX` resolves through trait_impls index.
+    let src = r#"
+        trait Limits {
+            const MAX: i32;
+        }
+        struct Foo {}
+        impl Limits for Foo {
+            const MAX: i32 = 100;
+        }
+        fn main() { Foo::MAX; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn unqualified_trait_assoc_type() {
+    // `Foo::Output` in type position resolves through trait_impls.
+    let src = r#"
+        trait Compute {
+            type Output;
+        }
+        struct Foo {}
+        impl Compute for Foo {
+            type Output = i32;
+        }
+        fn takes(x: Foo::Output) {}
+        fn main() { takes(1); }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn qualified_trait_method_in_expr_position() {
+    // `<Point as Display>::fmt` parsed as ExprPath with qself.
+    let src = r#"
+        trait Display {
+            fn fmt(&self) -> str;
+        }
+        struct Point {}
+        impl Display for Point {
+            fn fmt(&self) -> str { "p" }
+        }
+        fn main() { <Point as Display>::fmt; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn private_assoc_item_not_accessible_externally() {
+    // Private inherent method should not be callable from outside module.
+    let src = r#"
+        mod inner {
+            pub struct Foo {}
+            impl Foo {
+                fn secret() {}
+            }
+        }
+        fn main() { inner::Foo::secret(); }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(
+        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        "expected PrivacyError: {:?}",
+        resolved.errors
+    );
+}
+
+#[test]
+fn cross_module_trait_impl() {
+    // Trait and type defined in different modules.
+    // Both modules must be pub for cross-module visibility.
+    // Trait impl items need explicit pub for external access (until implicit
+    // trait-impl visibility is implemented).
+    let src = r#"
+        pub mod a {
+            pub trait Show {
+                fn show(&self) -> i32;
+            }
+        }
+        pub mod b {
+            pub struct Foo {}
+            impl super::a::Show for Foo {
+                pub fn show(&self) -> i32 { 1 }
+            }
+        }
+        fn main() { b::Foo::show; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn impl_assoc_type_binding_resolves_rhs() {
+    // The RHS type of an associated type binding inside an impl is resolved.
+    let src = r#"
+        trait Iterator {
+            type Item;
+        }
+        struct MyVec {}
+        impl Iterator for MyVec {
+            type Item = i32;
+        }
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn impl_assoc_const_value_resolves() {
+    // The value expression of an associated constant inside an impl is resolved.
+    let src = r#"
+        struct Foo {}
+        impl Foo {
+            const BASE: i32 = 10;
+            const DOUBLE: i32 = Foo::BASE + Foo::BASE;
+        }
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn self_in_return_type_of_impl_method() {
+    // `Self` used as return type in an inherent impl method signature.
+    let src = r#"
+        struct Foo { x: i32 }
+        impl Foo {
+            fn clone(&self) -> Self { Self { x: self.x } }
+        }
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}

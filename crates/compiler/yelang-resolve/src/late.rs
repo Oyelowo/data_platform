@@ -200,6 +200,8 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         // `Self` is the type being implemented.
         let self_symbol = self.resolver.interner.get_or_intern("Self");
         self.add_type_binding(self_symbol, i.self_ty.span);
+        // Set self_type so `Self::item` resolves correctly.
+        self.resolver.self_type = crate::associated::extract_type_name(&i.self_ty);
         // Impl generic parameters are in scope for all items.
         for param in &i.generics.params {
             if let yelang_ast::GenericParam::Type(tp) = param {
@@ -211,17 +213,29 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         }
         self.resolve_type(&i.self_ty);
         for item in &i.items {
-            if let yelang_ast::ImplItemKind::Method(m) = &item.item {
-                self.resolve_fn(&yelang_ast::FnDef {
-                    name: m.name.clone(),
-                    generics: m.generics.clone(),
-                    sig: m.sig.clone(),
-                    body: m.body.clone(),
-                    is_const: m.is_const,
-                    span: m.name.span(),
-                });
+            match &item.item {
+                yelang_ast::ImplItemKind::Method(m) => {
+                    self.resolve_fn(&yelang_ast::FnDef {
+                        name: m.name.clone(),
+                        generics: m.generics.clone(),
+                        sig: m.sig.clone(),
+                        body: m.body.clone(),
+                        is_const: m.is_const,
+                        span: m.name.span(),
+                    });
+                }
+                yelang_ast::ImplItemKind::AssociatedType(at) => {
+                    self.resolve_type(&at.ty);
+                }
+                yelang_ast::ImplItemKind::Constant(c) => {
+                    self.resolve_type(&c.ty);
+                    if let Some(value) = &c.value {
+                        self.resolve_expr(value);
+                    }
+                }
             }
         }
+        self.resolver.self_type = None;
         self.pop_rib();
     }
 
