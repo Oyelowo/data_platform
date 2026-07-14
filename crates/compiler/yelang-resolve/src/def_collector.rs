@@ -52,6 +52,7 @@ impl Definition {
 use crate::{
     error::ResolutionError,
     module_tree::{ModuleNode, ModuleTree},
+    prelude::Prelude,
 };
 use yelang_ast::{FnDef, Ident, Item, ItemKind, ModDef, ModKind, Type, TypeKind};
 use yelang_ast::item::{Const, Enum, Impl, ImplItemKind, Static, Struct, Trait, TypeAlias, Use};
@@ -70,6 +71,8 @@ pub struct DefCollector<'a> {
     pub trait_impls: FxHashMap<(Symbol, Symbol), Vec<DefId>>,
     /// Maps impl DefId to the names of its items (for fast lookup)
     pub impl_item_names: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
+    /// Standard prelude items injected into every module.
+    pub prelude: Option<Prelude>,
 }
 
 impl<'a> DefCollector<'a> {
@@ -89,9 +92,11 @@ impl<'a> DefCollector<'a> {
                 visibility: Visibility::Public(Span::default()),
             },
         );
+        let mut next_def_id = 2;
+        let prelude = Some(Prelude::new(interner, &mut next_def_id));
         let mut collector = Self {
             interner,
-            next_def_id: 2,
+            next_def_id,
             definitions,
             module_tree: ModuleTree::new(root_node),
             current_module: root_id,
@@ -99,6 +104,7 @@ impl<'a> DefCollector<'a> {
             inherent_impls: FxHashMap::default(),
             trait_impls: FxHashMap::default(),
             impl_item_names: FxHashMap::default(),
+            prelude,
         };
         collector.seed_primitives();
         collector
@@ -142,7 +148,7 @@ impl<'a> DefCollector<'a> {
             ItemKind::Enum(e) => self.collect_enum(e, item.span, item.visibility.clone()),
             ItemKind::TypeAlias(ta) => self.collect_type_alias(ta, item.span, item.visibility.clone()),
             ItemKind::Trait(t) => self.collect_trait(t, item.span, item.visibility.clone()),
-            ItemKind::Module(m) => self.collect_module(m, item.span, item.visibility.clone()),
+            ItemKind::Module(m) => self.collect_module(m, item.span, item.visibility.clone(), &item.attributes),
             ItemKind::Const(c) => self.collect_const(c, item.span, item.visibility.clone()),
             ItemKind::Static(s) => self.collect_static(s, item.span, item.visibility.clone()),
             ItemKind::Impl(i) => self.collect_impl(i, item.span, item.visibility.clone()),
@@ -209,7 +215,7 @@ impl<'a> DefCollector<'a> {
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
     }
 
-    fn collect_module(&mut self, m: &ModDef, span: Span, visibility: Visibility) {
+    fn collect_module(&mut self, m: &ModDef, span: Span, visibility: Visibility, _attributes: &[yelang_ast::Attribute]) {
         let def_id = self.next_def_id();
         let name = m.name.symbol;
         let parent = self.current_module;

@@ -7,6 +7,7 @@ pub mod late;
 pub mod module_tree;
 pub mod namespaces;
 pub mod path;
+pub mod prelude;
 pub mod privacy;
 pub mod rib;
 pub mod scope;
@@ -43,7 +44,22 @@ pub struct ResolvedCrate {
 /// The main entry point for name resolution.
 pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> ResolvedCrate {
     let collector = def_collector::DefCollector::new(interner).collect(ast);
-    let mut resolver = scope::Resolver::new(interner, collector.module_tree, collector.definitions);
+
+    // Merge prelude definitions into the main definitions map so that
+    // downstream passes can look them up by DefId.
+    let mut definitions = collector.definitions;
+    if let Some(prelude) = &collector.prelude {
+        for (def_id, def) in &prelude.definitions {
+            definitions.insert(*def_id, def.clone());
+        }
+    }
+
+    let mut resolver = scope::Resolver::new(
+        interner,
+        collector.module_tree,
+        definitions,
+        collector.prelude,
+    );
     resolver.errors = collector.errors;
     // Transfer impl indexes from collector to resolver
     resolver.inherent_impls = collector.inherent_impls;

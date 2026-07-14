@@ -2,32 +2,12 @@ use crate::*;
 use crate::tests::parse_program;
 
 // ============================================================================
-// Type generic parameter tests (Phase 1-3)
+// Prelude resolution tests (Phase 4)
 // ============================================================================
 
 #[test]
-fn resolve_generic_param_in_fn() {
-    let src = "fn id<T>(x: T) -> T { x }";
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_generic_param_in_struct() {
+fn prelude_option_type_resolves_in_root() {
     let src = r#"
-        struct Box<T> { value: T }
-        fn main() { let b: Box<i32>; }
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_generic_param_in_enum() {
-    let src = r#"
-        enum Option<T> { Some(T), None }
         fn main() { let x: Option<i32>; }
     "#;
     let (program, interner) = parse_program(src);
@@ -36,10 +16,9 @@ fn resolve_generic_param_in_enum() {
 }
 
 #[test]
-fn resolve_generic_param_in_trait() {
+fn prelude_result_type_resolves_in_root() {
     let src = r#"
-        trait Show<T> { fn show(self) -> T; }
-        fn main() {}
+        fn main() { let x: Result<i32, string>; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -47,11 +26,9 @@ fn resolve_generic_param_in_trait() {
 }
 
 #[test]
-fn resolve_generic_param_in_impl() {
+fn prelude_vec_type_resolves_in_root() {
     let src = r#"
-        struct Point<T> { x: T }
-        impl<T> Point<T> { fn get_x(self) -> T { self.x } }
-        fn main() {}
+        fn main() { let x: Vec<i32>; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -59,26 +36,9 @@ fn resolve_generic_param_in_impl() {
 }
 
 #[test]
-fn resolve_generic_param_in_type_alias() {
+fn prelude_string_type_resolves_in_root() {
     let src = r#"
-        type Id<T> = T;
-        fn main() { let x: Id<i32> = 1; }
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-// ============================================================================
-// Const generic parameter tests (Phase 4)
-// ============================================================================
-
-#[test]
-fn resolve_const_param_in_fn_array_type() {
-    // Const param used in array type in function signature.
-    let src = r#"
-        fn foo<const N: usize>(arr: [i32; N]) -> [i32; N] { arr }
-        fn main() {}
+        fn main() { let x: String; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -86,11 +46,9 @@ fn resolve_const_param_in_fn_array_type() {
 }
 
 #[test]
-fn resolve_const_param_in_struct() {
-    // Const param used in struct field type.
+fn prelude_box_type_resolves_in_root() {
     let src = r#"
-        struct Array<T, const N: usize> { data: [T; N] }
-        fn main() {}
+        fn main() { let x: Box<i32>; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -98,11 +56,9 @@ fn resolve_const_param_in_struct() {
 }
 
 #[test]
-fn resolve_const_param_in_enum() {
-    // Const param used in enum variant payload.
+fn prelude_trait_copy_resolves() {
     let src = r#"
-        enum Buffer<const N: usize> { Fixed([u8; N]), Empty }
-        fn main() {}
+        fn main() { let x: Copy; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -110,12 +66,80 @@ fn resolve_const_param_in_enum() {
 }
 
 #[test]
-fn resolve_const_param_in_impl() {
-    // Const param on impl block, used in method signatures.
+fn prelude_trait_clone_resolves() {
     let src = r#"
-        struct Vector<T, const N: usize> { data: [T; N] }
-        impl<T, const N: usize> Vector<T, N> {
-            fn len(self) -> usize { N }
+        fn main() { let x: Clone; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_trait_iterator_resolves() {
+    let src = r#"
+        fn main() { let x: Iterator; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_option_variant_some_resolves() {
+    let src = r#"
+        fn main() { Some; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_option_variant_none_resolves() {
+    let src = r#"
+        fn main() { None; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_result_variant_ok_resolves() {
+    let src = r#"
+        fn main() { Ok; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_result_variant_err_resolves() {
+    let src = r#"
+        fn main() { Err; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_drop_fn_resolves() {
+    let src = r#"
+        fn main() { drop; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_type_resolves_in_nested_module() {
+    let src = r#"
+        mod inner {
+            fn foo() -> Option<i32> {}
         }
         fn main() {}
     "#;
@@ -125,13 +149,63 @@ fn resolve_const_param_in_impl() {
 }
 
 #[test]
-fn resolve_const_param_in_trait() {
-    // Const param in trait definition and method signature.
+fn prelude_shadowed_by_local_definition() {
+    // A local type alias named `Option` should shadow the prelude `Option`.
     let src = r#"
-        trait SizedContainer<const N: usize> {
-            fn capacity(self) -> usize;
+        type Option = i32;
+        fn main() { let x: Option = 1; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_shadowed_by_fn_param() {
+    // A function parameter named `Option` should shadow the prelude type
+    // in the value namespace (though not the type namespace).
+    let src = r#"
+        fn foo(Option: i32) { Option; }
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_shadowed_by_module_item() {
+    // A struct named `Option` in a module should shadow prelude `Option`.
+    let src = r#"
+        struct Option { x: i32 }
+        fn main() { let o: Option = Option { x: 1 }; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_shadowed_by_import() {
+    // An explicit import should shadow the prelude item of the same name.
+    let src = r#"
+        mod foo { pub struct Option {} }
+        use foo::Option;
+        fn main() { let x: Option = Option {}; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_shadowed_by_let_binding() {
+    // A let binding should shadow prelude items in the value namespace.
+    let src = r#"
+        fn main() {
+            let Some = 42;
+            Some;
         }
-        fn main() {}
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -139,151 +213,41 @@ fn resolve_const_param_in_trait() {
 }
 
 #[test]
-fn resolve_const_param_in_type_alias() {
-    // Const param in type alias definition.
+fn prelude_item_in_nested_module_not_visible_as_qualified() {
+    // Prelude items are not part of any module's namespace table, so
+    // they cannot be accessed via qualified paths like `crate::Option`.
+    // They are only resolved as unqualified names.
     let src = r#"
-        type IntArray<const N: usize> = [i32; N];
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_in_expression() {
-    // Const param used as a value in function body.
-    let src = r#"
-        fn make_arr<const N: usize>() -> [i32; N] {
-            let x = N;
-            [0; N]
-        }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_in_local_type() {
-    // Const param used in a local variable's type annotation.
-    let src = r#"
-        fn foo<const N: usize>() {
-            let arr: [i32; N];
-        }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_mixed_type_and_const_params() {
-    // Multiple type and const params interleaved.
-    let src = r#"
-        struct Matrix<T, const ROWS: usize, const COLS: usize> {
-            data: [[T; COLS]; ROWS]
-        }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_in_trait_impl() {
-    // Const param in trait impl method.
-    let src = r#"
-        trait Len { fn len(self) -> usize; }
-        struct Arr<T, const N: usize> { data: [T; N] }
-        impl<T, const N: usize> Len for Arr<T, N> {
-            fn len(self) -> usize { N }
-        }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_in_return_type() {
-    // Const param used only in return type position.
-    let src = r#"
-        fn zeroes<const N: usize>() -> [i32; N] { [0; N] }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_shadowing() {
-    // Const param should be shadowable by local bindings.
-    let src = r#"
-        fn foo<const N: usize>() {
-            let N = 5;
-        }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_cross_module() {
-    // Const generic struct used from another module.
-    let src = r#"
-        pub mod a {
-            pub struct Buffer<T, const N: usize> { data: [T; N] }
-        }
-        fn main() { let b: a::Buffer<i32, 8>; }
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn resolve_const_param_with_nested_arrays() {
-    // Nested array types with const params.
-    let src = r#"
-        struct Grid<const W: usize, const H: usize> {
-            cells: [[f64; W]; H]
-        }
-        fn main() {}
-    "#;
-    let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
-}
-
-#[test]
-fn unresolved_const_param_reports_error() {
-    // Using an undefined const generic name should produce NotFound.
-    let src = r#"
-        fn foo() -> [i32; M] { [0; M] }
-        fn main() {}
+        fn main() { crate::Option; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { name, .. } if interner.resolve(name) == "M")),
-        "expected NotFound for M: {:?}",
+        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        "expected NotFound for crate::Option: {:?}",
         resolved.errors
     );
 }
 
 #[test]
-fn resolve_const_param_in_fn_type_annotation() {
-    // Const param used in the type of another function parameter.
+fn glob_import_does_not_import_prelude_items() {
+    // A glob import from a module should only import that module's explicit
+    // items, not the prelude items that were resolved as fallbacks.
     let src = r#"
-        fn process<const N: usize>(input: [i32; N], output: [i32; N]) {}
+        mod foo { pub fn bar() {} }
+        use foo::*;
+        fn main() { bar(); }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_trait_in_impl_bound_resolves() {
+    let src = r#"
+        struct Foo {}
+        impl Clone for Foo {}
         fn main() {}
     "#;
     let (program, interner) = parse_program(src);
@@ -292,10 +256,9 @@ fn resolve_const_param_in_fn_type_annotation() {
 }
 
 #[test]
-fn resolve_const_param_in_tuple_struct() {
-    // Const param in tuple struct payload.
+fn prelude_trait_as_type_bound_resolves() {
     let src = r#"
-        struct VecN<T, const N: usize>([T; N]);
+        fn clone_it<T: Clone>(x: T) -> T { x }
         fn main() {}
     "#;
     let (program, interner) = parse_program(src);
@@ -304,14 +267,81 @@ fn resolve_const_param_in_tuple_struct() {
 }
 
 #[test]
-fn resolve_const_param_in_associated_const() {
-    // Const param referenced in associated constant value.
+fn prelude_items_do_not_conflict_with_each_other() {
+    // Using multiple prelude items in one program should work.
     let src = r#"
-        struct Wrap<const N: usize> {}
-        impl<const N: usize> Wrap<N> {
-            const VAL: usize = N;
-        }
+        fn foo() -> Option<Result<Vec<String>, string>> { None }
         fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_sized_trait_resolves() {
+    let src = r#"
+        fn main() { let x: Sized; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_send_sync_traits_resolve() {
+    let src = r#"
+        fn main() { let x: Send; let y: Sync; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_default_trait_resolves() {
+    let src = r#"
+        fn main() { let x: Default; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_display_debug_traits_resolve() {
+    let src = r#"
+        fn main() { let x: Display; let y: Debug; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_partial_eq_eq_traits_resolve() {
+    let src = r#"
+        fn main() { let x: PartialEq; let y: Eq; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_partial_ord_ord_traits_resolve() {
+    let src = r#"
+        fn main() { let x: PartialOrd; let y: Ord; }
+    "#;
+    let (program, interner) = parse_program(src);
+    let resolved = resolve_crate(&program, &interner);
+    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+}
+
+#[test]
+fn prelude_into_iterator_trait_resolves() {
+    let src = r#"
+        fn main() { let x: IntoIterator; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);

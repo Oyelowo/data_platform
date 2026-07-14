@@ -191,7 +191,7 @@ fn resolve_qualified_assoc_fn_directly() {
     "#;
     let (program, interner) = parse_program(src);
     let collector = def_collector::DefCollector::new(&interner).collect(&program);
-    let mut resolver = scope::Resolver::new(&interner, collector.module_tree, collector.definitions);
+    let mut resolver = scope::Resolver::new(&interner, collector.module_tree, collector.definitions, collector.prelude);
     resolver.inherent_impls = collector.inherent_impls;
     resolver.trait_impls = collector.trait_impls;
     resolver.impl_item_names = collector.impl_item_names;

@@ -5,6 +5,7 @@ mod generics;
 mod imports;
 mod label;
 mod namespaces;
+mod prelude;
 mod privacy;
 mod shadowing;
 

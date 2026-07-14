@@ -66,14 +66,26 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         }
     }
 
-    fn resolve_fn(&mut self, func: &FnDef) {
-        // Add generic params to type scope.
-        self.push_rib(RibKind::Fn);
-        for param in &func.generics.params {
-            if let yelang_ast::GenericParam::Type(tp) = param {
-                self.add_type_binding(tp.name.symbol, func.span);
+    /// Add generic parameters (both type and const) to the appropriate rib stacks.
+    fn resolve_generic_params(&mut self, params: &[yelang_ast::GenericParam]) {
+        for param in params {
+            match param {
+                yelang_ast::GenericParam::Type(tp) => {
+                    self.add_type_binding(tp.name.symbol, tp.name.span);
+                }
+                yelang_ast::GenericParam::Const(cp) => {
+                    // Const params are values (they can be used in expressions).
+                    self.add_value_binding(cp.name.symbol, cp.name.span);
+                    // Resolve the type annotation of the const param.
+                    self.resolve_type(&cp.ty);
+                }
             }
         }
+    }
+
+    fn resolve_fn(&mut self, func: &FnDef) {
+        self.push_rib(RibKind::Fn);
+        self.resolve_generic_params(&func.generics.params);
         // Add function parameters to value scope.
         for param in &func.sig.params {
             self.resolve_param(param);
@@ -89,11 +101,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_struct(&mut self, s: &Struct) {
         self.push_rib(RibKind::Opaque);
-        for param in &s.generics.params {
-            if let yelang_ast::GenericParam::Type(tp) = param {
-                self.add_type_binding(tp.name.symbol, s.span);
-            }
-        }
+        self.resolve_generic_params(&s.generics.params);
         match &s.fields {
             yelang_ast::StructFields::Named(fields) => {
                 for f in fields {
@@ -112,11 +120,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_enum(&mut self, e: &Enum) {
         self.push_rib(RibKind::Opaque);
-        for param in &e.generics.params {
-            if let yelang_ast::GenericParam::Type(tp) = param {
-                self.add_type_binding(tp.name.symbol, e.name.span);
-            }
-        }
+        self.resolve_generic_params(&e.generics.params);
         for variant in &e.variants {
             match &variant.kind {
                 yelang_ast::VariantKind::Struct(fields) => {
@@ -137,11 +141,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_type_alias(&mut self, ta: &TypeAlias) {
         self.push_rib(RibKind::Opaque);
-        for param in &ta.generics.params {
-            if let yelang_ast::GenericParam::Type(tp) = param {
-                self.add_type_binding(tp.name.symbol, ta.span);
-            }
-        }
+        self.resolve_generic_params(&ta.generics.params);
         self.resolve_type(&ta.target);
         self.pop_rib();
     }
@@ -151,11 +151,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         // `Self` is the implicit type parameter of every trait.
         let self_symbol = self.resolver.interner.get_or_intern("Self");
         self.add_type_binding(self_symbol, t.name.span);
-        for param in &t.generics.params {
-            if let yelang_ast::GenericParam::Type(tp) = param {
-                self.add_type_binding(tp.name.symbol, t.name.span);
-            }
-        }
+        self.resolve_generic_params(&t.generics.params);
         for item in &t.items {
             if let yelang_ast::TraitItemKind::Method(m) = &item.item {
                 self.push_rib(RibKind::Fn);
@@ -203,11 +199,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         // Set self_type so `Self::item` resolves correctly.
         self.resolver.self_type = crate::associated::extract_type_name(&i.self_ty);
         // Impl generic parameters are in scope for all items.
-        for param in &i.generics.params {
-            if let yelang_ast::GenericParam::Type(tp) = param {
-                self.add_type_binding(tp.name.symbol, tp.name.span);
-            }
-        }
+        self.resolve_generic_params(&i.generics.params);
         if let Some(trait_path) = &i.trait_impl {
             self.resolve_type_path(trait_path);
         }

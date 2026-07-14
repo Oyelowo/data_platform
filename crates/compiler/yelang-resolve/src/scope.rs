@@ -7,6 +7,7 @@ use crate::{
     error::ResolutionError,
     module_tree::ModuleTree,
     namespaces::Namespace,
+    prelude::Prelude,
     rib::{Rib, Resolution},
 };
 
@@ -30,6 +31,9 @@ pub struct Resolver<'a> {
     /// The actual type name being implemented when inside an `impl` block.
     /// Used to resolve `Self::item` paths.
     pub self_type: Option<Symbol>,
+    /// Standard prelude items. Checked as a final fallback so they can be
+    /// shadowed by any local definition or import.
+    pub prelude: Option<Prelude>,
 }
 
 impl<'a> Resolver<'a> {
@@ -37,6 +41,7 @@ impl<'a> Resolver<'a> {
         interner: &'a Interner,
         module_tree: ModuleTree,
         definitions: FxHashMap<DefId, Definition>,
+        prelude: Option<Prelude>,
     ) -> Self {
         Self {
             interner,
@@ -53,6 +58,7 @@ impl<'a> Resolver<'a> {
             trait_impls: FxHashMap::default(),
             impl_item_names: FxHashMap::default(),
             self_type: None,
+            prelude,
         }
     }
 
@@ -100,6 +106,13 @@ impl<'a> Resolver<'a> {
                 }
             } else {
                 break;
+            }
+        }
+        // Final fallback: check the prelude. Prelude items are shadowable by
+        // any rib or module item, matching Rust semantics (RFC 1560).
+        if let Some(prelude) = &self.prelude {
+            if let Some(def_id) = prelude.items.get(&ns).and_then(|m| m.get(&name)).copied() {
+                return Some(Resolution::Def { def_id });
             }
         }
         None
