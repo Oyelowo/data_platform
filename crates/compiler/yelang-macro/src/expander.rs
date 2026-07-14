@@ -69,7 +69,7 @@ impl<'a> MacroExpander<'a> {
         let mut items = vec![];
         for item in &program.items {
             match self.expand_item(item.clone()) {
-                Ok(expanded) => items.push(expanded),
+                Ok(expanded) => items.extend(expanded),
                 Err(e) => self.errors.push(e),
             }
         }
@@ -109,15 +109,21 @@ impl<'a> MacroExpander<'a> {
     }
 
     /// Expand a single item, applying decorators and any top-level macros.
-    pub fn expand_item(&mut self, mut item: Item) -> Result<Item, ExpandError> {
+    ///
+    /// Returns a vec because decorators such as `@derive` may generate
+    /// additional items (e.g. `impl` blocks) alongside the original item.
+    pub fn expand_item(&mut self, mut item: Item) -> Result<Vec<Item>, ExpandError> {
         // Apply decorators first.
         let attrs = std::mem::take(&mut item.attributes);
         let mut decorator_errors = vec![];
-        let mut current_item = item;
+        let mut current_items = vec![item];
 
         for attr in &attrs {
             if let Some(decorator) = BuiltinDecorator::from_attribute(attr, self.interner) {
-                let result = apply_decorator(decorator, attr, &current_item, self.interner);
+                // Each decorator is applied to the *first* item produced by the
+                // previous decorator.  Generated side-items are accumulated.
+                let target = current_items.remove(0);
+                let result = apply_decorator(decorator, attr, &target, self.interner);
                 if result.items.is_empty() && !result.errors.is_empty() {
                     for err in &result.errors {
                         decorator_errors.push(ExpandError::DecoratorError {
@@ -125,28 +131,31 @@ impl<'a> MacroExpander<'a> {
                             span: attr.span,
                         });
                     }
-                } else if result.items.len() == 1 {
-                    current_item = result.items.into_iter().next().unwrap();
+                    // Restore target on error so expansion can continue.
+                    current_items.insert(0, target);
                 } else {
-                    // Multi-item expansion (e.g., @derive generating impls).
-                    // For now, we keep the first item and emit the rest as separate items.
-                    // This is a simplification for the MVP.
-                    current_item = result.items.into_iter().next().unwrap_or(current_item);
+                    current_items = result.items;
                 }
             }
         }
 
-        // Re-attach non-built-in decorators.
-        current_item.attributes = attrs
-            .into_iter()
-            .filter(|attr| BuiltinDecorator::from_attribute(attr, self.interner).is_none())
-            .collect();
+        // Re-attach non-built-in decorators to the primary item (first in vec).
+        if let Some(first) = current_items.first_mut() {
+            first.attributes = attrs
+                .into_iter()
+                .filter(|attr| BuiltinDecorator::from_attribute(attr, self.interner).is_none())
+                .collect();
+        }
 
         self.errors.extend(decorator_errors);
 
-        // Expand any macro invocations inside the item.
-        let (expanded, _) = self.expand_item_deep(current_item);
-        Ok(expanded)
+        // Expand any macro invocations inside every item.
+        let mut expanded_items = vec![];
+        for it in current_items {
+            let (expanded, _) = self.expand_item_deep(it);
+            expanded_items.push(expanded);
+        }
+        Ok(expanded_items)
     }
 
     /// Deeply expand all macro invocations inside an item.
@@ -273,13 +282,25 @@ impl<'a> MacroExpander<'a> {
             }
             StmtKind::Item(item) => {
                 match self.expand_item(*item.clone()) {
-                    Ok(expanded) => (
-                        Stmt {
-                            kind: StmtKind::Item(Box::new(expanded)),
-                            span: stmt.span,
-                        },
-                        true,
-                    ),
+                    Ok(mut expanded) => {
+                        if expanded.len() > 1 {
+                            // Decorators that generate side-items are not supported
+                            // inside statement position.  Emit an error and keep only
+                            // the primary item.
+                            self.errors.push(ExpandError::DecoratorError {
+                                reason: "decorator produced multiple items in statement position".to_string(),
+                                span: stmt.span,
+                            });
+                        }
+                        let primary = expanded.into_iter().next().unwrap_or_else(|| *item.clone());
+                        (
+                            Stmt {
+                                kind: StmtKind::Item(Box::new(primary)),
+                                span: stmt.span,
+                            },
+                            true,
+                        )
+                    }
                     Err(e) => {
                         self.errors.push(e);
                         (stmt.clone(), false)
@@ -1048,5 +1069,105 @@ mod tests {
         let result = expander.expand(&program);
         // After two iterations, todo! → panic!(...) → call expr
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn expand_assert_eq_in_function() {
+        let src = r#"
+            fn main() {
+                assert_eq!(a, b);
+            }
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let fn_item = &result.program.items[0];
+        let ItemKind::Fn(func) = &fn_item.kind else { panic!("expected fn") };
+        let body = &func.body;
+        assert_eq!(body.statements.len(), 1);
+        let StmtKind::TermExpr(expr) = &body.statements[0].kind else { panic!("expected term expr stmt") };
+        assert!(matches!(expr.kind, ExprKind::Block(_)), "expected Block, got {:?}", expr.kind);
+    }
+
+    #[test]
+    fn expand_assert_ne_in_function() {
+        let src = r#"
+            fn main() {
+                assert_ne!(a, b);
+            }
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn expand_format_in_function() {
+        let src = r#"
+            fn main() {
+                format!("hello {}", name);
+            }
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        let fn_item = &result.program.items[0];
+        let ItemKind::Fn(func) = &fn_item.kind else { panic!("expected fn") };
+        let body = &func.body;
+        let StmtKind::TermExpr(expr) = &body.statements[0].kind else { panic!("expected term expr stmt") };
+        assert!(matches!(expr.kind, ExprKind::Call(_)), "expected Call, got {:?}", expr.kind);
+    }
+
+    #[test]
+    fn derive_generates_impl_items() {
+        let src = r#"
+            @derive(Clone, Copy)
+            struct Point {}
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        // Should have: struct Point, impl Clone for Point, impl Copy for Point
+        assert_eq!(result.program.items.len(), 3, "expected 3 items: struct + 2 impls");
+        let impls: Vec<_> = result.program.items.iter().filter(|i| matches!(i.kind, ItemKind::Impl(_))).collect();
+        assert_eq!(impls.len(), 2, "expected 2 impl items");
+    }
+
+    #[test]
+    fn derive_partial_eq_for_named_struct() {
+        let src = r#"
+            @derive(PartialEq)
+            struct Point { x: i32, y: i32 }
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.program.items.len(), 2);
+        let impl_item = result.program.items.iter().find(|i| matches!(i.kind, ItemKind::Impl(_))).expect("impl");
+        let ItemKind::Impl(impl_block) = &impl_item.kind else { unreachable!() };
+        assert_eq!(impl_block.items.len(), 1, "PartialEq impl should have eq method");
+    }
+
+    #[test]
+    fn derive_debug_for_unit_struct() {
+        let src = r#"
+            @derive(Debug)
+            struct Unit;
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(result.program.items.len(), 2);
+    }
+
+    #[test]
+    fn derive_unsupported_trait_errors() {
+        let src = r#"
+            @derive(Ord)
+            struct Point {}
+        "#;
+        let (program, interner) = parse_program(src);
+        let result = crate::expand_program(&program, &interner);
+        assert!(!result.errors.is_empty(), "expected error for unsupported derive trait");
     }
 }

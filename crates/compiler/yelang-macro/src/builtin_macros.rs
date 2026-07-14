@@ -1,6 +1,6 @@
 use yelang_ast::{
     BinaryExpr, BlockExpr, Expr, ExprKind, IfExpr, Literal, MacroArgs, MacroInvocation,
-    MemberAccess, Path, PathSegment, StrKind, StringLit, UnaryExpr,
+    MemberAccess, Path, PathSegment, Stmt, StmtKind, StrKind, StringLit, UnaryExpr,
 };
 use yelang_interner::Interner;
 use yelang_lexer::Span;
@@ -47,10 +47,12 @@ pub fn expand_builtin_macro(
     let builtin = BuiltinMacro::from_path(&inv.path, interner)?;
     match builtin {
         BuiltinMacro::Assert => Some(expand_assert(inv, interner)),
+        BuiltinMacro::AssertEq => Some(expand_assert_eq(inv, interner)),
+        BuiltinMacro::AssertNe => Some(expand_assert_ne(inv, interner)),
         BuiltinMacro::Panic => Some(expand_panic(inv, interner)),
         BuiltinMacro::Todo => Some(expand_todo(inv, interner)),
         BuiltinMacro::Unreachable => Some(expand_unreachable(inv, interner)),
-        _ => None, // assert_eq, assert_ne, format: not yet implemented
+        BuiltinMacro::Format => Some(expand_format(inv, interner)),
     }
 }
 
@@ -158,6 +160,167 @@ pub fn expand_unreachable(_inv: &MacroInvocation, interner: &Interner) -> Expr {
     }
 }
 
+/// `assert_eq!(left, right)` →
+/// ```ignore
+/// {
+///     let left_val = left;
+///     let right_val = right;
+///     if left_val != right_val {
+///         panic!("assertion failed: `(left == right)`");
+///     }
+/// }
+/// ```
+pub fn expand_assert_eq(inv: &MacroInvocation, interner: &Interner) -> Expr {
+    let span = inv.span;
+    let args = match &inv.args {
+        MacroArgs::Paren(args) => args.clone(),
+        _ => return panic_expr("assert_eq! requires parenthesized arguments", span, interner),
+    };
+    if args.len() < 2 {
+        return panic_expr("assert_eq! requires two arguments", span, interner);
+    }
+
+    let left = args[0].clone();
+    let right = args[1].clone();
+    build_assert_eq_ne(left, right, span, interner, /* is_eq = */ true)
+}
+
+/// `assert_ne!(left, right)` → similar to assert_eq! but with `==` and opposite condition.
+pub fn expand_assert_ne(inv: &MacroInvocation, interner: &Interner) -> Expr {
+    let span = inv.span;
+    let args = match &inv.args {
+        MacroArgs::Paren(args) => args.clone(),
+        _ => return panic_expr("assert_ne! requires parenthesized arguments", span, interner),
+    };
+    if args.len() < 2 {
+        return panic_expr("assert_ne! requires two arguments", span, interner);
+    }
+
+    let left = args[0].clone();
+    let right = args[1].clone();
+    build_assert_eq_ne(left, right, span, interner, /* is_eq = */ false)
+}
+
+fn build_assert_eq_ne(left: Expr, right: Expr, span: Span, interner: &Interner, is_eq: bool) -> Expr {
+    // Build: `left_val != right_val` for assert_eq, `left_val == right_val` for assert_ne
+    let bin_op = if is_eq {
+        yelang_ast::BinaryOp::Ne
+    } else {
+        yelang_ast::BinaryOp::Eq
+    };
+    let cond = Expr {
+        kind: ExprKind::Binary(BinaryExpr {
+            left: Box::new(path_expr("left_val", span, interner)),
+            op: bin_op,
+            right: Box::new(path_expr("right_val", span, interner)),
+        }),
+        span,
+    };
+
+    let panic_call = Expr {
+        kind: ExprKind::MacroInvocation(MacroInvocation {
+            path: simple_path("panic", span, interner),
+            args: MacroArgs::Paren(vec![string_literal(
+                if is_eq { "assertion failed: `(left == right)`" } else { "assertion failed: `(left != right)`" },
+                span,
+                interner,
+            )]),
+            span,
+        }),
+        span,
+    };
+
+    let if_stmt = Stmt {
+        kind: StmtKind::Expr(Box::new(Expr {
+            kind: ExprKind::If(IfExpr {
+                condition: Box::new(cond),
+                then_block: BlockExpr {
+                    label: None,
+                    statements: vec![Stmt {
+                        kind: StmtKind::Expr(Box::new(panic_call)),
+                        span,
+                    }],
+                },
+                else_expr: None,
+            }),
+            span,
+        })),
+        span,
+    };
+
+    // Build the block: `{ let left_val = left; let right_val = right; if ... }`
+    Expr {
+        kind: ExprKind::Block(BlockExpr {
+            label: None,
+            statements: vec![
+                let_stmt("left_val", left, span, interner),
+                let_stmt("right_val", right, span, interner),
+                if_stmt,
+            ],
+        }),
+        span,
+    }
+}
+
+fn let_stmt(name: &str, init: Expr, span: Span, interner: &Interner) -> Stmt {
+    Stmt {
+        kind: StmtKind::Let(Box::new(yelang_ast::LetStmt {
+            pattern: Box::new(yelang_ast::Pattern {
+                pattern: yelang_ast::PatternKind::Binding {
+                    name: yelang_ast::Ident::new(interner.get_or_intern(name), span),
+                    mutability: yelang_ast::Mutability::Immutable,
+                    subpattern: None,
+                },
+                span,
+            }),
+            ty: None,
+            init: Some(Box::new(init)),
+            span,
+            attrs: vec![],
+        })),
+        span,
+    }
+}
+
+fn path_expr(name: &str, span: Span, interner: &Interner) -> Expr {
+    Expr {
+        kind: ExprKind::Path(simple_path(name, span, interner)),
+        span,
+    }
+}
+
+/// `format!("hello {name}", name = "world")` → a call to `format(...)`.
+///
+/// For now we expand to a runtime call `format(args...)` where the first arg
+/// is the format string and the rest are the values.  The backend is expected
+/// to provide a `format` function (or intrinsic) in the prelude.
+pub fn expand_format(inv: &MacroInvocation, interner: &Interner) -> Expr {
+    let span = inv.span;
+    let args = match &inv.args {
+        MacroArgs::Paren(args) => args.clone(),
+        _ => return panic_expr("format! requires parenthesized arguments", span, interner),
+    };
+    if args.is_empty() {
+        return panic_expr("format! requires at least one argument", span, interner);
+    }
+
+    let call_args: Vec<yelang_ast::CallArgument> = args
+        .into_iter()
+        .map(yelang_ast::CallArgument::Positional)
+        .collect();
+
+    Expr {
+        kind: ExprKind::Call(yelang_ast::CallExpr {
+            callee: Box::new(Expr {
+                kind: ExprKind::Path(simple_path("format", span, interner)),
+                span,
+            }),
+            args: call_args,
+        }),
+        span,
+    }
+}
+
 // --- Helpers ---
 
 fn simple_path(name: &str, span: Span, interner: &Interner) -> Path {
@@ -249,6 +412,27 @@ mod tests {
             panic!("unreachable! should expand to panic! macro invocation");
         };
         assert_eq!(interner.resolve(&inner.path.segments[0].ident.symbol), "panic");
+    }
+
+    #[test]
+    fn expand_assert_eq_basic() {
+        let (inv, interner) = parse_macro_invocation("assert_eq!(a, b)");
+        let expanded = expand_assert_eq(&inv, &interner);
+        assert!(matches!(expanded.kind, ExprKind::Block(_)), "assert_eq! should expand to block");
+    }
+
+    #[test]
+    fn expand_assert_ne_basic() {
+        let (inv, interner) = parse_macro_invocation("assert_ne!(a, b)");
+        let expanded = expand_assert_ne(&inv, &interner);
+        assert!(matches!(expanded.kind, ExprKind::Block(_)), "assert_ne! should expand to block");
+    }
+
+    #[test]
+    fn expand_format_basic() {
+        let (inv, interner) = parse_macro_invocation("format!(\"hello {}\", name)");
+        let expanded = expand_format(&inv, &interner);
+        assert!(matches!(expanded.kind, ExprKind::Call(_)), "format! should expand to call");
     }
 
     #[test]

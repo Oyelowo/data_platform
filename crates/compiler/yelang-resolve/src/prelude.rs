@@ -12,7 +12,8 @@ use yelang_lexer::Span;
 use yelang_util::{DefId, FxHashMap};
 
 use crate::{
-    def_collector::{DefCollector, DefKind, Definition},
+    def_collector::{DefKind, Definition},
+    lang_items::LangItem,
     module_tree::ModuleNode,
     namespaces::Namespace,
 };
@@ -36,7 +37,7 @@ impl Prelude {
         let mut items: FxHashMap<Namespace, FxHashMap<Symbol, DefId>> = FxHashMap::default();
         let mut definitions: FxHashMap<DefId, Definition> = FxHashMap::default();
 
-        let mut add = |name: &str, kind: DefKind, ns: Namespace| {
+        let mut add = |name: &str, kind: DefKind, ns: Namespace, lang_item: Option<LangItem>| {
             let symbol = interner.get_or_intern(name);
             let def_id = DefId::new(*next_def_id);
             *next_def_id += 1;
@@ -48,6 +49,7 @@ impl Prelude {
                 kind,
                 parent: None,
                 visibility: Visibility::Public(Span::default()),
+                lang_item,
             };
 
             definitions.insert(def_id, def);
@@ -60,43 +62,43 @@ impl Prelude {
         };
 
         // Core data types (type namespace)
-        add("Option", DefKind::Enum, Namespace::Type);
-        add("Option", DefKind::Enum, Namespace::Value); // enum variants live in value ns too
+        add("Option", DefKind::Enum, Namespace::Type, None);
+        add("Option", DefKind::Enum, Namespace::Value, None); // enum variants live in value ns too
 
-        add("Result", DefKind::Enum, Namespace::Type);
-        add("Result", DefKind::Enum, Namespace::Value);
+        add("Result", DefKind::Enum, Namespace::Type, None);
+        add("Result", DefKind::Enum, Namespace::Value, None);
 
-        add("Vec", DefKind::Struct, Namespace::Type);
-        add("Vec", DefKind::Struct, Namespace::Value);
+        add("Vec", DefKind::Struct, Namespace::Type, None);
+        add("Vec", DefKind::Struct, Namespace::Value, None);
 
-        add("String", DefKind::TypeAlias, Namespace::Type);
-        add("String", DefKind::TypeAlias, Namespace::Value);
+        add("String", DefKind::TypeAlias, Namespace::Type, None);
+        add("String", DefKind::TypeAlias, Namespace::Value, None);
 
-        add("Box", DefKind::Struct, Namespace::Type);
-        add("Box", DefKind::Struct, Namespace::Value);
+        add("Box", DefKind::Struct, Namespace::Type, Some(LangItem::Box));
+        add("Box", DefKind::Struct, Namespace::Value, Some(LangItem::Box));
 
         // Common traits (type namespace)
-        add("Copy", DefKind::Trait, Namespace::Type);
-        add("Clone", DefKind::Trait, Namespace::Type);
-        add("Default", DefKind::Trait, Namespace::Type);
-        add("Debug", DefKind::Trait, Namespace::Type);
-        add("Display", DefKind::Trait, Namespace::Type);
-        add("PartialEq", DefKind::Trait, Namespace::Type);
-        add("Eq", DefKind::Trait, Namespace::Type);
-        add("PartialOrd", DefKind::Trait, Namespace::Type);
-        add("Ord", DefKind::Trait, Namespace::Type);
-        add("Iterator", DefKind::Trait, Namespace::Type);
-        add("IntoIterator", DefKind::Trait, Namespace::Type);
-        add("Send", DefKind::Trait, Namespace::Type);
-        add("Sync", DefKind::Trait, Namespace::Type);
-        add("Sized", DefKind::Trait, Namespace::Type);
+        add("Copy", DefKind::Trait, Namespace::Type, Some(LangItem::Copy));
+        add("Clone", DefKind::Trait, Namespace::Type, Some(LangItem::Clone));
+        add("Default", DefKind::Trait, Namespace::Type, Some(LangItem::Default));
+        add("Debug", DefKind::Trait, Namespace::Type, Some(LangItem::Debug));
+        add("Display", DefKind::Trait, Namespace::Type, Some(LangItem::Display));
+        add("PartialEq", DefKind::Trait, Namespace::Type, Some(LangItem::PartialEq));
+        add("Eq", DefKind::Trait, Namespace::Type, None); // Eq is not a lang item in Rust
+        add("PartialOrd", DefKind::Trait, Namespace::Type, Some(LangItem::PartialOrd));
+        add("Ord", DefKind::Trait, Namespace::Type, Some(LangItem::OrdTrait));
+        add("Iterator", DefKind::Trait, Namespace::Type, Some(LangItem::Iterator));
+        add("IntoIterator", DefKind::Trait, Namespace::Type, Some(LangItem::IntoIterator));
+        add("Send", DefKind::Trait, Namespace::Type, Some(LangItem::Send));
+        add("Sync", DefKind::Trait, Namespace::Type, Some(LangItem::Sync));
+        add("Sized", DefKind::Trait, Namespace::Type, Some(LangItem::Sized));
 
         // Common functions (value namespace)
-        add("drop", DefKind::Fn, Namespace::Value);
-        add("Some", DefKind::EnumVariant, Namespace::Value);
-        add("None", DefKind::EnumVariant, Namespace::Value);
-        add("Ok", DefKind::EnumVariant, Namespace::Value);
-        add("Err", DefKind::EnumVariant, Namespace::Value);
+        add("drop", DefKind::Fn, Namespace::Value, Some(LangItem::Drop));
+        add("Some", DefKind::EnumVariant, Namespace::Value, None);
+        add("None", DefKind::EnumVariant, Namespace::Value, None);
+        add("Ok", DefKind::EnumVariant, Namespace::Value, None);
+        add("Err", DefKind::EnumVariant, Namespace::Value, None);
 
         Self { items, definitions }
     }

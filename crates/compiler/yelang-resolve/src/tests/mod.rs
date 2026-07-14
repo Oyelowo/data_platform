@@ -4,6 +4,7 @@ mod errors;
 mod generics;
 mod imports;
 mod label;
+mod lang_items;
 mod namespaces;
 mod prelude;
 mod privacy;

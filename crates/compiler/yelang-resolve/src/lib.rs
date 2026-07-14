@@ -3,6 +3,7 @@ pub mod def_collector;
 pub mod early;
 pub mod error;
 pub mod imports;
+pub mod lang_items;
 pub mod late;
 pub mod module_tree;
 pub mod namespaces;
@@ -59,6 +60,7 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         collector.module_tree,
         definitions,
         collector.prelude,
+        collector.lang_items,
     );
     resolver.errors = collector.errors;
     // Transfer impl indexes from collector to resolver

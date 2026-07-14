@@ -5,6 +5,7 @@ use yelang_util::{DefId, FxHashMap};
 use crate::{
     def_collector::Definition,
     error::ResolutionError,
+    lang_items::LangItems,
     module_tree::ModuleTree,
     namespaces::Namespace,
     prelude::Prelude,
@@ -34,6 +35,8 @@ pub struct Resolver<'a> {
     /// Standard prelude items. Checked as a final fallback so they can be
     /// shadowed by any local definition or import.
     pub prelude: Option<Prelude>,
+    /// Registry of language items discovered during def collection.
+    pub lang_items: LangItems,
 }
 
 impl<'a> Resolver<'a> {
@@ -42,6 +45,7 @@ impl<'a> Resolver<'a> {
         module_tree: ModuleTree,
         definitions: FxHashMap<DefId, Definition>,
         prelude: Option<Prelude>,
+        lang_items: LangItems,
     ) -> Self {
         Self {
             interner,
@@ -59,6 +63,7 @@ impl<'a> Resolver<'a> {
             impl_item_names: FxHashMap::default(),
             self_type: None,
             prelude,
+            lang_items,
         }
     }
 

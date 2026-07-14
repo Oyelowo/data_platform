@@ -29,6 +29,9 @@ pub struct Definition {
     pub kind: DefKind,
     pub parent: Option<DefId>,
     pub visibility: Visibility,
+    /// If this definition is a language item (e.g. `@lang("sized")`),
+    /// the corresponding `LangItem` variant.
+    pub lang_item: Option<crate::lang_items::LangItem>,
 }
 
 impl Definition {
@@ -51,6 +54,7 @@ impl Definition {
 
 use crate::{
     error::ResolutionError,
+    lang_items::{LangItem, LangItems, extract_lang_item_name, seed_primitive_lang_items},
     module_tree::{ModuleNode, ModuleTree},
     prelude::Prelude,
 };
@@ -73,6 +77,8 @@ pub struct DefCollector<'a> {
     pub impl_item_names: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
     /// Standard prelude items injected into every module.
     pub prelude: Option<Prelude>,
+    /// Registry of language items discovered during def collection.
+    pub lang_items: LangItems,
 }
 
 impl<'a> DefCollector<'a> {
@@ -90,10 +96,20 @@ impl<'a> DefCollector<'a> {
                 kind: DefKind::Module,
                 parent: None,
                 visibility: Visibility::Public(Span::default()),
+                lang_item: None,
             },
         );
         let mut next_def_id = 2;
         let prelude = Some(Prelude::new(interner, &mut next_def_id));
+        let mut lang_items = LangItems::new();
+        // Merge prelude lang items into the registry immediately.
+        if let Some(p) = &prelude {
+            for (def_id, def) in &p.definitions {
+                if let Some(li) = def.lang_item {
+                    lang_items.insert(li, *def_id);
+                }
+            }
+        }
         let mut collector = Self {
             interner,
             next_def_id,
@@ -105,22 +121,29 @@ impl<'a> DefCollector<'a> {
             trait_impls: FxHashMap::default(),
             impl_item_names: FxHashMap::default(),
             prelude,
+            lang_items,
         };
         collector.seed_primitives();
         collector
     }
 
     fn seed_primitives(&mut self) {
-        let primitives = [
-            "i8", "i16", "i32", "i64", "i128", "isize",
-            "u8", "u16", "u32", "u64", "u128", "usize",
-            "f32", "f64", "bool", "char", "str",
-        ];
-        for name in primitives {
-            let symbol = self.interner.get_or_intern(name);
-            let def_id = self.next_def_id();
-            self.add_def(def_id, symbol, Span::default(), DefKind::TypeAlias, Visibility::Public(Span::default()));
-            self.add_to_module(crate::namespaces::Namespace::Type, symbol, def_id, Span::default());
+        let (registry, defs) = seed_primitive_lang_items(self.interner, &mut self.next_def_id);
+        // Merge primitive lang items into the existing registry (which already
+        // contains prelude lang items). Detect duplicates just in case.
+        for (li, def_id) in registry.iter() {
+            if let Some(old) = self.lang_items.insert(li, def_id) {
+                self.errors.push(ResolutionError::DuplicateLangItem {
+                    lang_item: li,
+                    span: Span::default(),
+                    original_span: self.definitions.get(&old).map(|d| d.span).unwrap_or_else(Span::default),
+                });
+            }
+        }
+        for (def_id, def) in defs {
+            let name = def.name;
+            self.definitions.insert(def_id, def);
+            self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, Span::default());
         }
     }
 
@@ -142,31 +165,36 @@ impl<'a> DefCollector<'a> {
     }
 
     fn collect_item(&mut self, item: &Item) {
+        let lang_item = extract_lang_item_name(&item.attributes, self.interner);
+        // Register lang item immediately so we can detect duplicates.
+        if let Some((li, _name_sym)) = lang_item {
+            // We don't know the def_id yet; we'll register it in the specific collector.
+        }
         match &item.kind {
-            ItemKind::Fn(func) => self.collect_fn(func, item.span, item.visibility.clone()),
-            ItemKind::Struct(s) => self.collect_struct(s, item.span, item.visibility.clone()),
-            ItemKind::Enum(e) => self.collect_enum(e, item.span, item.visibility.clone()),
-            ItemKind::TypeAlias(ta) => self.collect_type_alias(ta, item.span, item.visibility.clone()),
-            ItemKind::Trait(t) => self.collect_trait(t, item.span, item.visibility.clone()),
+            ItemKind::Fn(func) => self.collect_fn(func, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
+            ItemKind::Struct(s) => self.collect_struct(s, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
+            ItemKind::Enum(e) => self.collect_enum(e, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
+            ItemKind::TypeAlias(ta) => self.collect_type_alias(ta, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
+            ItemKind::Trait(t) => self.collect_trait(t, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
             ItemKind::Module(m) => self.collect_module(m, item.span, item.visibility.clone(), &item.attributes),
-            ItemKind::Const(c) => self.collect_const(c, item.span, item.visibility.clone()),
-            ItemKind::Static(s) => self.collect_static(s, item.span, item.visibility.clone()),
+            ItemKind::Const(c) => self.collect_const(c, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
+            ItemKind::Static(s) => self.collect_static(s, item.span, item.visibility.clone(), lang_item.map(|(li, _)| li)),
             ItemKind::Impl(i) => self.collect_impl(i, item.span, item.visibility.clone()),
             ItemKind::Use(u) => self.collect_use(u, item.span, item.visibility.clone()),
         }
     }
 
-    fn collect_fn(&mut self, func: &FnDef, span: Span, visibility: Visibility) {
+    fn collect_fn(&mut self, func: &FnDef, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = func.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Fn, visibility);
+        self.add_def_with_lang_item(def_id, name, span, DefKind::Fn, visibility, lang_item);
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
-    fn collect_struct(&mut self, s: &Struct, span: Span, visibility: Visibility) {
+    fn collect_struct(&mut self, s: &Struct, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = s.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Struct, visibility.clone());
+        self.add_def_with_lang_item(def_id, name, span, DefKind::Struct, visibility.clone(), lang_item);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
 
         // Collect struct fields as definitions with their own visibility
@@ -180,10 +208,10 @@ impl<'a> DefCollector<'a> {
         }
     }
 
-    fn collect_enum(&mut self, e: &Enum, span: Span, visibility: Visibility) {
+    fn collect_enum(&mut self, e: &Enum, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = e.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Enum, visibility.clone());
+        self.add_def_with_lang_item(def_id, name, span, DefKind::Enum, visibility.clone(), lang_item);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
         // Variants are definitions in both the type and value namespaces.
         // Inherit visibility from the parent enum.
@@ -201,17 +229,17 @@ impl<'a> DefCollector<'a> {
         }
     }
 
-    fn collect_type_alias(&mut self, ta: &TypeAlias, span: Span, visibility: Visibility) {
+    fn collect_type_alias(&mut self, ta: &TypeAlias, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = ta.name.symbol;
-        self.add_def(def_id, name, span, DefKind::TypeAlias, visibility);
+        self.add_def_with_lang_item(def_id, name, span, DefKind::TypeAlias, visibility, lang_item);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
     }
 
-    fn collect_trait(&mut self, t: &Trait, span: Span, visibility: Visibility) {
+    fn collect_trait(&mut self, t: &Trait, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = t.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Trait, visibility);
+        self.add_def_with_lang_item(def_id, name, span, DefKind::Trait, visibility, lang_item);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
     }
 
@@ -242,17 +270,17 @@ impl<'a> DefCollector<'a> {
         }
     }
 
-    fn collect_const(&mut self, c: &Const, span: Span, visibility: Visibility) {
+    fn collect_const(&mut self, c: &Const, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = c.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Const, visibility);
+        self.add_def_with_lang_item(def_id, name, span, DefKind::Const, visibility, lang_item);
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
-    fn collect_static(&mut self, s: &Static, span: Span, visibility: Visibility) {
+    fn collect_static(&mut self, s: &Static, span: Span, visibility: Visibility, lang_item: Option<LangItem>) {
         let def_id = self.next_def_id();
         let name = s.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Static, visibility);
+        self.add_def_with_lang_item(def_id, name, span, DefKind::Static, visibility, lang_item);
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
@@ -320,6 +348,18 @@ impl<'a> DefCollector<'a> {
     }
 
     fn add_def(&mut self, def_id: DefId, name: Symbol, span: Span, kind: DefKind, visibility: Visibility) {
+        self.add_def_with_lang_item(def_id, name, span, kind, visibility, None);
+    }
+
+    fn add_def_with_lang_item(
+        &mut self,
+        def_id: DefId,
+        name: Symbol,
+        span: Span,
+        kind: DefKind,
+        visibility: Visibility,
+        lang_item: Option<LangItem>,
+    ) {
         self.definitions.insert(
             def_id,
             Definition {
@@ -329,8 +369,18 @@ impl<'a> DefCollector<'a> {
                 kind,
                 parent: Some(self.current_module),
                 visibility,
+                lang_item,
             },
         );
+        if let Some(li) = lang_item {
+            if let Some(old) = self.lang_items.insert(li, def_id) {
+                self.errors.push(ResolutionError::DuplicateLangItem {
+                    lang_item: li,
+                    span,
+                    original_span: self.definitions.get(&old).map(|d| d.span).unwrap_or_else(Span::default),
+                });
+            }
+        }
     }
 
     fn add_to_module(

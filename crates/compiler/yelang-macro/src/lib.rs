@@ -44,7 +44,10 @@ pub fn expand_program(program: &Program, interner: &Interner) -> ExpandResult {
 }
 
 /// Expand macros and decorators on a single item.
-pub fn expand_item(item: &Item, interner: &Interner) -> Result<Item, ExpandError> {
+///
+/// Returns a vec because decorators such as `@derive` may generate
+/// additional items (e.g. `impl` blocks) alongside the original item.
+pub fn expand_item(item: &Item, interner: &Interner) -> Result<Vec<Item>, ExpandError> {
     let mut expander = MacroExpander::new(interner);
     expander.expand_item(item.clone())
 }

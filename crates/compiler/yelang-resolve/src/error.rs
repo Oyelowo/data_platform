@@ -69,6 +69,13 @@ pub enum ResolutionError {
         span: Span,
     },
 
+    #[error("duplicate lang item `{lang_item:?}`")]
+    DuplicateLangItem {
+        lang_item: crate::lang_items::LangItem,
+        span: Span,
+        original_span: Span,
+    },
+
     #[error("ambiguous associated item `{name:?}`")]
     AmbiguousAssociatedItem {
         name: Symbol,
