@@ -618,6 +618,7 @@ pub fn fold_field_def<F: Folder + ?Sized>(f: &mut F, field: item::FieldDef) -> i
             .collect(),
         name: field.name,
         ty: f.fold_type(field.ty),
+        visibility: field.visibility,
         span: field.span,
     }
 }

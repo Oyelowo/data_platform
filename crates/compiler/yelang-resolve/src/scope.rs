@@ -66,10 +66,27 @@ impl<'a> Resolver<'a> {
                 return Some(res);
             }
         }
-        // If not in ribs, look up in the current module.
-        if let Some(module) = self.module_tree.modules.get(&self.current_module) {
-            if let Some(def_id) = module.get_item(ns, name) {
-                return Some(Resolution::Def { def_id });
+        // Look up in the current module and its ancestors.
+        let mut module_id = self.current_module;
+        loop {
+            if let Some(module) = self.module_tree.modules.get(&module_id) {
+                // Check primary namespace first.
+                if let Some(def_id) = module.get_item(ns, name) {
+                    return Some(Resolution::Def { def_id });
+                }
+                // For value namespace, also check type namespace (modules are types).
+                if ns == Namespace::Value {
+                    if let Some(def_id) = module.get_item(Namespace::Type, name) {
+                        return Some(Resolution::Def { def_id });
+                    }
+                }
+                if let Some(parent) = module.parent {
+                    module_id = parent;
+                } else {
+                    break;
+                }
+            } else {
+                break;
             }
         }
         None

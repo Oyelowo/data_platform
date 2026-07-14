@@ -6,7 +6,7 @@
  */
 
 use super::generics::GenericParamsParser;
-use super::{Generics, WhereClause};
+use super::{Generics, Visibility, WhereClause};
 use crate::item::{Attribute, AttributesList};
 use crate::{Ident, T, Type};
 use yelang_lexer::{ParseTokenStream, SeparatedList, Span, TokenResult, TokenStream, match_map};
@@ -121,6 +121,8 @@ pub struct FieldDef {
     pub name: Ident,
     /// Field type
     pub ty: Type,
+    /// Field visibility (defaults to private)
+    pub visibility: Visibility,
     pub span: Span,
 }
 
@@ -128,12 +130,14 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for FieldDef {
     fn parse(stream: &mut TokenStream<crate::tokenizer::TokenKind>) -> TokenResult<Self> {
         let checkpoint = stream.checkpoint();
         let attributes = stream.parse::<AttributesList>()?.0;
+        let visibility = stream.parse::<Visibility>()?;
         let (name, _colon, ty) = stream.parse::<(Ident, T![:], Type)>()?;
         let span = stream.span_since(checkpoint);
         Ok(FieldDef {
             attributes,
             name,
             ty,
+            visibility,
             span,
         })
     }

@@ -6,6 +6,7 @@ pub mod late;
 pub mod module_tree;
 pub mod namespaces;
 pub mod path;
+pub mod privacy;
 pub mod rib;
 pub mod scope;
 

@@ -1,3 +1,4 @@
+use yelang_ast::Visibility;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 use yelang_util::{DefId, FxHashMap};
@@ -27,6 +28,7 @@ pub struct Definition {
     pub span: Span,
     pub kind: DefKind,
     pub parent: Option<DefId>,
+    pub visibility: Visibility,
 }
 
 impl Definition {
@@ -68,7 +70,7 @@ impl<'a> DefCollector<'a> {
     pub fn new(interner: &'a Interner) -> Self {
         let root_id = DefId::new(1);
         let root_name = interner.get_or_intern("crate");
-        let root_node = ModuleNode::new(root_id, root_name, None);
+        let root_node = ModuleNode::new(root_id, root_name, None, Visibility::Public(Span::default()));
         let mut definitions = FxHashMap::new();
         definitions.insert(
             root_id,
@@ -78,6 +80,7 @@ impl<'a> DefCollector<'a> {
                 span: Span::default(),
                 kind: DefKind::Module,
                 parent: None,
+                visibility: Visibility::Public(Span::default()),
             },
         );
         let mut collector = Self {
@@ -101,7 +104,7 @@ impl<'a> DefCollector<'a> {
         for name in primitives {
             let symbol = self.interner.get_or_intern(name);
             let def_id = self.next_def_id();
-            self.add_def(def_id, symbol, Span::default(), DefKind::TypeAlias);
+            self.add_def(def_id, symbol, Span::default(), DefKind::TypeAlias, Visibility::Public(Span::default()));
             self.add_to_module(crate::namespaces::Namespace::Type, symbol, def_id, Span::default());
         }
     }
@@ -125,70 +128,86 @@ impl<'a> DefCollector<'a> {
 
     fn collect_item(&mut self, item: &Item) {
         match &item.kind {
-            ItemKind::Fn(func) => self.collect_fn(func, item.span),
-            ItemKind::Struct(s) => self.collect_struct(s, item.span),
-            ItemKind::Enum(e) => self.collect_enum(e, item.span),
-            ItemKind::TypeAlias(ta) => self.collect_type_alias(ta, item.span),
-            ItemKind::Trait(t) => self.collect_trait(t, item.span),
-            ItemKind::Module(m) => self.collect_module(m, item.span),
-            ItemKind::Const(c) => self.collect_const(c, item.span),
-            ItemKind::Static(s) => self.collect_static(s, item.span),
-            ItemKind::Impl(i) => self.collect_impl(i, item.span),
-            ItemKind::Use(u) => self.collect_use(u, item.span),
+            ItemKind::Fn(func) => self.collect_fn(func, item.span, item.visibility.clone()),
+            ItemKind::Struct(s) => self.collect_struct(s, item.span, item.visibility.clone()),
+            ItemKind::Enum(e) => self.collect_enum(e, item.span, item.visibility.clone()),
+            ItemKind::TypeAlias(ta) => self.collect_type_alias(ta, item.span, item.visibility.clone()),
+            ItemKind::Trait(t) => self.collect_trait(t, item.span, item.visibility.clone()),
+            ItemKind::Module(m) => self.collect_module(m, item.span, item.visibility.clone()),
+            ItemKind::Const(c) => self.collect_const(c, item.span, item.visibility.clone()),
+            ItemKind::Static(s) => self.collect_static(s, item.span, item.visibility.clone()),
+            ItemKind::Impl(i) => self.collect_impl(i, item.span, item.visibility.clone()),
+            ItemKind::Use(u) => self.collect_use(u, item.span, item.visibility.clone()),
         }
     }
 
-    fn collect_fn(&mut self, func: &FnDef, span: Span) {
+    fn collect_fn(&mut self, func: &FnDef, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = func.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Fn);
+        self.add_def(def_id, name, span, DefKind::Fn, visibility);
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
-    fn collect_struct(&mut self, s: &Struct, span: Span) {
+    fn collect_struct(&mut self, s: &Struct, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = s.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Struct);
+        self.add_def(def_id, name, span, DefKind::Struct, visibility.clone());
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
+
+        // Collect struct fields as definitions with their own visibility
+        if let yelang_ast::StructFields::Named(fields) = &s.fields {
+            for field in fields {
+                let fdef_id = self.next_def_id();
+                let fname = field.name.symbol;
+                self.add_def(fdef_id, fname, field.span, DefKind::Field, field.visibility.clone());
+                // Fields are children of the struct, not directly in module namespace
+            }
+        }
     }
 
-    fn collect_enum(&mut self, e: &Enum, span: Span) {
+    fn collect_enum(&mut self, e: &Enum, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = e.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Enum);
+        self.add_def(def_id, name, span, DefKind::Enum, visibility.clone());
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
         // Variants are definitions in both the type and value namespaces.
+        // Inherit visibility from the parent enum.
         for variant in &e.variants {
             let vdef_id = self.next_def_id();
             let vname = variant.name.symbol;
-            self.add_def(vdef_id, vname, variant.span, DefKind::EnumVariant);
+            let variant_vis = if visibility.is_public() {
+                Visibility::Public(variant.span)
+            } else {
+                visibility.clone()
+            };
+            self.add_def(vdef_id, vname, variant.span, DefKind::EnumVariant, variant_vis);
             self.add_to_module(crate::namespaces::Namespace::Type, vname, vdef_id, variant.span);
             self.add_to_module(crate::namespaces::Namespace::Value, vname, vdef_id, variant.span);
         }
     }
 
-    fn collect_type_alias(&mut self, ta: &TypeAlias, span: Span) {
+    fn collect_type_alias(&mut self, ta: &TypeAlias, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = ta.name.symbol;
-        self.add_def(def_id, name, span, DefKind::TypeAlias);
+        self.add_def(def_id, name, span, DefKind::TypeAlias, visibility);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
     }
 
-    fn collect_trait(&mut self, t: &Trait, span: Span) {
+    fn collect_trait(&mut self, t: &Trait, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = t.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Trait);
+        self.add_def(def_id, name, span, DefKind::Trait, visibility);
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
     }
 
-    fn collect_module(&mut self, m: &ModDef, span: Span) {
+    fn collect_module(&mut self, m: &ModDef, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = m.name.symbol;
         let parent = self.current_module;
-        self.add_def(def_id, name, span, DefKind::Module);
+        self.add_def(def_id, name, span, DefKind::Module, visibility.clone());
         self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
 
-        let mut node = ModuleNode::new(def_id, name, Some(parent));
+        let mut node = ModuleNode::new(def_id, name, Some(parent), visibility);
         let old_module = self.current_module;
         self.current_module = def_id;
 
@@ -208,36 +227,36 @@ impl<'a> DefCollector<'a> {
         }
     }
 
-    fn collect_const(&mut self, c: &Const, span: Span) {
+    fn collect_const(&mut self, c: &Const, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = c.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Const);
+        self.add_def(def_id, name, span, DefKind::Const, visibility);
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
-    fn collect_static(&mut self, s: &Static, span: Span) {
+    fn collect_static(&mut self, s: &Static, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = s.name.symbol;
-        self.add_def(def_id, name, span, DefKind::Static);
+        self.add_def(def_id, name, span, DefKind::Static, visibility);
         self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
     }
 
-    fn collect_impl(&mut self, _i: &Impl, span: Span) {
+    fn collect_impl(&mut self, _i: &Impl, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         // Impl blocks don't have a single name; use a synthetic name.
         let name = self.interner.get_or_intern("<impl>");
-        self.add_def(def_id, name, span, DefKind::Impl);
+        self.add_def(def_id, name, span, DefKind::Impl, visibility);
         // Impl items are not added to the module namespace directly.
     }
 
-    fn collect_use(&mut self, _u: &Use, span: Span) {
+    fn collect_use(&mut self, _u: &Use, span: Span, visibility: Visibility) {
         let def_id = self.next_def_id();
         let name = self.interner.get_or_intern("<use>");
-        self.add_def(def_id, name, span, DefKind::Use);
+        self.add_def(def_id, name, span, DefKind::Use, visibility);
         // Use items are resolved later during early resolution.
     }
 
-    fn add_def(&mut self, def_id: DefId, name: Symbol, span: Span, kind: DefKind) {
+    fn add_def(&mut self, def_id: DefId, name: Symbol, span: Span, kind: DefKind, visibility: Visibility) {
         self.definitions.insert(
             def_id,
             Definition {
@@ -246,6 +265,7 @@ impl<'a> DefCollector<'a> {
                 span,
                 kind,
                 parent: Some(self.current_module),
+                visibility,
             },
         );
     }

@@ -1,3 +1,4 @@
+use yelang_ast::Visibility;
 use yelang_interner::Symbol;
 use yelang_util::{DefId, FxHashMap};
 
@@ -24,16 +25,18 @@ pub struct ModuleNode {
     pub parent: Option<DefId>,
     pub children: Vec<DefId>,
     pub items: FxHashMap<Namespace, FxHashMap<Symbol, DefId>>,
+    pub visibility: Visibility,
 }
 
 impl ModuleNode {
-    pub fn new(def_id: DefId, name: Symbol, parent: Option<DefId>) -> Self {
+    pub fn new(def_id: DefId, name: Symbol, parent: Option<DefId>, visibility: Visibility) -> Self {
         Self {
             def_id,
             name,
             parent,
             children: Vec::new(),
             items: FxHashMap::new(),
+            visibility,
         }
     }
 

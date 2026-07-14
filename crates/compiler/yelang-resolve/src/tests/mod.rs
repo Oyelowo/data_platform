@@ -2,7 +2,9 @@ mod basic;
 mod errors;
 mod generics;
 mod imports;
+mod label;
 mod namespaces;
+mod privacy;
 mod shadowing;
 
 use yelang_ast::Program;

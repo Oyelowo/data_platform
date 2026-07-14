@@ -39,4 +39,33 @@ pub enum ResolutionError {
         span: Span,
         original_span: Span,
     },
+
+    #[error("`{name:?}` is private in this context")]
+    PrivacyError {
+        name: Symbol,
+        span: Span,
+        def_module: DefId,
+        use_module: DefId,
+    },
+
+    #[error("unnecessary visibility qualifier")]
+    UnnecessaryVisibility {
+        span: Span,
+    },
+
+    #[error("cannot find label `{name:?}` in this scope")]
+    LabelError {
+        name: Symbol,
+        span: Span,
+    },
+
+    #[error("break outside of loop")]
+    BreakOutsideLoop {
+        span: Span,
+    },
+
+    #[error("continue outside of loop")]
+    ContinueOutsideLoop {
+        span: Span,
+    },
 }

@@ -32,6 +32,18 @@ fn resolve_import_tree(
                     .last()
                     .map(|s| s.ident.symbol)
                     .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
+                if !crate::privacy::check_accessibility(resolver, def_id, module_id, name, span) {
+                    let def_module = resolver.definitions.get(&def_id)
+                        .and_then(|d| d.parent)
+                        .unwrap_or(resolver.module_tree.root.def_id);
+                    resolver.errors.push(ResolutionError::PrivacyError {
+                        name,
+                        span,
+                        def_module,
+                        use_module: module_id,
+                    });
+                    return;
+                }
                 add_imported_item(resolver, module_id, ns, name, def_id, span);
             } else {
                 let name = path
@@ -44,6 +56,23 @@ fn resolve_import_tree(
         }
         yelang_ast::UseTree::Rename { path, alias, .. } => {
             if let Some((ns, def_id)) = resolve_import_path(resolver, module_id, path) {
+                let name = path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.symbol)
+                    .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
+                if !crate::privacy::check_accessibility(resolver, def_id, module_id, name, span) {
+                    let def_module = resolver.definitions.get(&def_id)
+                        .and_then(|d| d.parent)
+                        .unwrap_or(resolver.module_tree.root.def_id);
+                    resolver.errors.push(ResolutionError::PrivacyError {
+                        name,
+                        span,
+                        def_module,
+                        use_module: module_id,
+                    });
+                    return;
+                }
                 add_imported_item(resolver, module_id, ns, alias.symbol, def_id, span);
             } else {
                 let name = path
@@ -212,7 +241,9 @@ fn resolve_glob_import(
         if let Some(node) = resolver.module_tree.modules.get(&target).cloned() {
             for (ns, map) in node.items.iter() {
                 for (name, def_id) in map.iter() {
-                    add_imported_item(resolver, module_id, *ns, *name, *def_id, span);
+                    if crate::privacy::check_accessibility(resolver, *def_id, module_id, *name, span) {
+                        add_imported_item(resolver, module_id, *ns, *name, *def_id, span);
+                    }
                 }
             }
         }

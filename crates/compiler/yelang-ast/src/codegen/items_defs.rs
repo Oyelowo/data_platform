@@ -1,5 +1,6 @@
 use crate::item::{
     Const, Enum, FieldDef, FnDef, Static, Struct, StructFields, TypeAlias, VariantDef, VariantKind,
+    Visibility,
 };
 use crate::{Codegen, Interner};
 use crate::{FnRefType, FnSig};
@@ -119,6 +120,10 @@ impl Codegen for FnDef {
 
 impl Codegen for FieldDef {
     fn codegen(&self, f: &mut dyn Write, interner: &Interner) -> fmt::Result {
+        if !matches!(self.visibility, Visibility::Private) {
+            self.visibility.codegen(f, interner)?;
+            write!(f, " ")?;
+        }
         write!(f, "{}: ", interner.resolve(&self.name.symbol))?;
         self.ty.codegen(f, interner)
     }

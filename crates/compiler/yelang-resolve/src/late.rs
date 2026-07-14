@@ -20,13 +20,25 @@ use crate::{
     scope::Resolver,
 };
 
+/// A scope that can be broken out of (loop or labeled block).
+#[derive(Debug, Clone)]
+struct BreakableScope {
+    label: Option<Symbol>,
+    is_loop: bool,
+    span: Span,
+}
+
 pub struct LateResolver<'a, 'b> {
     resolver: &'b mut Resolver<'a>,
+    breakable_stack: Vec<BreakableScope>,
 }
 
 impl<'a, 'b> LateResolver<'a, 'b> {
     pub fn new(resolver: &'b mut Resolver<'a>) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            breakable_stack: Vec::new(),
+        }
     }
 
     pub fn resolve(mut self, program: &Program) {
@@ -283,29 +295,35 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_expr(&ternary.if_false);
             }
             ExprKind::Loop(loop_expr) => {
+                self.push_breakable(loop_expr.label.as_ref().map(|l| l.symbol), true, expr.span);
                 self.push_rib(RibKind::Loop);
                 self.resolve_block_expr(&loop_expr.body);
                 self.pop_rib();
+                self.pop_breakable();
             }
             ExprKind::While(while_expr) => {
                 self.resolve_expr(&while_expr.condition);
+                self.push_breakable(while_expr.label.as_ref().map(|l| l.symbol), true, expr.span);
                 self.push_rib(RibKind::Loop);
                 self.resolve_block_expr(&while_expr.body);
                 self.pop_rib();
+                self.pop_breakable();
             }
             ExprKind::ForLoop(for_loop) => {
                 self.resolve_expr(&for_loop.iter);
+                self.push_breakable(for_loop.label.as_ref().map(|l| l.symbol), true, expr.span);
                 self.push_rib(RibKind::Pat);
                 self.resolve_pattern(&for_loop.pat);
                 self.resolve_block_expr(&for_loop.body);
                 self.pop_rib();
+                self.pop_breakable();
             }
             ExprKind::Break(break_expr) => {
-                if let Some(value) = &break_expr.value {
-                    self.resolve_expr(value);
-                }
+                self.resolve_break(break_expr);
             }
-            ExprKind::Continue(_) => {}
+            ExprKind::Continue(continue_expr) => {
+                self.resolve_continue(continue_expr);
+            }
             ExprKind::Return(opt) => {
                 if let Some(e) = opt {
                     self.resolve_expr(e);
@@ -487,11 +505,19 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     }
 
     fn resolve_block_expr(&mut self, block: &BlockExpr) {
+        let has_label = block.label.is_some();
+        if has_label {
+            let label = block.label.as_ref().map(|l| l.symbol);
+            self.push_breakable(label, false, block.label.as_ref().unwrap().span);
+        }
         self.push_rib(RibKind::Block);
         for stmt in &block.statements {
             self.resolve_stmt(stmt);
         }
         self.pop_rib();
+        if has_label {
+            self.pop_breakable();
+        }
     }
 
     fn resolve_stmt(&mut self, stmt: &Stmt) {
@@ -659,7 +685,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_type_path(&mut self, path: &Path) {
         if let Some(res) = resolve_type_path(self.resolver, path) {
-            // Type path resolved successfully.
+            self.check_path_privacy(path, &res);
         } else if !path.segments.is_empty() {
             let name = path.segments[0].ident.symbol;
             let span = path.span;
@@ -669,11 +695,31 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
     fn resolve_value_path(&mut self, path: &Path) {
         if let Some(res) = resolve_value_path(self.resolver, path) {
-            // Value path resolved successfully.
+            self.check_path_privacy(path, &res);
         } else if !path.segments.is_empty() {
             let name = path.segments[0].ident.symbol;
             let span = path.span;
             self.resolver.errors.push(ResolutionError::NotFound { name, span });
+        }
+    }
+
+    fn check_path_privacy(&mut self, path: &Path, res: &Resolution) {
+        if let Resolution::Def { def_id } = res {
+            if !path.segments.is_empty() {
+                let name = path.segments.last().unwrap().ident.symbol;
+                let span = path.span;
+                if !crate::privacy::check_accessibility(self.resolver, *def_id, self.resolver.current_module, name, span) {
+                    let def_module = self.resolver.definitions.get(def_id)
+                        .and_then(|d| d.parent)
+                        .unwrap_or(self.resolver.module_tree.root.def_id);
+                    self.resolver.errors.push(ResolutionError::PrivacyError {
+                        name,
+                        span,
+                        def_module,
+                        use_module: self.resolver.current_module,
+                    });
+                }
+            }
         }
     }
 
@@ -727,5 +773,65 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                     .and_then(|map| map.get(&name))
                     .copied()
             })
+    }
+
+    fn push_breakable(&mut self, label: Option<Symbol>, is_loop: bool, span: Span) {
+        self.breakable_stack.push(BreakableScope { label, is_loop, span });
+    }
+
+    fn pop_breakable(&mut self) {
+        self.breakable_stack.pop();
+    }
+
+    fn resolve_break(&mut self, break_expr: &BreakExpr) {
+        if let Some(value) = &break_expr.value {
+            self.resolve_expr(value);
+        }
+        if let Some(label) = &break_expr.label {
+            let label_sym = label.symbol;
+            let label_span = label.span;
+            if !self.find_label_in_stack(label_sym, false) {
+                self.resolver.errors.push(ResolutionError::LabelError {
+                    name: label_sym,
+                    span: label_span,
+                });
+            }
+        } else if self.breakable_stack.is_empty() {
+            self.resolver.errors.push(ResolutionError::BreakOutsideLoop {
+                span: break_expr.span,
+            });
+        }
+    }
+
+    fn resolve_continue(&mut self, continue_expr: &ContinueExpr) {
+        if let Some(label) = &continue_expr.label {
+            let label_sym = label.symbol;
+            let label_span = label.span;
+            if !self.find_label_in_stack(label_sym, true) {
+                self.resolver.errors.push(ResolutionError::LabelError {
+                    name: label_sym,
+                    span: label_span,
+                });
+            }
+        } else if !self.breakable_stack.iter().any(|s| s.is_loop) {
+            self.resolver.errors.push(ResolutionError::ContinueOutsideLoop {
+                span: continue_expr.span,
+            });
+        }
+    }
+
+    fn find_label_in_stack(&self, label: Symbol, require_loop: bool) -> bool {
+        for scope in self.breakable_stack.iter().rev() {
+            if scope.label == Some(label) {
+                if !require_loop || scope.is_loop {
+                    return true;
+                }
+                // Found labeled block but need loop - continue searching
+                if require_loop && !scope.is_loop {
+                    continue;
+                }
+            }
+        }
+        false
     }
 }

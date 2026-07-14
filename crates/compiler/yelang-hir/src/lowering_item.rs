@@ -101,7 +101,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
                     ident: f.name,
                     ty: crate::lowering_ty::lower_ty(ctx, &f.ty),
                     span: f.span,
-                    vis: Visibility::Private,
+                    vis: f.visibility.clone(),
                 })
                 .collect(),
         },
@@ -148,7 +148,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                             ident: f.name,
                             ty: crate::lowering_ty::lower_ty(ctx, &f.ty),
                             span: f.span,
-                            vis: Visibility::Private,
+                            vis: f.visibility.clone(),
                         })
                         .collect(),
                 },
