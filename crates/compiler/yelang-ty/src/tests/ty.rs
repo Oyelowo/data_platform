@@ -1,6 +1,6 @@
 use crate::interner::Interner;
 use crate::primitive::{IntTy, UintTy};
-use crate::ty::{TyKind, TyVid, IntVid, FloatVid, InferTy};
+use crate::ty::{FloatVid, InferTy, IntVid, TyKind, TyVid};
 
 #[test]
 fn ty_interning_preserves_equality() {
@@ -37,7 +37,11 @@ fn all_primitive_types_intern() {
     // All should be distinct
     for i in 0..primitives.len() {
         for j in (i + 1)..primitives.len() {
-            assert_ne!(primitives[i], primitives[j], "types at {} and {} should differ", i, j);
+            assert_ne!(
+                primitives[i], primitives[j],
+                "types at {} and {} should differ",
+                i, j
+            );
         }
     }
 }

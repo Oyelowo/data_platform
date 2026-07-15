@@ -61,15 +61,11 @@ fn find_expr_in_expr<'a>(expr: &'a Expr, target: HirId) -> Option<&'a Expr> {
             find_expr_in_expr(left, target).or_else(|| find_expr_in_expr(right, target))
         }
         crate::hir::ExprKind::Unary { expr: inner, .. } => find_expr_in_expr(inner, target),
-        crate::hir::ExprKind::Call { func, args } => {
-            find_expr_in_expr(func, target).or_else(|| {
-                args.iter().find_map(|arg| find_expr_in_expr(arg, target))
-            })
-        }
+        crate::hir::ExprKind::Call { func, args } => find_expr_in_expr(func, target)
+            .or_else(|| args.iter().find_map(|arg| find_expr_in_expr(arg, target))),
         crate::hir::ExprKind::MethodCall { receiver, args, .. } => {
-            find_expr_in_expr(receiver, target).or_else(|| {
-                args.iter().find_map(|arg| find_expr_in_expr(arg, target))
-            })
+            find_expr_in_expr(receiver, target)
+                .or_else(|| args.iter().find_map(|arg| find_expr_in_expr(arg, target)))
         }
         crate::hir::ExprKind::Field { expr: inner, .. } => find_expr_in_expr(inner, target),
         crate::hir::ExprKind::Index { expr: inner, index } => {
@@ -78,16 +74,26 @@ fn find_expr_in_expr<'a>(expr: &'a Expr, target: HirId) -> Option<&'a Expr> {
         crate::hir::ExprKind::Assign { left, right } => {
             find_expr_in_expr(left, target).or_else(|| find_expr_in_expr(right, target))
         }
-        crate::hir::ExprKind::Block { block } => {
-            block.stmts.iter().find_map(|stmt| find_expr_in_stmt(stmt, target)).or_else(|| {
-                block.expr.as_ref().and_then(|e| find_expr_in_expr(e, target))
-            })
-        }
-        crate::hir::ExprKind::Loop { block, .. } => {
-            block.stmts.iter().find_map(|stmt| find_expr_in_stmt(stmt, target)).or_else(|| {
-                block.expr.as_ref().and_then(|e| find_expr_in_expr(e, target))
-            })
-        }
+        crate::hir::ExprKind::Block { block } => block
+            .stmts
+            .iter()
+            .find_map(|stmt| find_expr_in_stmt(stmt, target))
+            .or_else(|| {
+                block
+                    .expr
+                    .as_ref()
+                    .and_then(|e| find_expr_in_expr(e, target))
+            }),
+        crate::hir::ExprKind::Loop { block, .. } => block
+            .stmts
+            .iter()
+            .find_map(|stmt| find_expr_in_stmt(stmt, target))
+            .or_else(|| {
+                block
+                    .expr
+                    .as_ref()
+                    .and_then(|e| find_expr_in_expr(e, target))
+            }),
         crate::hir::ExprKind::Break { expr, .. } => {
             expr.as_ref().and_then(|e| find_expr_in_expr(e, target))
         }
@@ -97,21 +103,29 @@ fn find_expr_in_expr<'a>(expr: &'a Expr, target: HirId) -> Option<&'a Expr> {
         crate::hir::ExprKind::Match { expr, arms } => {
             find_expr_in_expr(expr, target).or_else(|| {
                 arms.iter().find_map(|arm| {
-                    arm.guard.as_ref().and_then(|g| find_expr_in_expr(g, target))
+                    arm.guard
+                        .as_ref()
+                        .and_then(|g| find_expr_in_expr(g, target))
                         .or_else(|| find_expr_in_expr(&arm.body, target))
                 })
             })
         }
-        crate::hir::ExprKind::If { cond, then_branch, else_branch } => {
-            find_expr_in_expr(cond, target)
-                .or_else(|| find_expr_in_expr(then_branch, target))
-                .or_else(|| else_branch.as_ref().and_then(|e| find_expr_in_expr(e, target)))
-        }
+        crate::hir::ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => find_expr_in_expr(cond, target)
+            .or_else(|| find_expr_in_expr(then_branch, target))
+            .or_else(|| {
+                else_branch
+                    .as_ref()
+                    .and_then(|e| find_expr_in_expr(e, target))
+            }),
         crate::hir::ExprKind::Closure { .. } => None, // body is in a separate Body
-        crate::hir::ExprKind::Struct { fields, rest, .. } => {
-            fields.iter().find_map(|f| find_expr_in_expr(&f.expr, target))
-                .or_else(|| rest.as_ref().and_then(|e| find_expr_in_expr(e, target)))
-        }
+        crate::hir::ExprKind::Struct { fields, rest, .. } => fields
+            .iter()
+            .find_map(|f| find_expr_in_expr(&f.expr, target))
+            .or_else(|| rest.as_ref().and_then(|e| find_expr_in_expr(e, target))),
         crate::hir::ExprKind::Tuple { exprs } => {
             exprs.iter().find_map(|e| find_expr_in_expr(e, target))
         }

@@ -71,9 +71,9 @@ pub enum LangItem {
     DerefMut,
     Index,
     IndexMut,
-    EqTrait,          // `==`
+    EqTrait, // `==`
     PartialEq,
-    OrdTrait,         // `<` / `>` ordering
+    OrdTrait, // `<` / `>` ordering
     PartialOrd,
 
     // ------------------------------------------------------------------------
@@ -90,8 +90,8 @@ pub enum LangItem {
     // ------------------------------------------------------------------------
     // Special types
     // ------------------------------------------------------------------------
-    Box,              // `Box<T>` — owned heap allocation
-    PhantomData,      // variance / dropck marker
+    Box,         // `Box<T>` — owned heap allocation
+    PhantomData, // variance / dropck marker
 
     // ------------------------------------------------------------------------
     // Panic / unwinding
@@ -246,13 +246,13 @@ impl LangItem {
     pub fn description(self) -> &'static str {
         use LangItem::*;
         match self {
-            I8 | I16 | I32 | I64 | I128 | Isize |
-            U8 | U16 | U32 | U64 | U128 | Usize |
-            F32 | F64 | Bool | Char | Str => "primitive type",
+            I8 | I16 | I32 | I64 | I128 | Isize | U8 | U16 | U32 | U64 | U128 | Usize | F32
+            | F64 | Bool | Char | Str => "primitive type",
             Copy | Send | Sync | Sized => "marker trait",
-            Add | Sub | Mul | Div | Rem | BitAnd | BitOr | BitXor |
-            Shl | Shr | Neg | Not | Deref | DerefMut | Index | IndexMut |
-            EqTrait | PartialEq | OrdTrait | PartialOrd => "operator trait",
+            Add | Sub | Mul | Div | Rem | BitAnd | BitOr | BitXor | Shl | Shr | Neg | Not
+            | Deref | DerefMut | Index | IndexMut | EqTrait | PartialEq | OrdTrait | PartialOrd => {
+                "operator trait"
+            }
             Drop | Clone | Default | Debug | Display | Iterator | IntoIterator => "standard trait",
             Box | PhantomData => "special type",
             Panic | PanicBoundsCheck | DropInPlace => "panic/unwinding item",
@@ -358,25 +358,25 @@ pub fn seed_primitive_lang_items(
 
     let primitives: &[(LangItem, DefKind, Namespace)] = &[
         // Integer primitives
-        (LangItem::I8,    DefKind::TypeAlias, Namespace::Type),
-        (LangItem::I16,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::I32,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::I64,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::I128,  DefKind::TypeAlias, Namespace::Type),
+        (LangItem::I8, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::I16, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::I32, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::I64, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::I128, DefKind::TypeAlias, Namespace::Type),
         (LangItem::Isize, DefKind::TypeAlias, Namespace::Type),
-        (LangItem::U8,    DefKind::TypeAlias, Namespace::Type),
-        (LangItem::U16,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::U32,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::U64,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::U128,  DefKind::TypeAlias, Namespace::Type),
+        (LangItem::U8, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::U16, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::U32, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::U64, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::U128, DefKind::TypeAlias, Namespace::Type),
         (LangItem::Usize, DefKind::TypeAlias, Namespace::Type),
         // Float primitives
-        (LangItem::F32,   DefKind::TypeAlias, Namespace::Type),
-        (LangItem::F64,   DefKind::TypeAlias, Namespace::Type),
+        (LangItem::F32, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::F64, DefKind::TypeAlias, Namespace::Type),
         // Other primitives
-        (LangItem::Bool,  DefKind::TypeAlias, Namespace::Type),
-        (LangItem::Char,  DefKind::TypeAlias, Namespace::Type),
-        (LangItem::Str,   DefKind::TypeAlias, Namespace::Type),
+        (LangItem::Bool, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::Char, DefKind::TypeAlias, Namespace::Type),
+        (LangItem::Str, DefKind::TypeAlias, Namespace::Type),
     ];
 
     for &(lang_item, kind, ns) in primitives {

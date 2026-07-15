@@ -3,7 +3,7 @@
 use yelang_ast::Type as AstType;
 
 use crate::hir::{GenericParam, TraitBound};
-use crate::hir_ty::{AnonField, Ty, TyKind, Const, ConstKind, UtilityKind};
+use crate::hir_ty::{AnonField, Const, ConstKind, Ty, TyKind, UtilityKind};
 use crate::lowering::LoweringContext;
 
 /// Lower an AST type to a HIR type.
@@ -44,11 +44,7 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
         },
         yelang_ast::TypeKind::Function(fn_ty) => TyKind::FnPtr {
             sig: Box::new(crate::hir::FnSig {
-                inputs: fn_ty
-                    .params
-                    .iter()
-                    .map(|p| lower_ty(ctx, p))
-                    .collect(),
+                inputs: fn_ty.params.iter().map(|p| lower_ty(ctx, p)).collect(),
                 output: lower_ty(ctx, &fn_ty.return_type),
                 is_async: false,
                 is_const: false,

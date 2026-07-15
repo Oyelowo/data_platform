@@ -1,7 +1,7 @@
 use yelang_ast::{
-    Attribute, AttributeArgs, BlockExpr, Expr, ExprKind, FieldAssign, Ident, ImplItem, ImplItemKind,
-    Item, ItemKind, Literal, Param, Path, PathSegment, Stmt, StmtKind, StructExpr, StructFields, Type, TypeKind,
-    Visibility,
+    Attribute, AttributeArgs, BlockExpr, Expr, ExprKind, FieldAssign, Ident, ImplItem,
+    ImplItemKind, Item, ItemKind, Literal, Param, Path, PathSegment, Stmt, StmtKind, StructExpr,
+    StructFields, Type, TypeKind, Visibility,
 };
 use yelang_interner::Interner;
 use yelang_lexer::Span;
@@ -68,8 +68,18 @@ impl BuiltinDecorator {
 pub enum ReprKind {
     C,
     Transparent,
-    U8, U16, U32, U64, U128, Usize,
-    I8, I16, I32, I64, I128, Isize,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    Usize,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Isize,
 }
 
 impl ReprKind {
@@ -151,8 +161,17 @@ fn apply_derive(attr: &Attribute, item: &Item, interner: &Interner) -> Decorator
         let impl_item = match trait_name.as_str() {
             "Clone" => generate_clone_impl(self_ty.clone(), &fields, &generics, span, interner),
             "Copy" => generate_copy_impl(self_ty.clone(), &generics, span, interner),
-            "Debug" => generate_debug_impl(self_ty.clone(), &fields, &struct_name, &generics, span, interner),
-            "PartialEq" => generate_partial_eq_impl(self_ty.clone(), &fields, &generics, span, interner),
+            "Debug" => generate_debug_impl(
+                self_ty.clone(),
+                &fields,
+                &struct_name,
+                &generics,
+                span,
+                interner,
+            ),
+            "PartialEq" => {
+                generate_partial_eq_impl(self_ty.clone(), &fields, &generics, span, interner)
+            }
             _ => {
                 return DecoratorResult::error(format!(
                     "@derive does not support trait `{}` yet",
@@ -172,7 +191,7 @@ fn apply_derive(attr: &Attribute, item: &Item, interner: &Interner) -> Decorator
 fn derive_for_enum(
     traits: &[String],
     item: &Item,
-    e: &yelang_ast::Enum,
+    e: &yelang_ast::item::Enum,
     interner: &Interner,
 ) -> DecoratorResult {
     let span = item.span;
@@ -183,10 +202,29 @@ fn derive_for_enum(
     let mut result = vec![item.clone()];
     for trait_name in traits {
         let impl_item = match trait_name.as_str() {
-            "Clone" => generate_clone_impl(self_ty.clone(), &StructFields::Unit, &e.generics, span, interner),
+            "Clone" => generate_clone_impl(
+                self_ty.clone(),
+                &StructFields::Unit,
+                &e.generics,
+                span,
+                interner,
+            ),
             "Copy" => generate_copy_impl(self_ty.clone(), &e.generics, span, interner),
-            "Debug" => generate_debug_impl(self_ty.clone(), &StructFields::Unit, &e.name, &e.generics, span, interner),
-            "PartialEq" => generate_partial_eq_impl(self_ty.clone(), &StructFields::Unit, &e.generics, span, interner),
+            "Debug" => generate_debug_impl(
+                self_ty.clone(),
+                &StructFields::Unit,
+                &e.name,
+                &e.generics,
+                span,
+                interner,
+            ),
+            "PartialEq" => generate_partial_eq_impl(
+                self_ty.clone(),
+                &StructFields::Unit,
+                &e.generics,
+                span,
+                interner,
+            ),
             _ => {
                 return DecoratorResult::error(format!(
                     "@derive does not support trait `{}` yet",
@@ -216,7 +254,8 @@ fn generate_clone_impl(
                 .iter()
                 .map(|f| {
                     let field_name_str = interner.resolve(&f.name.symbol);
-                    let value = expr_from_str(&format!("self.{}.clone()", field_name_str), span, interner);
+                    let value =
+                        expr_from_str(&format!("self.{}.clone()", field_name_str), span, interner);
                     FieldAssign {
                         name: f.name.clone(),
                         value,
@@ -237,7 +276,10 @@ fn generate_clone_impl(
                 kind: StmtKind::TermExpr(Box::new(struct_expr)),
                 span,
             }];
-            BlockExpr { label: None, statements: stmts }
+            BlockExpr {
+                label: None,
+                statements: stmts,
+            }
         }
         StructFields::Tuple(types) => {
             let field_inits: Vec<Expr> = (0..types.len())
@@ -247,7 +289,10 @@ fn generate_clone_impl(
                 kind: StmtKind::TermExpr(Box::new(tuple_literal(field_inits, span, interner))),
                 span,
             }];
-            BlockExpr { label: None, statements: stmts }
+            BlockExpr {
+                label: None,
+                statements: stmts,
+            }
         }
         StructFields::Unit => {
             let stmts = vec![Stmt {
@@ -257,7 +302,10 @@ fn generate_clone_impl(
                 })),
                 span,
             }];
-            BlockExpr { label: None, statements: stmts }
+            BlockExpr {
+                label: None,
+                statements: stmts,
+            }
         }
     };
 
@@ -273,7 +321,13 @@ fn generate_clone_impl(
         interner,
     );
 
-    make_impl(self_ty, path_from_str("Clone", span, interner), generics, vec![method], span)
+    make_impl(
+        self_ty,
+        path_from_str("Clone", span, interner),
+        generics,
+        vec![method],
+        span,
+    )
 }
 
 fn generate_copy_impl(
@@ -282,7 +336,13 @@ fn generate_copy_impl(
     span: Span,
     _interner: &Interner,
 ) -> Item {
-    make_impl(self_ty, path_from_str("Copy", span, _interner), generics, vec![], span)
+    make_impl(
+        self_ty,
+        path_from_str("Copy", span, _interner),
+        generics,
+        vec![],
+        span,
+    )
 }
 
 fn generate_debug_impl(
@@ -315,7 +375,13 @@ fn generate_debug_impl(
         interner,
     );
 
-    make_impl(self_ty, path_from_str("Debug", span, interner), generics, vec![method], span)
+    make_impl(
+        self_ty,
+        path_from_str("Debug", span, interner),
+        generics,
+        vec![method],
+        span,
+    )
 }
 
 fn generate_partial_eq_impl(
@@ -326,25 +392,25 @@ fn generate_partial_eq_impl(
     interner: &Interner,
 ) -> Item {
     let eq_expr = match fields {
-        StructFields::Named(fields) => {
-            fields.iter().fold(None, |acc, f| {
-                let field_name = interner.resolve(&f.name.symbol);
-                let cmp = expr_from_str(&format!("self.{} == other.{}", field_name, field_name), span, interner);
-                Some(match acc {
-                    Some(prev) => binary_expr(prev, yelang_ast::BinaryOp::And, cmp, span),
-                    None => cmp,
-                })
+        StructFields::Named(fields) => fields.iter().fold(None, |acc, f| {
+            let field_name = interner.resolve(&f.name.symbol);
+            let cmp = expr_from_str(
+                &format!("self.{} == other.{}", field_name, field_name),
+                span,
+                interner,
+            );
+            Some(match acc {
+                Some(prev) => binary_expr(prev, yelang_ast::BinaryOp::And, cmp, span),
+                None => cmp,
             })
-        }
-        StructFields::Tuple(types) => {
-            (0..types.len()).fold(None, |acc, i| {
-                let cmp = expr_from_str(&format!("self.{} == other.{}", i, i), span, interner);
-                Some(match acc {
-                    Some(prev) => binary_expr(prev, yelang_ast::BinaryOp::And, cmp, span),
-                    None => cmp,
-                })
+        }),
+        StructFields::Tuple(types) => (0..types.len()).fold(None, |acc, i| {
+            let cmp = expr_from_str(&format!("self.{} == other.{}", i, i), span, interner);
+            Some(match acc {
+                Some(prev) => binary_expr(prev, yelang_ast::BinaryOp::And, cmp, span),
+                None => cmp,
             })
-        }
+        }),
         StructFields::Unit => Some(Expr {
             kind: ExprKind::Literal(Literal::Bool(true)),
             span,
@@ -396,7 +462,13 @@ fn generate_partial_eq_impl(
         interner,
     );
 
-    make_impl(self_ty, path_from_str("PartialEq", span, interner), generics, vec![method], span)
+    make_impl(
+        self_ty,
+        path_from_str("PartialEq", span, interner),
+        generics,
+        vec![method],
+        span,
+    )
 }
 
 // --- Helpers for AST construction ---
@@ -542,9 +614,7 @@ fn binary_expr(left: Expr, op: yelang_ast::BinaryOp, right: Expr, span: Span) ->
 
 fn apply_repr(attr: &Attribute, item: &Item, interner: &Interner) -> DecoratorResult {
     let repr = match &attr.args {
-        AttributeArgs::Positional(exprs) => {
-            exprs.first().and_then(|e| expr_to_string(e, interner))
-        }
+        AttributeArgs::Positional(exprs) => exprs.first().and_then(|e| expr_to_string(e, interner)),
         _ => None,
     };
 
@@ -573,9 +643,7 @@ fn apply_inline(item: &Item) -> DecoratorResult {
 
 fn apply_lang(attr: &Attribute, item: &Item, interner: &Interner) -> DecoratorResult {
     let lang = match &attr.args {
-        AttributeArgs::Positional(exprs) => {
-            exprs.first().and_then(|e| expr_to_string(e, interner))
-        }
+        AttributeArgs::Positional(exprs) => exprs.first().and_then(|e| expr_to_string(e, interner)),
         _ => None,
     };
 
@@ -591,12 +659,14 @@ fn apply_lang(attr: &Attribute, item: &Item, interner: &Interner) -> DecoratorRe
 
 fn collect_trait_names(args: &AttributeArgs, interner: &Interner) -> Vec<String> {
     match args {
-        AttributeArgs::Positional(exprs) => {
-            exprs.iter().filter_map(|e| expr_to_string(e, interner)).collect()
-        }
-        AttributeArgs::Named(named) => {
-            named.iter().map(|n| interner.resolve(&n.name.symbol).to_string()).collect()
-        }
+        AttributeArgs::Positional(exprs) => exprs
+            .iter()
+            .filter_map(|e| expr_to_string(e, interner))
+            .collect(),
+        AttributeArgs::Named(named) => named
+            .iter()
+            .map(|n| interner.resolve(&n.name.symbol).to_string())
+            .collect(),
         AttributeArgs::Empty => vec![],
     }
 }
@@ -606,9 +676,7 @@ fn expr_to_string(expr: &Expr, interner: &Interner) -> Option<String> {
         ExprKind::Path(path) if path.segments.len() == 1 => {
             Some(interner.resolve(&path.segments[0].ident.symbol).to_string())
         }
-        ExprKind::Literal(Literal::Str(s)) => {
-            Some(interner.resolve(&s.value).to_string())
-        }
+        ExprKind::Literal(Literal::Str(s)) => Some(interner.resolve(&s.value).to_string()),
         _ => None,
     }
 }

@@ -1,12 +1,12 @@
 //! Main lowering entry point and `LoweringContext`.
 
-use yelang_ast::{Program, Item as AstItem, ItemKind as AstItemKind};
+use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
 use yelang_util::{DefId, FxHashMap};
 
 use crate::crate_hir::Crate;
-use crate::ids::{HirId, BodyId};
+use crate::ids::{BodyId, HirId};
 use crate::lowering_err::LoweringError;
 use crate::res::ResolvedCrate;
 
@@ -86,11 +86,7 @@ impl<'a> LoweringContext<'a> {
 }
 
 /// Lower an entire AST `Program` into a HIR `Crate`.
-pub fn lower_crate(
-    program: &Program,
-    resolved: &ResolvedCrate,
-    interner: &Interner,
-) -> Crate {
+pub fn lower_crate(program: &Program, resolved: &ResolvedCrate, interner: &Interner) -> Crate {
     let mut ctx = LoweringContext::new(interner, resolved);
 
     for item in &program.items {
@@ -106,7 +102,9 @@ pub(crate) fn lookup_item_def_id(ctx: &LoweringContext, item: &AstItem) -> Optio
     use yelang_resolve::DefKind;
     let expected_kind = item_def_kind(&item.kind)?;
     let expected_name = item_name(item)?;
-    ctx.resolved.definitions.iter()
+    ctx.resolved
+        .definitions
+        .iter()
         .find(|(_, def)| {
             def.parent == Some(ctx.current_module)
                 && def.name == expected_name

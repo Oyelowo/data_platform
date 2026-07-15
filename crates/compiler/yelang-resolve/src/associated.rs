@@ -1,13 +1,8 @@
+use yelang_ast::Path;
 use yelang_interner::Symbol;
 use yelang_util::DefId;
-use yelang_ast::Path;
 
-use crate::{
-    def_collector::DefKind,
-    namespaces::Namespace,
-    rib::Resolution,
-    scope::Resolver,
-};
+use crate::{def_collector::DefKind, namespaces::Namespace, rib::Resolution, scope::Resolver};
 
 /// Resolve an associated item path like `Type::item` or `<Type as Trait>::item`.
 /// Returns the DefId of the resolved item if found.
@@ -27,10 +22,7 @@ pub fn resolve_associated_item(
     }
 }
 
-fn resolve_inherent_associated_item(
-    resolver: &Resolver,
-    path: &Path,
-) -> Option<Resolution> {
+fn resolve_inherent_associated_item(resolver: &Resolver, path: &Path) -> Option<Resolution> {
     if path.segments.len() < 2 {
         return None;
     }
@@ -51,7 +43,9 @@ fn resolve_inherent_associated_item(
         for impl_id in impl_ids {
             if let Some(items) = resolver.impl_item_names.get(impl_id) {
                 if let Some(&item_def_id) = items.get(&item_name) {
-                    return Some(Resolution::Def { def_id: item_def_id });
+                    return Some(Resolution::Def {
+                        def_id: item_def_id,
+                    });
                 }
             }
         }
@@ -64,7 +58,9 @@ fn resolve_inherent_associated_item(
             if def.kind == DefKind::Enum {
                 if let Some(variants) = resolver.enum_variants.get(&enum_def_id) {
                     if let Some(&variant_def_id) = variants.get(&item_name) {
-                        return Some(Resolution::Def { def_id: variant_def_id });
+                        return Some(Resolution::Def {
+                            def_id: variant_def_id,
+                        });
                     }
                 }
             }
@@ -115,7 +111,11 @@ fn resolve_type_prefix_to_def_id(resolver: &Resolver, path: &Path) -> Option<Def
         (def_id, 2)
     } else if first_str == "self" {
         let def_id = resolver
-            .resolve_name_in_module(resolver.current_module, ns, path.segments.get(1)?.ident.symbol)
+            .resolve_name_in_module(
+                resolver.current_module,
+                ns,
+                path.segments.get(1)?.ident.symbol,
+            )
             .or_else(|| {
                 resolver.resolve_name_in_module(
                     resolver.current_module,
@@ -165,7 +165,9 @@ fn resolve_type_prefix_to_def_id(resolver: &Resolver, path: &Path) -> Option<Def
     for seg in &path.segments[start_idx..path.segments.len() - 1] {
         let next = resolver
             .resolve_name_in_module(current, ns, seg.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol))?;
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol)
+            })?;
         current = next;
     }
 
@@ -188,7 +190,9 @@ fn resolve_qualified_associated_item(
             for impl_id in impl_ids {
                 if let Some(items) = resolver.impl_item_names.get(impl_id) {
                     if let Some(&item_def_id) = items.get(&item_name) {
-                        return Some(Resolution::Def { def_id: item_def_id });
+                        return Some(Resolution::Def {
+                            def_id: item_def_id,
+                        });
                     }
                 }
             }
@@ -203,7 +207,9 @@ fn resolve_qualified_associated_item(
         for impl_id in impl_ids {
             if let Some(items) = resolver.impl_item_names.get(impl_id) {
                 if let Some(&item_def_id) = items.get(&item_name) {
-                    return Some(Resolution::Def { def_id: item_def_id });
+                    return Some(Resolution::Def {
+                        def_id: item_def_id,
+                    });
                 }
             }
         }
@@ -224,7 +230,9 @@ fn search_trait_impls_for_type(
             for impl_id in impl_ids {
                 if let Some(items) = resolver.impl_item_names.get(impl_id) {
                     if let Some(&item_def_id) = items.get(&item_name) {
-                        return Some(Resolution::Def { def_id: item_def_id });
+                        return Some(Resolution::Def {
+                            def_id: item_def_id,
+                        });
                     }
                 }
             }
@@ -235,9 +243,7 @@ fn search_trait_impls_for_type(
 
 pub(crate) fn extract_type_name(ty: &yelang_ast::Type) -> Option<Symbol> {
     match &ty.kind {
-        yelang_ast::TypeKind::Named(path) => {
-            path.segments.first().map(|s| s.ident.symbol)
-        }
+        yelang_ast::TypeKind::Named(path) => path.segments.first().map(|s| s.ident.symbol),
         yelang_ast::TypeKind::Ref { ty, .. } => extract_type_name(ty),
         _ => None,
     }

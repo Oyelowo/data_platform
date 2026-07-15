@@ -1,13 +1,15 @@
 //! Exhaustive tests for AST type -> HIR type lowering.
 
-use crate::hir::{ItemKind, GenericParam};
+use crate::hir::{GenericParam, ItemKind};
 use crate::hir_ty::{TyKind, UtilityKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
 fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::FnSig {
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { sig, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { sig, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     sig
 }
 
@@ -329,7 +331,9 @@ fn lower_fn_with_complex_generic_bounds() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { generics, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     assert_eq!(generics.params.len(), 2);
     assert!(generics.where_clause.is_some());
     let wc = generics.where_clause.as_ref().unwrap();
@@ -343,8 +347,13 @@ fn lower_hrtb_where_predicate() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else { panic!("expected fn") };
-    let wc = generics.where_clause.as_ref().expect("expected where clause");
+    let ItemKind::Fn { generics, .. } = &item.kind else {
+        panic!("expected fn")
+    };
+    let wc = generics
+        .where_clause
+        .as_ref()
+        .expect("expected where clause");
     let pred = wc.predicates.first().expect("expected predicate");
     match pred {
         crate::hir::WherePredicate::TraitBound { ty, .. } => {

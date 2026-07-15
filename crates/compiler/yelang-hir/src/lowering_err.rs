@@ -1,8 +1,8 @@
 //! Errors produced during AST -> HIR lowering.
 
+use thiserror::Error;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use thiserror::Error;
 
 /// An error encountered while lowering the AST to HIR.
 #[derive(Error, Debug, Clone)]

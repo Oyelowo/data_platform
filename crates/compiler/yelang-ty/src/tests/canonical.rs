@@ -1,6 +1,6 @@
-use crate::canonical::{CanonicalVarKind, CanonicalTyVarKind, Response, Certainty};
-use crate::ty::UniverseIndex;
+use crate::canonical::{CanonicalTyVarKind, CanonicalVarKind, Certainty, Response};
 use crate::list::List;
+use crate::ty::UniverseIndex;
 
 #[test]
 fn canonical_var_kind_variants() {

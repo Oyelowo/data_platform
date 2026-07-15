@@ -37,7 +37,11 @@ impl<'tcx> fmt::Display for TypeError<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TypeError::Mismatch { expected, found } => {
-                write!(f, "type mismatch: expected `{:?}`, found `{:?}`", expected, found)
+                write!(
+                    f,
+                    "type mismatch: expected `{:?}`, found `{:?}`",
+                    expected, found
+                )
             }
             TypeError::CyclicTy(vid) => write!(f, "cyclic type: `?T{}`", vid.0),
             TypeError::UnresolvedInferenceVariable(vid) => {
@@ -59,10 +63,18 @@ impl<'tcx> fmt::Display for TypeError<'tcx> {
                 write!(f, "no method `{:?}` on type `{:?}`", method.as_usize(), ty)
             }
             TypeError::ArgCount { expected, found } => {
-                write!(f, "argument count mismatch: expected {}, found {}", expected, found)
+                write!(
+                    f,
+                    "argument count mismatch: expected {}, found {}",
+                    expected, found
+                )
             }
             TypeError::GenericArgCount { expected, found } => {
-                write!(f, "generic argument count mismatch: expected {}, found {}", expected, found)
+                write!(
+                    f,
+                    "generic argument count mismatch: expected {}, found {}",
+                    expected, found
+                )
             }
             TypeError::Custom(msg) => write!(f, "{}", msg),
         }

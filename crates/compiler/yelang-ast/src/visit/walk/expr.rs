@@ -410,22 +410,6 @@ pub fn walk_continue_expr<V: Visitor>(
     ControlFlow::Continue(())
 }
 
-pub fn walk_macro_invocation<V: Visitor>(
-    v: &mut V,
-    inv: &MacroInvocation,
-) -> ControlFlow<()> {
-    v.visit_path(&inv.path)?;
-    match &inv.args {
-        crate::expr::MacroArgs::Paren(exprs) | crate::expr::MacroArgs::Bracket(exprs) => {
-            for e in exprs {
-                v.visit_expr(e)?;
-            }
-        }
-        crate::expr::MacroArgs::Brace(stmts) => {
-            for s in stmts {
-                v.visit_stmt(s)?;
-            }
-        }
-    }
-    ControlFlow::Continue(())
+pub fn walk_macro_invocation<V: Visitor>(v: &mut V, inv: &MacroInvocation) -> ControlFlow<()> {
+    v.visit_path(&inv.path)
 }

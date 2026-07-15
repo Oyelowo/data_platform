@@ -5,8 +5,9 @@
  * Date 13/07/2025
  */
 
+use crate::token::{TokenStream as MacroTokenStream, convert::from_lexer_tokens};
 use crate::{Expr, Ident, Path, Stmt, T};
-use yelang_lexer::{ArrayCreator, ParseTokenStream, TokenResult, TokenStream};
+use yelang_lexer::{ArrayCreator, ParseTokenStream, Token, TokenResult, TokenStream};
 
 /// Macro invocation expression: `assert!(true)`, `vec![1, 2, 3]`, `macro! { stmt }`
 ///
@@ -15,35 +16,19 @@ use yelang_lexer::{ArrayCreator, ParseTokenStream, TokenResult, TokenStream};
 #[derive(Debug, Clone, PartialEq)]
 pub struct MacroInvocation {
     pub path: Path,
-    pub args: MacroArgs,
+    /// Raw token stream of the macro arguments, including the delimiting group.
+    pub args: MacroTokenStream,
     pub span: yelang_lexer::Span,
-}
-
-/// Arguments to a macro invocation, preserving the delimiter kind.
-#[derive(Debug, Clone, PartialEq)]
-pub enum MacroArgs {
-    /// `foo(a, b)` — parenthesized arguments
-    Paren(Vec<Expr>),
-    /// `bar[a, b]` — bracketed arguments
-    Bracket(Vec<Expr>),
-    /// `baz { stmt; stmt }` — braced arguments (statements)
-    Brace(Vec<Stmt>),
-}
-
-impl MacroArgs {
-    pub fn span(&self) -> yelang_lexer::Span {
-        match self {
-            MacroArgs::Paren(exprs) => exprs.first().map(|e| e.span).unwrap_or_default(),
-            MacroArgs::Bracket(exprs) => exprs.first().map(|e| e.span).unwrap_or_default(),
-            MacroArgs::Brace(stmts) => stmts.first().map(|s| s.span).unwrap_or_default(),
-        }
-    }
 }
 
 impl MacroInvocation {
     pub fn name(&self, interner: &crate::Interner) -> Option<String> {
         if self.path.segments.len() == 1 {
-            Some(interner.resolve(&self.path.segments[0].ident.symbol).to_string())
+            Some(
+                interner
+                    .resolve(&self.path.segments[0].ident.symbol)
+                    .to_string(),
+            )
         } else {
             None
         }
@@ -51,37 +36,83 @@ impl MacroInvocation {
 }
 
 /// Parse macro invocation arguments after the `!` token has been consumed.
+///
+/// The delimited lexer tokens are preserved as a macro `TokenStream` so that
+/// the macro expander can operate on the raw tokens hygienically.
 pub fn parse_macro_args(
     stream: &mut TokenStream<crate::tokenizer::TokenKind>,
-) -> TokenResult<MacroArgs> {
+) -> TokenResult<MacroTokenStream> {
     use crate::tokenizer::TokenKind;
 
-    match stream.peek().map(|t| t.kind()) {
-        Some(TokenKind::OpenParen) => {
-            type ParenArgs = ArrayCreator<T!['('], Expr, T![,], T![')']>;
-            let args = stream.parse::<ParenArgs>()?;
-            Ok(MacroArgs::Paren(args.items_owned()))
+    let current_span = stream.current_span();
+    let open_kind =
+        stream
+            .peek()
+            .map(|t| t.kind().clone())
+            .ok_or(yelang_lexer::TokenError::UnexpectedEof {
+                expected: "`(` or `[` or `{` after `!`".to_string(),
+                span: current_span,
+            })?;
+
+    let (open_kind, close_kind) = match open_kind {
+        TokenKind::OpenParen => (TokenKind::OpenParen, TokenKind::CloseParen),
+        TokenKind::OpenBracket => (TokenKind::OpenBracket, TokenKind::CloseBracket),
+        TokenKind::OpenBrace => (TokenKind::OpenBrace, TokenKind::CloseBrace),
+        ref other => {
+            return Err(yelang_lexer::TokenError::UnexpectedToken {
+                expected: "`(` or `[` or `{` after `!`".to_string(),
+                found: other.to_string(),
+                span: stream.current_span(),
+            });
         }
-        Some(TokenKind::OpenBracket) => {
-            type BracketArgs = ArrayCreator<T!['['], Expr, T![,], T![']']>;
-            let args = stream.parse::<BracketArgs>()?;
-            Ok(MacroArgs::Bracket(args.items_owned()))
+    };
+
+    let tokens = consume_balanced(stream, open_kind, close_kind)?;
+    Ok(from_lexer_tokens(&tokens))
+}
+
+/// Consume a balanced delimited sequence from the lexer stream, including the
+/// opening and closing delimiter tokens.
+fn consume_balanced(
+    stream: &mut TokenStream<crate::tokenizer::TokenKind>,
+    open_kind: crate::tokenizer::TokenKind,
+    close_kind: crate::tokenizer::TokenKind,
+) -> TokenResult<Vec<Token<crate::tokenizer::TokenKind>>> {
+    let mut depth = 0usize;
+    let mut tokens = Vec::new();
+
+    loop {
+        let eof_span = stream.current_span();
+        let token = stream
+            .advance()
+            .ok_or(yelang_lexer::TokenError::UnexpectedEof {
+                expected: "matching macro argument delimiter".to_string(),
+                span: eof_span,
+            })?;
+
+        if token.kind() == &open_kind {
+            depth += 1;
+        } else if token.kind() == &close_kind {
+            if depth == 0 {
+                // Unbalanced: saw a close before an open. Should not happen because
+                // the caller verified the first token is an open delimiter.
+                return Err(yelang_lexer::TokenError::UnexpectedToken {
+                    expected: "macro argument".to_string(),
+                    found: close_kind.to_string(),
+                    span: stream.current_span(),
+                });
+            }
+            depth -= 1;
         }
-        Some(TokenKind::OpenBrace) => {
-            type BraceArgs = ArrayCreator<T!['{'], Stmt, T![;], T!['}']>;
-            let args = stream.parse::<BraceArgs>()?;
-            Ok(MacroArgs::Brace(args.items_owned()))
+
+        tokens.push(token.clone());
+
+        if depth == 0 {
+            break;
         }
-        Some(other) => Err(yelang_lexer::TokenError::UnexpectedToken {
-            expected: "`(` or `[` or `{` after `!`".to_string(),
-            found: other.to_string(),
-            span: stream.current_span(),
-        }),
-        None => Err(yelang_lexer::TokenError::UnexpectedEof {
-            expected: "`(` or `[` or `{` after `!`".to_string(),
-            span: stream.current_span(),
-        }),
     }
+
+    Ok(tokens)
 }
 
 #[cfg(test)]
@@ -95,16 +126,12 @@ mod tests {
         let mut interner = Interner::new();
         let mut stream = TokenKind::tokenize("assert!(true)", &mut interner).unwrap();
 
-        // Parse the expression; it should be a MacroInvocation
         let expr = stream.parse::<Expr>().unwrap();
         let ExprKind::MacroInvocation(inv) = expr.kind else {
             panic!("expected MacroInvocation, got {:?}", expr.kind);
         };
         assert_eq!(inv.name(&interner), Some("assert".to_string()));
-        let MacroArgs::Paren(args) = inv.args else {
-            panic!("expected Paren args, got {:?}", inv.args);
-        };
-        assert_eq!(args.len(), 1);
+        assert!(!inv.args.is_empty());
     }
 
     #[test]
@@ -117,10 +144,7 @@ mod tests {
             panic!("expected MacroInvocation, got {:?}", expr.kind);
         };
         assert_eq!(inv.name(&interner), Some("vec".to_string()));
-        let MacroArgs::Bracket(args) = inv.args else {
-            panic!("expected Bracket args, got {:?}", inv.args);
-        };
-        assert_eq!(args.len(), 2);
+        assert!(!inv.args.is_empty());
     }
 
     #[test]
@@ -133,5 +157,31 @@ mod tests {
             panic!("expected MacroInvocation, got {:?}", expr.kind);
         };
         assert_eq!(inv.path.segments.len(), 2);
+    }
+
+    #[test]
+    fn macro_invocation_preserves_compound_operators() {
+        let mut interner = Interner::new();
+        let mut stream = TokenKind::tokenize("assert!(x <= y)", &mut interner).unwrap();
+
+        let expr = stream.parse::<Expr>().unwrap();
+        let ExprKind::MacroInvocation(inv) = expr.kind else {
+            panic!("expected MacroInvocation, got {:?}", expr.kind);
+        };
+        assert_eq!(inv.args.render(&interner), "(x<=y)");
+    }
+
+    #[test]
+    fn macro_invocation_missing_args_errors() {
+        let mut interner = Interner::new();
+        let mut stream = TokenKind::tokenize("assert!", &mut interner).unwrap();
+        assert!(stream.parse::<Expr>().is_err());
+    }
+
+    #[test]
+    fn macro_invocation_invalid_delimiter_errors() {
+        let mut interner = Interner::new();
+        let mut stream = TokenKind::tokenize("assert!<>", &mut interner).unwrap();
+        assert!(stream.parse::<Expr>().is_err());
     }
 }

@@ -3,11 +3,11 @@
 use yelang_ast::Ident;
 use yelang_lexer::Span;
 
-use crate::ids::{BodyId, DefId};
 use crate::hir::{
-    Body, EnumDef, FnSig, Generics, Impl, MacroDef, Mutability, Trait, Ty, UseKind,
-    UsePath, VariantData, Visibility,
+    Body, EnumDef, FnSig, Generics, Impl, MacroDef, Mutability, Trait, Ty, UseKind, UsePath,
+    VariantData, Visibility,
 };
+use crate::ids::{BodyId, DefId};
 
 /// An item in the HIR.
 #[derive(Debug, Clone)]
@@ -34,10 +34,7 @@ pub enum ItemKind {
         generics: Generics,
     },
     /// Enum definition.
-    Enum {
-        def: EnumDef,
-        generics: Generics,
-    },
+    Enum { def: EnumDef, generics: Generics },
     /// Union definition.
     Union {
         data: VariantData,
@@ -56,15 +53,9 @@ pub enum ItemKind {
         of_trait: Option<crate::hir::TraitRef>,
     },
     /// Type alias.
-    TyAlias {
-        ty: Ty,
-        generics: Generics,
-    },
+    TyAlias { ty: Ty, generics: Generics },
     /// Constant item.
-    Const {
-        ty: Ty,
-        body: BodyId,
-    },
+    Const { ty: Ty, body: BodyId },
     /// Static item.
     Static {
         ty: Ty,
@@ -72,16 +63,9 @@ pub enum ItemKind {
         body: BodyId,
     },
     /// Module.
-    Mod {
-        items: Vec<DefId>,
-    },
+    Mod { items: Vec<DefId> },
     /// Use declaration.
-    Use {
-        path: UsePath,
-        kind: UseKind,
-    },
+    Use { path: UsePath, kind: UseKind },
     /// Macro definition.
-    Macro {
-        def: MacroDef,
-    },
+    Macro { def: MacroDef },
 }

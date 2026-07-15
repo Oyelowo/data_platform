@@ -1,4 +1,4 @@
-use slotmap::{DefaultKey, SlotMap as InnerSlotMap, SecondaryMap, SparseSecondaryMap};
+use slotmap::{DefaultKey, SecondaryMap, SlotMap as InnerSlotMap, SparseSecondaryMap};
 
 /// An arena allocator that assigns stable keys to values.
 ///
@@ -13,7 +13,7 @@ pub struct Arena<T> {
 }
 
 /// A stable key into an `Arena`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ArenaKey(DefaultKey);
 
 impl<T> Arena<T> {

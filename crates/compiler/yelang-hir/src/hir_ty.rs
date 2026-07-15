@@ -4,8 +4,8 @@ use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
 use crate::hir::FnSig;
-use crate::res::Res;
 use crate::hir::Lit;
+use crate::res::Res;
 
 /// A type node.
 #[derive(Debug, Clone)]
@@ -34,11 +34,20 @@ pub enum TyKind {
     /// Utility type: `Omit<T, K>`
     Utility { kind: UtilityKind, args: Vec<Ty> },
     /// Reference: `&T` or `&mut T`
-    Ref { mutability: yelang_ast::Mutability, ty: Box<Ty> },
+    Ref {
+        mutability: yelang_ast::Mutability,
+        ty: Box<Ty>,
+    },
     /// Raw pointer: `*mut T` or `*const T`
-    RawPtr { mutability: yelang_ast::Mutability, ty: Box<Ty> },
+    RawPtr {
+        mutability: yelang_ast::Mutability,
+        ty: Box<Ty>,
+    },
     /// Higher-ranked type: `for<T> fn(T) -> T`
-    ForAll { params: Vec<crate::hir::GenericParam>, ty: Box<Ty> },
+    ForAll {
+        params: Vec<crate::hir::GenericParam>,
+        ty: Box<Ty>,
+    },
     /// Union type: `i32 | string | bool`
     Union { tys: Vec<Ty> },
     /// `impl Trait` opaque type.

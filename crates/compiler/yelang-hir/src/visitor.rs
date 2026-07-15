@@ -2,8 +2,8 @@
 
 use crate::crate_hir::Crate;
 use crate::hir::{
-    Arm, Block, Expr, ExprKind, FnSig, Generics, Impl, ImplItem, Item, ItemKind, Stmt,
-    StmtKind, Trait, TraitItem, Ty, TyKind,
+    Arm, Block, Expr, ExprKind, FnSig, Generics, Impl, ImplItem, Item, ItemKind, Stmt, StmtKind,
+    Trait, TraitItem, Ty, TyKind,
 };
 use crate::hir_body::Body;
 use crate::hir_pat::{Pat, PatKind};
@@ -87,7 +87,12 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &Item) {
                 // TODO: walk variant data
             }
         }
-        ItemKind::Impl { items, self_ty, of_trait, .. } => {
+        ItemKind::Impl {
+            items,
+            self_ty,
+            of_trait,
+            ..
+        } => {
             visitor.visit_ty(self_ty);
             if let Some(trait_ref) = of_trait {
                 // TODO: walk trait ref
@@ -167,7 +172,11 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &Expr) {
                 visitor.visit_arm(arm);
             }
         }
-        ExprKind::If { cond, then_branch, else_branch } => {
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
             visitor.visit_expr(cond);
             visitor.visit_expr(then_branch);
             if let Some(e) = else_branch {
@@ -309,7 +318,11 @@ pub fn walk_pat<'hir, V: Visitor<'hir>>(visitor: &mut V, pat: &Pat) {
                 visitor.visit_pat(p);
             }
         }
-        PatKind::Slice { prefix, middle, suffix } => {
+        PatKind::Slice {
+            prefix,
+            middle,
+            suffix,
+        } => {
             for p in prefix {
                 visitor.visit_pat(p);
             }

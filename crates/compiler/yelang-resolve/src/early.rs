@@ -2,7 +2,7 @@ use yelang_ast::{Item, ItemKind, ModKind, Program};
 use yelang_lexer::Span;
 
 use crate::{
-    imports::{resolve_imports, UnresolvedImport},
+    imports::{UnresolvedImport, resolve_imports},
     module_tree::ModuleTree,
     scope::Resolver,
 };

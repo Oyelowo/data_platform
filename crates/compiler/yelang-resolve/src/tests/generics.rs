@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 // ============================================================================
 // Type generic parameter tests (Phase 1-3)
@@ -273,7 +273,9 @@ fn unresolved_const_param_reports_error() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { name, .. } if interner.resolve(name) == "M")),
+        resolved.errors.iter().any(
+            |e| matches!(e, ResolutionError::NotFound { name, .. } if interner.resolve(name) == "M")
+        ),
         "expected NotFound for M: {:?}",
         resolved.errors
     );

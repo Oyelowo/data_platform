@@ -3,8 +3,8 @@
 use yelang_ast::Pattern as AstPat;
 use yelang_lexer::Span;
 
+use crate::hir_pat::{BindingMode, FieldPat, Pat, PatKind};
 use crate::ids::HirId;
-use crate::hir_pat::{Pat, PatKind, BindingMode, FieldPat};
 use crate::lowering::LoweringContext;
 use crate::res::Res;
 
@@ -13,7 +13,11 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> Pat {
     let span = pat.span;
     let kind = match &pat.pattern {
         yelang_ast::PatternKind::Wildcard => PatKind::Wild,
-        yelang_ast::PatternKind::Binding { name, mutability, subpattern } => {
+        yelang_ast::PatternKind::Binding {
+            name,
+            mutability,
+            subpattern,
+        } => {
             let hir_id = ctx.next_hir_id();
             ctx.push_local(name.symbol, hir_id);
             PatKind::Binding {

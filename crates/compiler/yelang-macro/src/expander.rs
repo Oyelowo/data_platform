@@ -1,22 +1,33 @@
 use yelang_ast::{
     ArrayAccess, AssignEqExpr, AssignOpExpr, BinaryExpr, BlockExpr, Expr, ExprKind, ForLoopExpr,
-    IfExpr, ImplItemKind, Item, ItemKind, LambdaExpr, LoopExpr, MacroInvocation, MatchExpr, MemberAccess,
-    Program, RangeExpr, Stmt, StmtKind, TernaryExpr, UnaryExpr, WhileExpr,
+    IfExpr, ImplItemKind, Item, ItemKind, LambdaExpr, LoopExpr, MacroInvocation, MatchExpr,
+    MemberAccess, Program, RangeExpr, Stmt, StmtKind, TernaryExpr, UnaryExpr, WhileExpr,
 };
 use yelang_interner::Interner;
 
-use crate::builtin_decorators::{
-    apply_decorator, BuiltinDecorator, DecoratorResult,
-};
+use crate::builtin_decorators::{BuiltinDecorator, DecoratorResult, apply_decorator};
 use crate::builtin_macros::expand_builtin_macro;
-use crate::hygiene::ExpnId;
+use yelang_util::ExpnId;
 
 /// Error encountered during macro expansion.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExpandError {
-    UnknownMacro { path: String, span: yelang_lexer::Span },
-    MalformedMacroArgs { reason: String, span: yelang_lexer::Span },
-    DecoratorError { reason: String, span: yelang_lexer::Span },
+    UnknownMacro {
+        path: String,
+        span: yelang_lexer::Span,
+    },
+    MalformedMacroArgs {
+        reason: String,
+        span: yelang_lexer::Span,
+    },
+    DecoratorError {
+        reason: String,
+        span: yelang_lexer::Span,
+    },
+    ExpansionLoop {
+        path: String,
+        span: yelang_lexer::Span,
+    },
 }
 
 impl std::fmt::Display for ExpandError {
@@ -30,6 +41,9 @@ impl std::fmt::Display for ExpandError {
             }
             ExpandError::DecoratorError { reason, .. } => {
                 write!(f, "decorator error: {}", reason)
+            }
+            ExpandError::ExpansionLoop { path, .. } => {
+                write!(f, "expansion loop detected: {}", path)
             }
         }
     }
@@ -60,7 +74,7 @@ impl<'a> MacroExpander<'a> {
         Self {
             interner,
             errors: vec![],
-            _expn_id: ExpnId::fresh(),
+            _expn_id: ExpnId::default(),
         }
     }
 
@@ -81,7 +95,7 @@ impl<'a> MacroExpander<'a> {
         loop {
             iterations += 1;
             if iterations > MAX_ITERATIONS {
-                self.errors.push(ExpandError::UnknownMacro {
+                self.errors.push(ExpandError::ExpansionLoop {
                     path: "(expansion loop)".to_string(),
                     span: yelang_lexer::Span::default(),
                 });
@@ -103,7 +117,10 @@ impl<'a> MacroExpander<'a> {
         }
 
         ExpandResult {
-            program: Program { items, span: yelang_lexer::Span::default() },
+            program: Program {
+                items,
+                span: yelang_lexer::Span::default(),
+            },
             errors: self.errors.clone(),
         }
     }
@@ -288,7 +305,8 @@ impl<'a> MacroExpander<'a> {
                             // inside statement position.  Emit an error and keep only
                             // the primary item.
                             self.errors.push(ExpandError::DecoratorError {
-                                reason: "decorator produced multiple items in statement position".to_string(),
+                                reason: "decorator produced multiple items in statement position"
+                                    .to_string(),
                                 span: stmt.span,
                             });
                         }
@@ -321,7 +339,9 @@ impl<'a> MacroExpander<'a> {
                 }
                 // Unknown macro — emit error and keep as-is.
                 let path_name = if inv.path.segments.len() == 1 {
-                    self.interner.resolve(&inv.path.segments[0].ident.symbol).to_string()
+                    self.interner
+                        .resolve(&inv.path.segments[0].ident.symbol)
+                        .to_string()
                 } else {
                     "(qualified)".to_string()
                 };
@@ -925,10 +945,12 @@ impl<'a> MacroExpander<'a> {
                     match field {
                         yelang_ast::DocumentField::KeyVal(kv) => {
                             let (val, val_changed) = self.expand_expr(&kv.value);
-                            new_fields.push(yelang_ast::DocumentField::KeyVal(yelang_ast::KeyVal {
-                                key: kv.key.clone(),
-                                value: val,
-                            }));
+                            new_fields.push(yelang_ast::DocumentField::KeyVal(
+                                yelang_ast::KeyVal {
+                                    key: kv.key.clone(),
+                                    value: val,
+                                },
+                            ));
                             fields_changed |= val_changed;
                         }
                         other => new_fields.push(other.clone()),
@@ -993,11 +1015,19 @@ mod tests {
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         // assert!(true) should expand to `if !true { panic!(...) }`
         let fn_item = &result.program.items[0];
-        let ItemKind::Fn(func) = &fn_item.kind else { panic!("expected fn") };
+        let ItemKind::Fn(func) = &fn_item.kind else {
+            panic!("expected fn")
+        };
         let body = &func.body;
         assert_eq!(body.statements.len(), 1);
-        let StmtKind::TermExpr(expr) = &body.statements[0].kind else { panic!("expected term expr stmt") };
-        assert!(matches!(expr.kind, ExprKind::If(_)), "expected If, got {:?}", expr.kind);
+        let StmtKind::TermExpr(expr) = &body.statements[0].kind else {
+            panic!("expected term expr stmt")
+        };
+        assert!(
+            matches!(expr.kind, ExprKind::If(_)),
+            "expected If, got {:?}",
+            expr.kind
+        );
     }
 
     #[test]
@@ -1012,10 +1042,18 @@ mod tests {
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         // todo!() expands to panic!("not yet implemented")
         let fn_item = &result.program.items[0];
-        let ItemKind::Fn(func) = &fn_item.kind else { panic!("expected fn") };
+        let ItemKind::Fn(func) = &fn_item.kind else {
+            panic!("expected fn")
+        };
         let body = &func.body;
-        let StmtKind::TermExpr(expr) = &body.statements[0].kind else { panic!("expected term expr stmt") };
-        assert!(matches!(expr.kind, ExprKind::Call(_)), "expected Call, got {:?}", expr.kind);
+        let StmtKind::TermExpr(expr) = &body.statements[0].kind else {
+            panic!("expected term expr stmt")
+        };
+        assert!(
+            matches!(expr.kind, ExprKind::Call(_)),
+            "expected Call, got {:?}",
+            expr.kind
+        );
     }
 
     #[test]
@@ -1028,7 +1066,12 @@ mod tests {
         let (program, interner) = parse_program(src);
         let result = crate::expand_program(&program, &interner);
         assert!(!result.errors.is_empty(), "expected at least one error");
-        assert!(result.errors.iter().any(|e| matches!(e, ExpandError::UnknownMacro { .. })));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| matches!(e, ExpandError::UnknownMacro { .. }))
+        );
     }
 
     #[test]
@@ -1052,7 +1095,10 @@ mod tests {
         "#;
         let (program, interner) = parse_program(src);
         let result = crate::expand_program(&program, &interner);
-        assert!(!result.errors.is_empty(), "expected error for @test on struct");
+        assert!(
+            !result.errors.is_empty(),
+            "expected error for @test on struct"
+        );
     }
 
     #[test]
@@ -1082,11 +1128,19 @@ mod tests {
         let result = crate::expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         let fn_item = &result.program.items[0];
-        let ItemKind::Fn(func) = &fn_item.kind else { panic!("expected fn") };
+        let ItemKind::Fn(func) = &fn_item.kind else {
+            panic!("expected fn")
+        };
         let body = &func.body;
         assert_eq!(body.statements.len(), 1);
-        let StmtKind::TermExpr(expr) = &body.statements[0].kind else { panic!("expected term expr stmt") };
-        assert!(matches!(expr.kind, ExprKind::Block(_)), "expected Block, got {:?}", expr.kind);
+        let StmtKind::TermExpr(expr) = &body.statements[0].kind else {
+            panic!("expected term expr stmt")
+        };
+        assert!(
+            matches!(expr.kind, ExprKind::Block(_)),
+            "expected Block, got {:?}",
+            expr.kind
+        );
     }
 
     #[test]
@@ -1112,10 +1166,18 @@ mod tests {
         let result = crate::expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         let fn_item = &result.program.items[0];
-        let ItemKind::Fn(func) = &fn_item.kind else { panic!("expected fn") };
+        let ItemKind::Fn(func) = &fn_item.kind else {
+            panic!("expected fn")
+        };
         let body = &func.body;
-        let StmtKind::TermExpr(expr) = &body.statements[0].kind else { panic!("expected term expr stmt") };
-        assert!(matches!(expr.kind, ExprKind::Call(_)), "expected Call, got {:?}", expr.kind);
+        let StmtKind::TermExpr(expr) = &body.statements[0].kind else {
+            panic!("expected term expr stmt")
+        };
+        assert!(
+            matches!(expr.kind, ExprKind::Call(_)),
+            "expected Call, got {:?}",
+            expr.kind
+        );
     }
 
     #[test]
@@ -1128,8 +1190,17 @@ mod tests {
         let result = crate::expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         // Should have: struct Point, impl Clone for Point, impl Copy for Point
-        assert_eq!(result.program.items.len(), 3, "expected 3 items: struct + 2 impls");
-        let impls: Vec<_> = result.program.items.iter().filter(|i| matches!(i.kind, ItemKind::Impl(_))).collect();
+        assert_eq!(
+            result.program.items.len(),
+            3,
+            "expected 3 items: struct + 2 impls"
+        );
+        let impls: Vec<_> = result
+            .program
+            .items
+            .iter()
+            .filter(|i| matches!(i.kind, ItemKind::Impl(_)))
+            .collect();
         assert_eq!(impls.len(), 2, "expected 2 impl items");
     }
 
@@ -1143,9 +1214,20 @@ mod tests {
         let result = crate::expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         assert_eq!(result.program.items.len(), 2);
-        let impl_item = result.program.items.iter().find(|i| matches!(i.kind, ItemKind::Impl(_))).expect("impl");
-        let ItemKind::Impl(impl_block) = &impl_item.kind else { unreachable!() };
-        assert_eq!(impl_block.items.len(), 1, "PartialEq impl should have eq method");
+        let impl_item = result
+            .program
+            .items
+            .iter()
+            .find(|i| matches!(i.kind, ItemKind::Impl(_)))
+            .expect("impl");
+        let ItemKind::Impl(impl_block) = &impl_item.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            impl_block.items.len(),
+            1,
+            "PartialEq impl should have eq method"
+        );
     }
 
     #[test]
@@ -1168,7 +1250,10 @@ mod tests {
         "#;
         let (program, interner) = parse_program(src);
         let result = crate::expand_program(&program, &interner);
-        assert!(!result.errors.is_empty(), "expected error for unsupported derive trait");
+        assert!(
+            !result.errors.is_empty(),
+            "expected error for unsupported derive trait"
+        );
     }
 
     #[test]
@@ -1182,13 +1267,26 @@ mod tests {
         let (program, interner) = parse_program(src);
         let result = crate::expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        assert_eq!(result.program.items.len(), 2, "expected struct + impl Clone");
+        assert_eq!(
+            result.program.items.len(),
+            2,
+            "expected struct + impl Clone"
+        );
 
-        let impl_item = result.program.items.iter()
+        let impl_item = result
+            .program
+            .items
+            .iter()
             .find(|i| matches!(i.kind, ItemKind::Impl(_)))
             .expect("impl Clone expected");
-        let ItemKind::Impl(impl_block) = &impl_item.kind else { unreachable!() };
-        assert_eq!(impl_block.items.len(), 1, "Clone impl should have clone method");
+        let ItemKind::Impl(impl_block) = &impl_item.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            impl_block.items.len(),
+            1,
+            "Clone impl should have clone method"
+        );
 
         let method = &impl_block.items[0];
         let ImplItemKind::Method(fn_def) = &method.item else {
@@ -1203,7 +1301,10 @@ mod tests {
 
         // The expression must be a struct literal, not just a path.
         let ExprKind::Struct(struct_expr) = &expr.kind else {
-            panic!("expected ExprKind::Struct in clone body, got {:?}", expr.kind);
+            panic!(
+                "expected ExprKind::Struct in clone body, got {:?}",
+                expr.kind
+            );
         };
 
         // Path should be `Self`.
@@ -1215,14 +1316,8 @@ mod tests {
 
         // Should have exactly two field assignments.
         assert_eq!(struct_expr.fields.len(), 2, "expected 2 field assignments");
-        assert_eq!(
-            interner.resolve(&struct_expr.fields[0].name.symbol),
-            "x"
-        );
-        assert_eq!(
-            interner.resolve(&struct_expr.fields[1].name.symbol),
-            "y"
-        );
+        assert_eq!(interner.resolve(&struct_expr.fields[0].name.symbol), "x");
+        assert_eq!(interner.resolve(&struct_expr.fields[1].name.symbol), "y");
 
         // Each field value should be a method call (self.field.clone()).
         assert!(
@@ -1245,12 +1340,19 @@ mod tests {
         let result = crate::expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 
-        let impl_item = result.program.items.iter()
+        let impl_item = result
+            .program
+            .items
+            .iter()
             .find(|i| matches!(i.kind, ItemKind::Impl(_)))
             .expect("impl Clone expected");
-        let ItemKind::Impl(impl_block) = &impl_item.kind else { unreachable!() };
+        let ItemKind::Impl(impl_block) = &impl_item.kind else {
+            unreachable!()
+        };
         let method = &impl_block.items[0];
-        let ImplItemKind::Method(fn_def) = &method.item else { panic!("expected method"); };
+        let ImplItemKind::Method(fn_def) = &method.item else {
+            panic!("expected method");
+        };
 
         let StmtKind::TermExpr(expr) = &fn_def.body.statements[0].kind else {
             panic!("expected term expr");

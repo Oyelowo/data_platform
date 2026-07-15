@@ -88,9 +88,9 @@ impl<'tcx> FnCtxt<'tcx> {
     }
 
     pub fn mk_tuple(&self, tys: &[Ty<'tcx>]) -> Ty<'tcx> {
-        let args = self.interner.mk_generic_args(
-            &tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>(),
-        );
+        let args = self
+            .interner
+            .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
         self.mk_ty(TyKind::Tuple(args))
     }
 
@@ -234,7 +234,10 @@ impl<'tcx> FnCtxt<'tcx> {
                 s.label.as_ref().map(|l| l.symbol.as_usize()) == Some(lbl.symbol.as_usize())
             })
         } else {
-            self.breakable_scopes.iter().rev().find(|s| s.kind == BreakableKind::Loop)
+            self.breakable_scopes
+                .iter()
+                .rev()
+                .find(|s| s.kind == BreakableKind::Loop)
         }
     }
 

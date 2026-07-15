@@ -1,7 +1,7 @@
+use crate::fold::{TypeFoldable, TypeFolder};
 use crate::interner::Interner;
 use crate::primitive::IntTy;
 use crate::ty::{Ty, TyKind};
-use crate::fold::{TypeFolder, TypeFoldable};
 
 struct IdentityFolder;
 

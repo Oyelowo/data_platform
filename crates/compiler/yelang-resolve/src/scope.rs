@@ -9,7 +9,7 @@ use crate::{
     module_tree::ModuleTree,
     namespaces::Namespace,
     prelude::Prelude,
-    rib::{Rib, Resolution},
+    rib::{Resolution, Rib},
 };
 
 pub struct Resolver<'a> {

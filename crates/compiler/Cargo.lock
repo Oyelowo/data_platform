@@ -791,6 +791,7 @@ dependencies = [
  "thiserror",
  "yelang-interner",
  "yelang-lexer",
+ "yelang-util",
 ]
 
 [[package]]
@@ -924,6 +925,8 @@ dependencies = [
  "indexmap",
  "rustc-hash",
  "slotmap",
+ "yelang-interner",
+ "yelang-lexer",
 ]
 
 [[package]]

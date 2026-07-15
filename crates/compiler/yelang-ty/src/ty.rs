@@ -609,7 +609,12 @@ mod tests {
             crate::generic::GenericArg::Type(t_i32),
             crate::generic::GenericArg::Type(t_bool),
         ]);
-        let adt = TyKind::Adt(AdtDef { def_id: DefId::new(1) }, args);
+        let adt = TyKind::Adt(
+            AdtDef {
+                def_id: DefId::new(1),
+            },
+            args,
+        );
         let ty = interner.mk_ty(adt);
 
         match ty.kind() {

@@ -371,7 +371,10 @@ mod tests {
 
         table.rollback_to(snap);
         // After rollback, v1 and v2 should be separate again.
-        assert_ne!(table.find_without_compression(v1), table.find_without_compression(v2));
+        assert_ne!(
+            table.find_without_compression(v1),
+            table.find_without_compression(v2)
+        );
     }
 
     #[test]

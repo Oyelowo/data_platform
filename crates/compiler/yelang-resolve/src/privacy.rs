@@ -17,14 +17,16 @@ pub fn check_accessibility(
     name: Symbol,
     span: Span,
 ) -> bool {
-    let Some(def) = resolver.definitions.get(&def_id) else { return true };
+    let Some(def) = resolver.definitions.get(&def_id) else {
+        return true;
+    };
     let def_module = def.parent.unwrap_or(resolver.module_tree.root.def_id);
-    
+
     // Check if the module containing the definition is accessible
     if !is_module_accessible(&resolver.module_tree, def_module, use_module) {
         return false;
     }
-    
+
     // Check the item's specific visibility
     is_item_visible(resolver, def, def_module, use_module)
 }
@@ -36,12 +38,12 @@ fn is_module_accessible(module_tree: &ModuleTree, target: DefId, from: DefId) ->
     if target == from {
         return true;
     }
-    
+
     // Check if `from` is a descendant of `target`
     if is_ancestor_of(module_tree, target, from) {
         return true;
     }
-    
+
     // Check if `from` is the direct parent (defining module) of `target`.
     // In Rust, a parent module can access its private child modules.
     if let Some(node) = module_tree.modules.get(&target) {
@@ -59,7 +61,7 @@ fn is_module_accessible(module_tree: &ModuleTree, target: DefId, from: DefId) ->
             return true;
         }
     }
-    
+
     false
 }
 
@@ -101,7 +103,12 @@ fn is_item_visible(
         }
         Visibility::PublicSuper(_) => {
             // Parent module or descendant of parent
-            if let Some(def_parent) = resolver.module_tree.modules.get(&def_module).and_then(|n| n.parent) {
+            if let Some(def_parent) = resolver
+                .module_tree
+                .modules
+                .get(&def_module)
+                .and_then(|n| n.parent)
+            {
                 def_parent == use_module || is_descendant_of(resolver, use_module, def_parent)
             } else {
                 // Root module has no parent, so pub(super) is same as private
@@ -137,52 +144,65 @@ fn is_descendant_of(resolver: &Resolver, module: DefId, ancestor: DefId) -> bool
 
 /// Resolve a path in `pub(in path)` to a module DefId.
 /// `def_module` is the module where the item with this visibility is defined.
-fn resolve_visibility_path(resolver: &Resolver, path: &yelang_ast::Path, def_module: DefId) -> Option<DefId> {
+fn resolve_visibility_path(
+    resolver: &Resolver,
+    path: &yelang_ast::Path,
+    def_module: DefId,
+) -> Option<DefId> {
     use crate::namespaces::Namespace;
-    
+
     if path.segments.is_empty() {
         return None;
     }
-    
+
     let first = &path.segments[0];
     let first_str = first.ident.as_str(resolver.interner);
-    
+
     let mut current = resolver.module_tree.root.def_id;
-    
+
     if first_str == "crate" {
         current = resolver.module_tree.root.def_id;
     } else if first_str == "self" {
         current = def_module;
     } else if first_str == "super" {
-        current = resolver.module_tree.modules.get(&def_module)
+        current = resolver
+            .module_tree
+            .modules
+            .get(&def_module)
             .and_then(|n| n.parent)
             .unwrap_or(resolver.module_tree.root.def_id);
     } else {
         // Start from the defining module
         current = def_module;
-        let found = resolver.resolve_name_in_module(current, Namespace::Type, first.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol));
+        let found = resolver
+            .resolve_name_in_module(current, Namespace::Type, first.ident.symbol)
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol)
+            });
         match found {
             Some(id) => current = id,
             None => return None,
         }
     }
-    
+
     for seg in &path.segments[1..] {
-        let found = resolver.resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol));
+        let found = resolver
+            .resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol)
+            });
         match found {
             Some(id) => current = id,
             None => return None,
         }
     }
-    
+
     // Verify it's a module
     if let Some(def) = resolver.definitions.get(&current) {
         if matches!(def.kind, DefKind::Module) {
             return Some(current);
         }
     }
-    
+
     None
 }

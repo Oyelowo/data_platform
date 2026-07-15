@@ -75,23 +75,93 @@ impl Prelude {
         add("String", DefKind::TypeAlias, Namespace::Value, None);
 
         add("Box", DefKind::Struct, Namespace::Type, Some(LangItem::Box));
-        add("Box", DefKind::Struct, Namespace::Value, Some(LangItem::Box));
+        add(
+            "Box",
+            DefKind::Struct,
+            Namespace::Value,
+            Some(LangItem::Box),
+        );
 
         // Common traits (type namespace)
-        add("Copy", DefKind::Trait, Namespace::Type, Some(LangItem::Copy));
-        add("Clone", DefKind::Trait, Namespace::Type, Some(LangItem::Clone));
-        add("Default", DefKind::Trait, Namespace::Type, Some(LangItem::Default));
-        add("Debug", DefKind::Trait, Namespace::Type, Some(LangItem::Debug));
-        add("Display", DefKind::Trait, Namespace::Type, Some(LangItem::Display));
-        add("PartialEq", DefKind::Trait, Namespace::Type, Some(LangItem::PartialEq));
+        add(
+            "Copy",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Copy),
+        );
+        add(
+            "Clone",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Clone),
+        );
+        add(
+            "Default",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Default),
+        );
+        add(
+            "Debug",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Debug),
+        );
+        add(
+            "Display",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Display),
+        );
+        add(
+            "PartialEq",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::PartialEq),
+        );
         add("Eq", DefKind::Trait, Namespace::Type, None); // Eq is not a lang item in Rust
-        add("PartialOrd", DefKind::Trait, Namespace::Type, Some(LangItem::PartialOrd));
-        add("Ord", DefKind::Trait, Namespace::Type, Some(LangItem::OrdTrait));
-        add("Iterator", DefKind::Trait, Namespace::Type, Some(LangItem::Iterator));
-        add("IntoIterator", DefKind::Trait, Namespace::Type, Some(LangItem::IntoIterator));
-        add("Send", DefKind::Trait, Namespace::Type, Some(LangItem::Send));
-        add("Sync", DefKind::Trait, Namespace::Type, Some(LangItem::Sync));
-        add("Sized", DefKind::Trait, Namespace::Type, Some(LangItem::Sized));
+        add(
+            "PartialOrd",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::PartialOrd),
+        );
+        add(
+            "Ord",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::OrdTrait),
+        );
+        add(
+            "Iterator",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Iterator),
+        );
+        add(
+            "IntoIterator",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::IntoIterator),
+        );
+        add(
+            "Send",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Send),
+        );
+        add(
+            "Sync",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Sync),
+        );
+        add(
+            "Sized",
+            DefKind::Trait,
+            Namespace::Type,
+            Some(LangItem::Sized),
+        );
 
         // Common functions (value namespace)
         add("drop", DefKind::Fn, Namespace::Value, Some(LangItem::Drop));
@@ -130,5 +200,3 @@ pub fn has_no_implicit_prelude(
             .unwrap_or(false)
     })
 }
-
-

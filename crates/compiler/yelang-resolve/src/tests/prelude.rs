@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 // ============================================================================
 // Prelude resolution tests (Phase 4)
@@ -223,7 +223,10 @@ fn prelude_item_in_nested_module_not_visible_as_qualified() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::NotFound { .. })),
         "expected NotFound for crate::Option: {:?}",
         resolved.errors
     );

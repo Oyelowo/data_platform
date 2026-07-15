@@ -10,6 +10,8 @@ documentation.workspace = true
 doctest = false
 
 [dependencies]
+yelang-lexer = { path = "../yelang-lexer" }
+yelang-interner = { path = "../yelang-interner" }
 fxhash = { workspace = true }
 indexmap = { workspace = true }
 rustc-hash = { workspace = true }

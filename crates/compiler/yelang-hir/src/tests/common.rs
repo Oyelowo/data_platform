@@ -61,7 +61,9 @@ pub fn resolved_with_defs(defs: &[(Symbol, DefKind)]) -> ResolvedCrate {
             visibility: yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
             lang_item: None,
         };
-        let ns = definition.namespace().unwrap_or(yelang_resolve::Namespace::Type);
+        let ns = definition
+            .namespace()
+            .unwrap_or(yelang_resolve::Namespace::Type);
         definitions.insert(def_id, definition);
         root_node.add_item(ns, *name, def_id);
         def_id = DefId::new(def_id.raw() + 1);

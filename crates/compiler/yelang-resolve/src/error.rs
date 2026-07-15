@@ -8,10 +8,7 @@ use crate::namespaces::Namespace;
 #[derive(Error, Debug, Clone)]
 pub enum ResolutionError {
     #[error("cannot find `{name:?}` in this scope")]
-    NotFound {
-        name: Symbol,
-        span: Span,
-    },
+    NotFound { name: Symbol, span: Span },
 
     #[error("`{name:?}` is ambiguous")]
     Ambiguous {
@@ -29,9 +26,7 @@ pub enum ResolutionError {
     },
 
     #[error("circular import")]
-    CircularImport {
-        span: Span,
-    },
+    CircularImport { span: Span },
 
     #[error("`{name:?}` defined multiple times")]
     DuplicateDefinition {
@@ -49,25 +44,16 @@ pub enum ResolutionError {
     },
 
     #[error("unnecessary visibility qualifier")]
-    UnnecessaryVisibility {
-        span: Span,
-    },
+    UnnecessaryVisibility { span: Span },
 
     #[error("cannot find label `{name:?}` in this scope")]
-    LabelError {
-        name: Symbol,
-        span: Span,
-    },
+    LabelError { name: Symbol, span: Span },
 
     #[error("break outside of loop")]
-    BreakOutsideLoop {
-        span: Span,
-    },
+    BreakOutsideLoop { span: Span },
 
     #[error("continue outside of loop")]
-    ContinueOutsideLoop {
-        span: Span,
-    },
+    ContinueOutsideLoop { span: Span },
 
     #[error("duplicate lang item `{lang_item:?}`")]
     DuplicateLangItem {

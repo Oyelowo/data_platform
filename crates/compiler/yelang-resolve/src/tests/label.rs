@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 #[test]
 fn break_without_label_in_loop_ok() {
@@ -107,7 +107,10 @@ fn break_label_not_found() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::LabelError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::LabelError { .. })),
         "expected label error: {:?}",
         resolved.errors
     );
@@ -123,7 +126,10 @@ fn continue_label_not_found() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::LabelError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::LabelError { .. })),
         "expected label error: {:?}",
         resolved.errors
     );
@@ -171,7 +177,10 @@ fn break_outside_loop_error() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::BreakOutsideLoop { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::BreakOutsideLoop { .. })),
         "expected break outside loop error: {:?}",
         resolved.errors
     );
@@ -187,7 +196,10 @@ fn continue_outside_loop_error() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::ContinueOutsideLoop { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::ContinueOutsideLoop { .. })),
         "expected continue outside loop error: {:?}",
         resolved.errors
     );
@@ -266,7 +278,10 @@ fn break_label_not_found_in_block() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::LabelError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::LabelError { .. })),
         "expected label error: {:?}",
         resolved.errors
     );
@@ -298,7 +313,10 @@ fn continue_cannot_target_block() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::LabelError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::LabelError { .. })),
         "expected label error: {:?}",
         resolved.errors
     );

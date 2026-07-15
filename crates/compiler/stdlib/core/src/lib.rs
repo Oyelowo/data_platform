@@ -4,6 +4,6 @@
 //! programs without explicit imports: primitives, memory management hooks,
 //! and platform abstractions.
 
-pub mod primitives;
 pub mod memory;
 pub mod panic;
+pub mod primitives;

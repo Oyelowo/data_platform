@@ -5,12 +5,12 @@
 
 pub mod crate_hir;
 pub mod hir;
+pub mod hir_body;
 pub mod hir_expr;
 pub mod hir_item;
-pub mod hir_ty;
 pub mod hir_pat;
-pub mod hir_body;
 pub mod hir_struct;
+pub mod hir_ty;
 pub mod ids;
 pub mod lowering;
 pub mod lowering_err;
@@ -18,11 +18,11 @@ pub mod map;
 pub mod res;
 pub mod visitor;
 
+pub mod lowering_body;
 pub mod lowering_expr;
 pub mod lowering_item;
-pub mod lowering_ty;
 pub mod lowering_pat;
-pub mod lowering_body;
+pub mod lowering_ty;
 
 #[cfg(test)]
 pub mod tests;

@@ -5,13 +5,13 @@ use yelang_interner::Interner;
 use yelang_lexer::TokenStream;
 use yelang_util::DefId;
 
-use crate::hir::{Expr, ExprKind, Item, Stmt};
-use crate::res::ResolvedCrate;
-use crate::lowering::lower_crate;
-use crate::visitor::{Visitor, walk_crate};
 use crate::crate_hir::Crate;
+use crate::hir::{Expr, ExprKind, Item, Stmt};
 use crate::hir_body::Body;
 use crate::ids::BodyId;
+use crate::lowering::lower_crate;
+use crate::res::ResolvedCrate;
+use crate::visitor::{Visitor, walk_crate};
 
 struct ExprCounter<'hir> {
     count: usize,
@@ -62,7 +62,10 @@ fn visitor_counts_expressions() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let mut counter = ExprCounter { count: 0, crate_hir: &crate_hir };
+    let mut counter = ExprCounter {
+        count: 0,
+        crate_hir: &crate_hir,
+    };
     walk_crate(&mut counter, &crate_hir);
     assert!(counter.count > 0);
 }

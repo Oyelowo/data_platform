@@ -123,19 +123,15 @@ impl<'tcx> InferCtxt<'tcx> {
             (TyKind::Infer(InferTy::TyVar(vid_a)), TyKind::Infer(InferTy::TyVar(vid_b))) => {
                 self.unify_var_var(*vid_a, *vid_b)
             }
-            (TyKind::Infer(InferTy::TyVar(vid)), _other) => {
-                self.unify_var_value(*vid, b)
-            }
-            (_other, TyKind::Infer(InferTy::TyVar(vid))) => {
-                self.unify_var_value(*vid, a)
-            }
+            (TyKind::Infer(InferTy::TyVar(vid)), _other) => self.unify_var_value(*vid, b),
+            (_other, TyKind::Infer(InferTy::TyVar(vid))) => self.unify_var_value(*vid, a),
 
             // Int variables
-            (TyKind::Infer(InferTy::IntVar(vid_a)), TyKind::Infer(InferTy::IntVar(vid_b))) => {
-                self.tables.int_vars.union(*vid_a, *vid_b).map_err(|_| {
-                    TypeError::Custom("int var union failed".into())
-                })
-            }
+            (TyKind::Infer(InferTy::IntVar(vid_a)), TyKind::Infer(InferTy::IntVar(vid_b))) => self
+                .tables
+                .int_vars
+                .union(*vid_a, *vid_b)
+                .map_err(|_| TypeError::Custom("int var union failed".into())),
             (TyKind::Infer(InferTy::IntVar(vid)), TyKind::Int(it)) => {
                 self.unify_int_var_value(*vid, *it)
             }
@@ -145,9 +141,10 @@ impl<'tcx> InferCtxt<'tcx> {
 
             // Float variables
             (TyKind::Infer(InferTy::FloatVar(vid_a)), TyKind::Infer(InferTy::FloatVar(vid_b))) => {
-                self.tables.float_vars.union(*vid_a, *vid_b).map_err(|_| {
-                    TypeError::Custom("float var union failed".into())
-                })
+                self.tables
+                    .float_vars
+                    .union(*vid_a, *vid_b)
+                    .map_err(|_| TypeError::Custom("float var union failed".into()))
             }
             (TyKind::Infer(InferTy::FloatVar(vid)), TyKind::Float(ft)) => {
                 self.unify_float_var_value(*vid, *ft)
@@ -168,15 +165,16 @@ impl<'tcx> InferCtxt<'tcx> {
             // ADT
             (TyKind::Adt(def_a, args_a), TyKind::Adt(def_b, args_b)) => {
                 if def_a.def_id != def_b.def_id {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq_generic_args(args_a, args_b)
             }
 
             // Tuples
-            (TyKind::Tuple(args_a), TyKind::Tuple(args_b)) => {
-                self.eq_generic_args(args_a, args_b)
-            }
+            (TyKind::Tuple(args_a), TyKind::Tuple(args_b)) => self.eq_generic_args(args_a, args_b),
 
             // Arrays
             (TyKind::Array(ty_a, len_a), TyKind::Array(ty_b, len_b)) => {
@@ -185,14 +183,15 @@ impl<'tcx> InferCtxt<'tcx> {
             }
 
             // Slices
-            (TyKind::Slice(ty_a), TyKind::Slice(ty_b)) => {
-                self.eq(*ty_a, *ty_b)
-            }
+            (TyKind::Slice(ty_a), TyKind::Slice(ty_b)) => self.eq(*ty_a, *ty_b),
 
             // Raw pointers
             (TyKind::RawPtr(tam_a), TyKind::RawPtr(tam_b)) => {
                 if tam_a.mutbl != tam_b.mutbl {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq(tam_a.ty, tam_b.ty)
             }
@@ -200,18 +199,22 @@ impl<'tcx> InferCtxt<'tcx> {
             // References
             (TyKind::Ref(ty_a, mut_a), TyKind::Ref(ty_b, mut_b)) => {
                 if mut_a != mut_b {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq(*ty_a, *ty_b)
             }
 
             // Functions
-            (TyKind::FnPtr(sig_a), TyKind::FnPtr(sig_b)) => {
-                self.eq_fn_sigs(&sig_a.sig, &sig_b.sig)
-            }
+            (TyKind::FnPtr(sig_a), TyKind::FnPtr(sig_b)) => self.eq_fn_sigs(&sig_a.sig, &sig_b.sig),
             (TyKind::FnDef(fd_a), TyKind::FnDef(fd_b)) => {
                 if fd_a.def_id != fd_b.def_id {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq_generic_args(&fd_a.args, &fd_b.args)
             }
@@ -230,7 +233,10 @@ impl<'tcx> InferCtxt<'tcx> {
             // Type literals
             (TyKind::TypeLit(sym_a), TyKind::TypeLit(sym_b)) => {
                 if sym_a != sym_b {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 Ok(())
             }
@@ -238,7 +244,10 @@ impl<'tcx> InferCtxt<'tcx> {
             // Utility types
             (TyKind::Utility(kind_a, args_a), TyKind::Utility(kind_b, args_b)) => {
                 if kind_a != kind_b {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq_generic_args(args_a, args_b)
             }
@@ -246,7 +255,10 @@ impl<'tcx> InferCtxt<'tcx> {
             // Aliases (associated types / impl Trait)
             (TyKind::Alias(alias_a), TyKind::Alias(alias_b)) => {
                 if alias_a.def_id != alias_b.def_id {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq_generic_args(&alias_a.args, &alias_b.args)
             }
@@ -259,7 +271,10 @@ impl<'tcx> InferCtxt<'tcx> {
             // Placeholders
             (TyKind::Placeholder(p_a), TyKind::Placeholder(p_b)) => {
                 if p_a != p_b {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 Ok(())
             }
@@ -268,7 +283,10 @@ impl<'tcx> InferCtxt<'tcx> {
             (TyKind::Error, _) | (_, TyKind::Error) => Ok(()),
 
             // Mismatch
-            _ => Err(TypeError::Mismatch { expected: a, found: b }),
+            _ => Err(TypeError::Mismatch {
+                expected: a,
+                found: b,
+            }),
         }
     }
 
@@ -277,21 +295,34 @@ impl<'tcx> InferCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     fn unify_var_var(&mut self, vid_a: TyVid, vid_b: TyVid) -> Result<(), TypeError<'tcx>> {
-        let val_a = self.tables.ty_vars.probe_value_no_compression(vid_a).clone();
-        let val_b = self.tables.ty_vars.probe_value_no_compression(vid_b).clone();
-        self.tables.ty_vars.union(vid_a, vid_b).map_err(|_| {
-            TypeError::Custom("var-var union failed".into())
-        })?;
+        let val_a = self
+            .tables
+            .ty_vars
+            .probe_value_no_compression(vid_a)
+            .clone();
+        let val_b = self
+            .tables
+            .ty_vars
+            .probe_value_no_compression(vid_b)
+            .clone();
+        self.tables
+            .ty_vars
+            .union(vid_a, vid_b)
+            .map_err(|_| TypeError::Custom("var-var union failed".into()))?;
 
         match (&val_a, &val_b) {
             (TypeVarValue::Known(ty_a), TypeVarValue::Known(ty_b)) => {
                 self.eq(*ty_a, *ty_b)?;
             }
             (TypeVarValue::Known(ty), TypeVarValue::Unknown) => {
-                self.tables.ty_vars.set_value(vid_a, TypeVarValue::Known(*ty));
+                self.tables
+                    .ty_vars
+                    .set_value(vid_a, TypeVarValue::Known(*ty));
             }
             (TypeVarValue::Unknown, TypeVarValue::Known(ty)) => {
-                self.tables.ty_vars.set_value(vid_b, TypeVarValue::Known(*ty));
+                self.tables
+                    .ty_vars
+                    .set_value(vid_b, TypeVarValue::Known(*ty));
             }
             (TypeVarValue::Unknown, TypeVarValue::Unknown) => {}
         }
@@ -352,7 +383,9 @@ impl<'tcx> InferCtxt<'tcx> {
                 }
             }
             FloatVarValue::Unknown => {
-                self.tables.float_vars.set_value(root, FloatVarValue::Known(ft));
+                self.tables
+                    .float_vars
+                    .set_value(root, FloatVarValue::Known(ft));
             }
         }
         Ok(())
@@ -381,15 +414,12 @@ impl<'tcx> InferCtxt<'tcx> {
             TyKind::Slice(ty) => self.occurs_check(vid, *ty),
             TyKind::RawPtr(tam) => self.occurs_check(vid, tam.ty),
             TyKind::Ref(ty, _) => self.occurs_check(vid, *ty),
-            TyKind::FnPtr(sig) => sig
-                .sig
-                .inputs
-                .iter()
-                .any(|arg| match arg {
+            TyKind::FnPtr(sig) => {
+                sig.sig.inputs.iter().any(|arg| match arg {
                     GenericArg::Type(t) => self.occurs_check(vid, *t),
                     GenericArg::Const(_) => false,
-                })
-                || self.occurs_check(vid, sig.sig.output),
+                }) || self.occurs_check(vid, sig.sig.output)
+            }
             TyKind::FnDef(fd) => fd.args.iter().any(|arg| match arg {
                 GenericArg::Type(t) => self.occurs_check(vid, *t),
                 GenericArg::Const(_) => false,
@@ -441,11 +471,7 @@ impl<'tcx> InferCtxt<'tcx> {
             match (arg_a, arg_b) {
                 (GenericArg::Type(ta), GenericArg::Type(tb)) => self.eq(*ta, *tb)?,
                 (GenericArg::Const(ca), GenericArg::Const(cb)) => self.eq_const(*ca, *cb)?,
-                _ => {
-                    return Err(TypeError::Custom(
-                        "generic argument kind mismatch".into(),
-                    ))
-                }
+                _ => return Err(TypeError::Custom("generic argument kind mismatch".into())),
             }
         }
         Ok(())
@@ -522,7 +548,9 @@ impl<'tcx> InferCtxt<'tcx> {
                 }
                 Ok(())
             }
-            _ => Err(TypeError::Custom("existential predicate kind mismatch".into())),
+            _ => Err(TypeError::Custom(
+                "existential predicate kind mismatch".into(),
+            )),
         }
     }
 }

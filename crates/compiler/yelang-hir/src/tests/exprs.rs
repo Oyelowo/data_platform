@@ -1,12 +1,14 @@
 //! Exhaustive tests for AST expression -> HIR expression lowering.
 
-use crate::hir::{ExprKind, ItemKind, StmtKind, CaptureClause};
+use crate::hir::{CaptureClause, ExprKind, ItemKind, StmtKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
 fn get_body_expr(crate_hir: &crate::Crate) -> &crate::hir::Expr {
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { body, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     let body = crate_hir.bodies.get(body).unwrap();
     &body.value
 }
@@ -22,7 +24,9 @@ fn lower_int_literal() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Lit { .. }));
 }
@@ -34,7 +38,9 @@ fn lower_string_literal() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Lit { .. }));
 }
@@ -46,7 +52,9 @@ fn lower_bool_literal() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Lit { .. }));
 }
@@ -62,7 +70,9 @@ fn lower_path_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Path { .. }));
 }
@@ -78,7 +88,9 @@ fn lower_binary_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Binary { .. }));
 }
@@ -90,7 +102,9 @@ fn lower_unary_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Unary { .. }));
 }
@@ -106,7 +120,9 @@ fn lower_call_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Call { .. }));
 }
@@ -118,7 +134,9 @@ fn lower_method_call_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::MethodCall { .. }));
 }
@@ -134,7 +152,9 @@ fn lower_struct_literal_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Struct { .. }));
 }
@@ -146,7 +166,9 @@ fn lower_tuple_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Tuple { .. }));
 }
@@ -158,7 +180,9 @@ fn lower_array_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Array { .. }));
 }
@@ -170,7 +194,9 @@ fn lower_index_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Index { .. }));
 }
@@ -186,7 +212,9 @@ fn lower_field_access_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Field { .. }));
 }
@@ -202,7 +230,9 @@ fn lower_if_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::If { .. }));
 }
@@ -221,7 +251,9 @@ fn lower_match_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Match { .. }));
 }
@@ -233,7 +265,9 @@ fn lower_loop_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Loop { .. }));
 }
@@ -245,7 +279,9 @@ fn lower_while_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     // While is desugared to Loop
     assert!(matches!(tail.kind, ExprKind::Loop { .. }));
@@ -258,7 +294,9 @@ fn lower_for_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     // For is desugared to Loop
     assert!(matches!(tail.kind, ExprKind::Loop { .. }));
@@ -271,11 +309,21 @@ fn lower_break_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
-    let ExprKind::Loop { block: loop_block, .. } = &tail.kind else { panic!("expected loop") };
+    let ExprKind::Loop {
+        block: loop_block, ..
+    } = &tail.kind
+    else {
+        panic!("expected loop")
+    };
     // `break` without semicolon is the trailing expression of the loop block.
-    let break_expr = loop_block.expr.as_ref().expect("expected tail expr in loop");
+    let break_expr = loop_block
+        .expr
+        .as_ref()
+        .expect("expected tail expr in loop");
     assert!(matches!(break_expr.kind, ExprKind::Break { .. }));
 }
 
@@ -286,11 +334,21 @@ fn lower_continue_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
-    let ExprKind::Loop { block: loop_block, .. } = &tail.kind else { panic!("expected loop") };
+    let ExprKind::Loop {
+        block: loop_block, ..
+    } = &tail.kind
+    else {
+        panic!("expected loop")
+    };
     // `continue` without semicolon is the trailing expression of the loop block.
-    let cont_expr = loop_block.expr.as_ref().expect("expected tail expr in loop");
+    let cont_expr = loop_block
+        .expr
+        .as_ref()
+        .expect("expected tail expr in loop");
     assert!(matches!(cont_expr.kind, ExprKind::Continue { .. }));
 }
 
@@ -301,7 +359,9 @@ fn lower_return_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Return { .. }));
 }
@@ -317,7 +377,9 @@ fn lower_let_stmt() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let stmt = block.stmts.first().expect("expected stmt");
     assert!(matches!(stmt.kind, StmtKind::Let { .. }));
 }
@@ -329,8 +391,12 @@ fn lower_let_with_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
-    let StmtKind::Let { ty, .. } = &block.stmts[0].kind else { panic!("expected let") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
+    let StmtKind::Let { ty, .. } = &block.stmts[0].kind else {
+        panic!("expected let")
+    };
     assert!(ty.is_some());
 }
 
@@ -345,7 +411,9 @@ fn lower_closure_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Closure { .. }));
 }
@@ -357,7 +425,9 @@ fn lower_closure_expr_with_return_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Closure { .. }));
 }
@@ -373,9 +443,13 @@ fn lower_await_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { body, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     let body = crate_hir.bodies.get(body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &body.value.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     // Await is currently lowered as the base expression (simplified desugaring).
     assert!(matches!(tail.kind, ExprKind::Call { .. }));
@@ -388,7 +462,9 @@ fn lower_try_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     // Try is desugared to match
     assert!(matches!(tail.kind, ExprKind::Match { .. }));
@@ -405,7 +481,9 @@ fn lower_range_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     // Range is desugared to a Call to a synthetic range constructor.
     assert!(matches!(tail.kind, ExprKind::Call { .. }));
@@ -422,7 +500,9 @@ fn lower_assign_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Assign { .. }));
 }
@@ -434,7 +514,9 @@ fn lower_compound_assign_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     // Compound assign is desugared to binary + assign
     assert!(matches!(tail.kind, ExprKind::Assign { .. }));
@@ -451,7 +533,9 @@ fn lower_block_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let expr = get_body_expr(&crate_hir);
-    let ExprKind::Block { block, .. } = &expr.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &expr.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
     assert!(matches!(tail.kind, ExprKind::Block { .. }));
 }

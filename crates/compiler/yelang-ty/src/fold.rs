@@ -121,9 +121,7 @@ impl<'tcx> TypeFoldable<'tcx> for crate::generic::GenericArg<'tcx> {
             crate::generic::GenericArg::Type(ty) => {
                 crate::generic::GenericArg::Type(ty.fold_with(folder))
             }
-            crate::generic::GenericArg::Const(ct) => {
-                crate::generic::GenericArg::Const(ct)
-            }
+            crate::generic::GenericArg::Const(ct) => crate::generic::GenericArg::Const(ct),
         }
     }
 }

@@ -1,12 +1,12 @@
+use yelang_ast::item::{Const, Enum, Impl, Static, Struct, Trait, TypeAlias};
 use yelang_ast::{
     Array, AssignEqExpr, AssignOpExpr, AsyncExpr, BinaryExpr, BlockExpr, BreakExpr, CallExpr,
-    ComprehensionExpr, ContinueExpr, DestructureAssignExpr, DocumentAccess, Expr, ExprKind, FieldDef,
-    FnDef, ForLoopExpr, GroupedExpr, Ident, IfExpr, IsTypeExpr, Item, ItemKind, LambdaExpr, LetExpr,
-    LetStmt, Literal, LoopExpr, MatchExpr, MemberAccess, MethodCallExpr, ModKind, Object, Param,
-    Pattern, PatternKind, Path, Program, RangeExpr, Stmt, StmtKind, StructExpr, TupleExpr, Type,
-    TypeKind, UnaryExpr, WhileExpr,
+    ComprehensionExpr, ContinueExpr, DestructureAssignExpr, DocumentAccess, Expr, ExprKind,
+    FieldDef, FnDef, ForLoopExpr, GroupedExpr, Ident, IfExpr, IsTypeExpr, Item, ItemKind,
+    LambdaExpr, LetExpr, LetStmt, Literal, LoopExpr, MatchExpr, MemberAccess, MethodCallExpr,
+    ModKind, Object, Param, Path, Pattern, PatternKind, Program, RangeExpr, Stmt, StmtKind,
+    StructExpr, TupleExpr, Type, TypeKind, UnaryExpr, WhileExpr,
 };
-use yelang_ast::item::{Const, Enum, Impl, Static, Struct, Trait, TypeAlias};
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 use yelang_util::DefId;
@@ -356,19 +356,17 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                     self.resolve_expr(rest);
                 }
             }
-            ExprKind::Array(array) => {
-                match &array.kind {
-                    yelang_ast::ArrayKind::List(elements) => {
-                        for elem in elements {
-                            self.resolve_expr(elem);
-                        }
-                    }
-                    yelang_ast::ArrayKind::Repeat { value, count } => {
-                        self.resolve_expr(value);
-                        self.resolve_expr(count);
+            ExprKind::Array(array) => match &array.kind {
+                yelang_ast::ArrayKind::List(elements) => {
+                    for elem in elements {
+                        self.resolve_expr(elem);
                     }
                 }
-            }
+                yelang_ast::ArrayKind::Repeat { value, count } => {
+                    self.resolve_expr(value);
+                    self.resolve_expr(count);
+                }
+            },
             ExprKind::Object(obj) => {
                 for field in &obj.fields {
                     self.resolve_expr(field.value());
@@ -489,18 +487,8 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             }
             ExprKind::MacroInvocation(inv) => {
                 self.resolve_value_path(&inv.path);
-                match &inv.args {
-                    yelang_ast::MacroArgs::Paren(exprs) | yelang_ast::MacroArgs::Bracket(exprs) => {
-                        for e in exprs {
-                            self.resolve_expr(e);
-                        }
-                    }
-                    yelang_ast::MacroArgs::Brace(stmts) => {
-                        for s in stmts {
-                            self.resolve_stmt(s);
-                        }
-                    }
-                }
+                // Arguments are raw tokens; they are resolved after macro expansion
+                // produces ordinary AST nodes.
             }
             ExprKind::Err => {}
             ExprKind::Dummy => {}
@@ -601,9 +589,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     fn resolve_pattern(&mut self, pattern: &Pattern) {
         match &pattern.pattern {
             PatternKind::Binding {
-                name,
-                subpattern,
-                ..
+                name, subpattern, ..
             } => {
                 if let Some(sub) = subpattern {
                     self.resolve_pattern(sub);
@@ -722,18 +708,18 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                     self.resolve_type(t);
                 }
             }
-            TypeKind::Operator(op) => {
-                match op {
-                    yelang_ast::TypeOperator::TypeOf(expr) => self.resolve_expr(expr),
-                    yelang_ast::TypeOperator::ReturnType(ty) | yelang_ast::TypeOperator::Parameters(ty) => {
-                        self.resolve_type(ty);
-                    }
-                    yelang_ast::TypeOperator::Pick(base, keys) | yelang_ast::TypeOperator::Omit(base, keys) => {
-                        self.resolve_type(base);
-                        self.resolve_type(keys);
-                    }
+            TypeKind::Operator(op) => match op {
+                yelang_ast::TypeOperator::TypeOf(expr) => self.resolve_expr(expr),
+                yelang_ast::TypeOperator::ReturnType(ty)
+                | yelang_ast::TypeOperator::Parameters(ty) => {
+                    self.resolve_type(ty);
                 }
-            }
+                yelang_ast::TypeOperator::Pick(base, keys)
+                | yelang_ast::TypeOperator::Omit(base, keys) => {
+                    self.resolve_type(base);
+                    self.resolve_type(keys);
+                }
+            },
             TypeKind::ImplTrait(path) | TypeKind::DynTrait(path) => {
                 self.resolve_type_path(path);
             }
@@ -748,7 +734,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         } else if !path.segments.is_empty() {
             let name = path.segments[0].ident.symbol;
             let span = path.span;
-            self.resolver.errors.push(ResolutionError::NotFound { name, span });
+            self.resolver
+                .errors
+                .push(ResolutionError::NotFound { name, span });
         }
     }
 
@@ -759,7 +747,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         } else if !path.segments.is_empty() {
             let name = path.segments[0].ident.symbol;
             let span = path.span;
-            self.resolver.errors.push(ResolutionError::NotFound { name, span });
+            self.resolver
+                .errors
+                .push(ResolutionError::NotFound { name, span });
         }
     }
 
@@ -776,8 +766,17 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             if !path.segments.is_empty() {
                 let name = path.segments.last().unwrap().ident.symbol;
                 let span = path.span;
-                if !crate::privacy::check_accessibility(self.resolver, *def_id, self.resolver.current_module, name, span) {
-                    let def_module = self.resolver.definitions.get(def_id)
+                if !crate::privacy::check_accessibility(
+                    self.resolver,
+                    *def_id,
+                    self.resolver.current_module,
+                    name,
+                    span,
+                ) {
+                    let def_module = self
+                        .resolver
+                        .definitions
+                        .get(def_id)
                         .and_then(|d| d.parent)
                         .unwrap_or(self.resolver.module_tree.root.def_id);
                     self.resolver.errors.push(ResolutionError::PrivacyError {
@@ -844,7 +843,11 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     }
 
     fn push_breakable(&mut self, label: Option<Symbol>, is_loop: bool, span: Span) {
-        self.breakable_stack.push(BreakableScope { label, is_loop, span });
+        self.breakable_stack.push(BreakableScope {
+            label,
+            is_loop,
+            span,
+        });
     }
 
     fn pop_breakable(&mut self) {
@@ -865,9 +868,11 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 });
             }
         } else if self.breakable_stack.is_empty() {
-            self.resolver.errors.push(ResolutionError::BreakOutsideLoop {
-                span: break_expr.span,
-            });
+            self.resolver
+                .errors
+                .push(ResolutionError::BreakOutsideLoop {
+                    span: break_expr.span,
+                });
         }
     }
 
@@ -882,9 +887,11 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 });
             }
         } else if !self.breakable_stack.iter().any(|s| s.is_loop) {
-            self.resolver.errors.push(ResolutionError::ContinueOutsideLoop {
-                span: continue_expr.span,
-            });
+            self.resolver
+                .errors
+                .push(ResolutionError::ContinueOutsideLoop {
+                    span: continue_expr.span,
+                });
         }
     }
 

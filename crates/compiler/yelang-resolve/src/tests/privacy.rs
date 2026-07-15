@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 #[test]
 fn debug_pub_const() {
@@ -11,7 +11,7 @@ fn debug_pub_const() {
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    
+
     println!("Errors: {:?}", resolved.errors);
     println!("\nModule tree:");
     for (id, node) in &resolved.module_tree.modules {
@@ -27,10 +27,16 @@ fn debug_pub_const() {
             }
         }
     }
-    
+
     println!("\nDefinitions:");
     for (id, def) in &resolved.definitions {
-        println!("Def {:?}: {} (kind: {:?}, parent: {:?})", id, def.name.as_str(&interner), def.kind, def.parent);
+        println!(
+            "Def {:?}: {} (kind: {:?}, parent: {:?})",
+            id,
+            def.name.as_str(&interner),
+            def.kind,
+            def.parent
+        );
     }
 }
 
@@ -60,7 +66,10 @@ fn private_fn_not_accessible_from_sibling_module() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -80,7 +89,10 @@ fn pub_fn_not_accessible_through_private_module_from_sibling() {
     let resolved = resolve_crate(&program, &interner);
     // Module `foo` is private, so `foo::bar` is not accessible from `baz` (sibling).
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -143,7 +155,10 @@ fn pub_super_not_accessible_from_sibling() {
     let resolved = resolve_crate(&program, &interner);
     // `pub(super)` is only visible from parent, not from sibling `baz`.
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -161,7 +176,10 @@ fn pub_self_same_as_private() {
     let resolved = resolve_crate(&program, &interner);
     // `pub(self)` is only visible within `foo` itself.
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -192,7 +210,10 @@ fn pub_in_path_not_accessible_outside_target() {
     let resolved = resolve_crate(&program, &interner);
     // `pub(in self)` is only visible within `foo`.
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -227,7 +248,10 @@ fn enum_variants_inherit_private_visibility() {
     let resolved = resolve_crate(&program, &interner);
     // Private enum variants are not accessible from outside.
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -259,7 +283,10 @@ fn private_struct_not_accessible_from_sibling() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -277,7 +304,10 @@ fn import_of_private_item_fails() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -327,7 +357,10 @@ fn glob_import_respects_privacy() {
     let (program2, interner2) = parse_program(src2);
     let resolved2 = resolve_crate(&program2, &interner2);
     assert!(
-        resolved2.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        resolved2
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::NotFound { .. })),
         "expected NotFound for baz: {:?}",
         resolved2.errors
     );
@@ -362,7 +395,10 @@ fn private_module_breaks_chain() {
     let resolved = resolve_crate(&program, &interner);
     // `inner` is private, so `outer::inner::deep()` should fail.
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );
@@ -394,7 +430,10 @@ fn private_const_not_accessible_from_sibling() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected privacy error: {:?}",
         resolved.errors
     );

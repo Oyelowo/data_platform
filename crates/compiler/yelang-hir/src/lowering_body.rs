@@ -3,11 +3,11 @@
 use yelang_ast::{BlockExpr, Expr as AstExpr};
 use yelang_lexer::Span;
 
-use crate::ids::BodyId;
-use crate::hir::{Expr, ExprKind, Stmt, StmtKind, Block};
+use crate::hir::{Block, Expr, ExprKind, Stmt, StmtKind};
 use crate::hir_body::Body;
 use crate::hir_pat::Pat;
 use crate::hir_ty::Ty;
+use crate::ids::BodyId;
 use crate::lowering::LoweringContext;
 
 /// Lower a `BlockExpr` into a standalone `Body` and register it in the crate.

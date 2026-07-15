@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 #[test]
 fn resolve_fn_call() {

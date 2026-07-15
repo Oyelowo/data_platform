@@ -1,23 +1,19 @@
 //! Lowering of AST expressions to HIR expressions.
 
 use yelang_ast::{
-    Expr as AstExpr, ExprKind as AstExprKind,
-    BinaryExpr, UnaryExpr, CallExpr, IfExpr, ForLoopExpr, WhileExpr,
-    LoopExpr, MatchExpr, BreakExpr, ContinueExpr,
-    BlockExpr, StructExpr, FieldAssign,
-    Label,
+    BinaryExpr, BlockExpr, BreakExpr, CallExpr, ContinueExpr, Expr as AstExpr,
+    ExprKind as AstExprKind, FieldAssign, ForLoopExpr, IfExpr, Label, LoopExpr, MatchExpr,
+    StructExpr, UnaryExpr, WhileExpr,
 };
 use yelang_lexer::Span;
 
 use yelang_util::DefId;
 
-use crate::ids::{BodyId, HirId};
-use crate::hir::{
-    Arm, Block, CaptureClause, Expr, ExprKind, FieldExpr, Stmt, StmtKind,
-};
+use crate::hir::{Arm, Block, CaptureClause, Expr, ExprKind, FieldExpr, Stmt, StmtKind};
 use crate::hir_item::Item;
 use crate::hir_pat::Pat;
 use crate::hir_ty::Ty;
+use crate::ids::{BodyId, HirId};
 use crate::lowering::LoweringContext;
 use crate::lowering_err::LoweringError;
 use crate::res::Res;
@@ -68,7 +64,10 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
         AstExprKind::Match(match_expr) => lower_match_expr(ctx, match_expr),
         AstExprKind::Break(break_expr) => ExprKind::Break {
             label: break_expr.label.clone(),
-            expr: break_expr.value.as_ref().map(|e| Box::new(lower_expr(ctx, e))),
+            expr: break_expr
+                .value
+                .as_ref()
+                .map(|e| Box::new(lower_expr(ctx, e))),
         },
         AstExprKind::Continue(cont) => ExprKind::Continue {
             label: cont.label.clone(),
@@ -112,7 +111,10 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                         hir_id: ctx.next_hir_id(),
                         kind: ExprKind::Err,
                         span,
-                        ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
+                        ty: Ty {
+                            kind: crate::hir_ty::TyKind::Infer,
+                            span,
+                        },
                     };
                 }
             };
@@ -133,10 +135,14 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
         AstExprKind::MethodCall(method) => ExprKind::MethodCall {
             receiver: Box::new(lower_expr(ctx, &method.receiver)),
             method: method.segment.ident,
-            args: method.arguments.iter().map(|arg| match arg {
-                yelang_ast::CallArgument::Positional(e) => lower_expr(ctx, e),
-                yelang_ast::CallArgument::Named(_, e) => lower_expr(ctx, e),
-            }).collect(),
+            args: method
+                .arguments
+                .iter()
+                .map(|arg| match arg {
+                    yelang_ast::CallArgument::Positional(e) => lower_expr(ctx, e),
+                    yelang_ast::CallArgument::Named(_, e) => lower_expr(ctx, e),
+                })
+                .collect(),
             trait_def_id: None,
         },
         AstExprKind::Try(try_expr) => {
@@ -155,14 +161,20 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                 hir_id: ctx.next_hir_id(),
                 kind: ExprKind::Block { block: body },
                 span,
-                ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
+                ty: Ty {
+                    kind: crate::hir_ty::TyKind::Infer,
+                    span,
+                },
             };
             let body_id = ctx.next_body_id();
-            ctx.crate_hir.bodies.insert(body_id, crate::hir_body::Body {
-                params: vec![],
-                value: body_expr,
-                span,
-            });
+            ctx.crate_hir.bodies.insert(
+                body_id,
+                crate::hir_body::Body {
+                    params: vec![],
+                    value: body_expr,
+                    span,
+                },
+            );
             ExprKind::Closure {
                 params: vec![],
                 body: body_id,
@@ -188,7 +200,10 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     hir_id: ctx.next_hir_id(),
                     kind: ExprKind::Path { res: Res::Err },
                     span,
-                    ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
+                    ty: Ty {
+                        kind: crate::hir_ty::TyKind::Infer,
+                        span,
+                    },
                 }),
                 args: vec![lower_expr(ctx, &is_type.expr)],
             }
@@ -204,7 +219,10 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     right: Box::new(lower_expr(ctx, &assign.value)),
                 },
                 span,
-                ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
+                ty: Ty {
+                    kind: crate::hir_ty::TyKind::Infer,
+                    span,
+                },
             };
             ExprKind::Assign {
                 left: Box::new(lower_expr(ctx, &assign.target)),
@@ -219,42 +237,64 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     hir_id: ctx.next_hir_id(),
                     kind: ExprKind::Path { res: Res::Err },
                     span,
-                    ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
+                    ty: Ty {
+                        kind: crate::hir_ty::TyKind::Infer,
+                        span,
+                    },
                 }),
                 right: Box::new(lower_expr(ctx, &assign.value)),
             }
         }
-        AstExprKind::Range(range) => {
-            ExprKind::Call {
-                func: Box::new(Expr {
-                    hir_id: ctx.next_hir_id(),
-                    kind: ExprKind::Path { res: Res::Err },
+        AstExprKind::Range(range) => ExprKind::Call {
+            func: Box::new(Expr {
+                hir_id: ctx.next_hir_id(),
+                kind: ExprKind::Path { res: Res::Err },
+                span,
+                ty: Ty {
+                    kind: crate::hir_ty::TyKind::Infer,
                     span,
-                    ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
-                }),
-                args: vec![
-                    range.start.as_ref().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| Expr {
+                },
+            }),
+            args: vec![
+                range
+                    .start
+                    .as_ref()
+                    .map(|e| lower_expr(ctx, e))
+                    .unwrap_or_else(|| Expr {
                         hir_id: ctx.next_hir_id(),
                         kind: ExprKind::Tuple { exprs: vec![] },
                         span,
-                        ty: Ty { kind: crate::hir_ty::TyKind::Tuple { tys: vec![] }, span },
+                        ty: Ty {
+                            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
+                            span,
+                        },
                     }),
-                    range.end.as_ref().map(|e| lower_expr(ctx, e)).unwrap_or_else(|| Expr {
+                range
+                    .end
+                    .as_ref()
+                    .map(|e| lower_expr(ctx, e))
+                    .unwrap_or_else(|| Expr {
                         hir_id: ctx.next_hir_id(),
                         kind: ExprKind::Tuple { exprs: vec![] },
                         span,
-                        ty: Ty { kind: crate::hir_ty::TyKind::Tuple { tys: vec![] }, span },
+                        ty: Ty {
+                            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
+                            span,
+                        },
                     }),
-                ],
-            }
-        }
+            ],
+        },
         AstExprKind::Object(obj) => {
             // Lower object literal to a struct literal with an anonymous type.
-            let fields: Vec<FieldExpr> = obj.fields().iter().map(|f| FieldExpr {
-                ident: *f.key(),
-                expr: lower_expr(ctx, f.value()),
-                span: f.value().span,
-            }).collect();
+            let fields: Vec<FieldExpr> = obj
+                .fields()
+                .iter()
+                .map(|f| FieldExpr {
+                    ident: *f.key(),
+                    expr: lower_expr(ctx, f.value()),
+                    span: f.value().span,
+                })
+                .collect();
             ExprKind::Struct {
                 path: Res::Err,
                 fields,
@@ -268,7 +308,10 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     hir_id: ctx.next_hir_id(),
                     kind: ExprKind::Path { res: Res::Err },
                     span,
-                    ty: Ty { kind: crate::hir_ty::TyKind::Infer, span },
+                    ty: Ty {
+                        kind: crate::hir_ty::TyKind::Infer,
+                        span,
+                    },
                 }),
                 args: vec![lower_expr(ctx, doc.base())],
             }
@@ -366,15 +409,27 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
 
     // Handle path anchors.
     let (mut current, start_idx) = if path.is_absolute {
-        let def_id = ctx.resolved.module_tree.modules.get(&ctx.resolved.module_tree.root.def_id)
-            .and_then(|m| m.get_item(Namespace::Type, first.ident.symbol)
-                .or_else(|| m.get_item(Namespace::Value, first.ident.symbol)))?;
+        let def_id = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&ctx.resolved.module_tree.root.def_id)
+            .and_then(|m| {
+                m.get_item(Namespace::Type, first.ident.symbol)
+                    .or_else(|| m.get_item(Namespace::Value, first.ident.symbol))
+            })?;
         (def_id, 1)
     } else if first_str == "crate" {
         let second = path.segments.get(1)?;
-        let def_id = ctx.resolved.module_tree.modules.get(&ctx.resolved.module_tree.root.def_id)
-            .and_then(|m| m.get_item(Namespace::Type, second.ident.symbol)
-                .or_else(|| m.get_item(Namespace::Value, second.ident.symbol)))?;
+        let def_id = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&ctx.resolved.module_tree.root.def_id)
+            .and_then(|m| {
+                m.get_item(Namespace::Type, second.ident.symbol)
+                    .or_else(|| m.get_item(Namespace::Value, second.ident.symbol))
+            })?;
         current_module = ctx.resolved.module_tree.root.def_id;
         (def_id, 2)
     } else if first_str == "self" {
@@ -382,31 +437,59 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
             return None;
         }
         let second = path.segments.get(1)?;
-        let def_id = ctx.resolved.module_tree.modules.get(&current_module)
-            .and_then(|m| m.get_item(Namespace::Type, second.ident.symbol)
-                .or_else(|| m.get_item(Namespace::Value, second.ident.symbol)))?;
+        let def_id = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&current_module)
+            .and_then(|m| {
+                m.get_item(Namespace::Type, second.ident.symbol)
+                    .or_else(|| m.get_item(Namespace::Value, second.ident.symbol))
+            })?;
         (def_id, 2)
     } else if first_str == "super" {
-        let module = ctx.resolved.module_tree.modules.get(&ctx.current_module)
+        let module = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&ctx.current_module)
             .and_then(|m| m.parent)
             .unwrap_or(ctx.resolved.module_tree.root.def_id);
         let second = path.segments.get(1)?;
-        let def_id = ctx.resolved.module_tree.modules.get(&module)
-            .and_then(|m| m.get_item(Namespace::Type, second.ident.symbol)
-                .or_else(|| m.get_item(Namespace::Value, second.ident.symbol)))?;
+        let def_id = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&module)
+            .and_then(|m| {
+                m.get_item(Namespace::Type, second.ident.symbol)
+                    .or_else(|| m.get_item(Namespace::Value, second.ident.symbol))
+            })?;
         current_module = module;
         (def_id, 2)
     } else {
-        let def_id = ctx.resolved.module_tree.modules.get(&current_module)
-            .and_then(|m| m.get_item(Namespace::Value, first.ident.symbol)
-                .or_else(|| m.get_item(Namespace::Type, first.ident.symbol)))?;
+        let def_id = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&current_module)
+            .and_then(|m| {
+                m.get_item(Namespace::Value, first.ident.symbol)
+                    .or_else(|| m.get_item(Namespace::Type, first.ident.symbol))
+            })?;
         (def_id, 1)
     };
 
     for seg in &path.segments[start_idx..] {
-        let next = ctx.resolved.module_tree.modules.get(&current)
-            .and_then(|m| m.get_item(Namespace::Value, seg.ident.symbol)
-                .or_else(|| m.get_item(Namespace::Type, seg.ident.symbol)))?;
+        let next = ctx
+            .resolved
+            .module_tree
+            .modules
+            .get(&current)
+            .and_then(|m| {
+                m.get_item(Namespace::Value, seg.ident.symbol)
+                    .or_else(|| m.get_item(Namespace::Type, seg.ident.symbol))
+            })?;
         current = next;
     }
 
@@ -456,7 +539,10 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
         },
         yelang_ast::StmtKind::Let(let_stmt) => StmtKind::Let {
             pat: crate::lowering_pat::lower_pat(ctx, &let_stmt.pattern),
-            ty: let_stmt.ty.as_ref().map(|ty| crate::lowering_ty::lower_ty(ctx, ty)),
+            ty: let_stmt
+                .ty
+                .as_ref()
+                .map(|ty| crate::lowering_ty::lower_ty(ctx, ty)),
             init: let_stmt.init.as_ref().map(|e| Box::new(lower_expr(ctx, e))),
         },
         yelang_ast::StmtKind::Item(item) => {
@@ -509,7 +595,11 @@ fn lower_while_expr(ctx: &mut LoweringContext, while_expr: &WhileExpr) -> ExprKi
     let body_expr = Expr {
         hir_id: ctx.next_hir_id(),
         kind: ExprKind::Block { block: body },
-        span: while_expr.body.label.as_ref().map_or(Span::default(), |l| l.span),
+        span: while_expr
+            .body
+            .label
+            .as_ref()
+            .map_or(Span::default(), |l| l.span),
         ty: Ty {
             kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
             span: Span::default(),
@@ -613,7 +703,11 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> ExprKind
     let body_expr = Expr {
         hir_id: ctx.next_hir_id(),
         kind: ExprKind::Block { block: body_block },
-        span: for_expr.body.label.as_ref().map_or(Span::default(), |l| l.span),
+        span: for_expr
+            .body
+            .label
+            .as_ref()
+            .map_or(Span::default(), |l| l.span),
         ty: Ty {
             kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
             span: Span::default(),
@@ -656,7 +750,11 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> ExprKind
 
     let iter_path = Expr {
         hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Path { res: Res::Local { hir_id: iter_pat_hir_id } },
+        kind: ExprKind::Path {
+            res: Res::Local {
+                hir_id: iter_pat_hir_id,
+            },
+        },
         span: for_expr.pat.span,
         ty: Ty {
             kind: crate::hir_ty::TyKind::Infer,
@@ -706,14 +804,21 @@ fn lower_if_expr(ctx: &mut LoweringContext, if_expr: &IfExpr) -> ExprKind {
         kind: ExprKind::Block {
             block: lower_block(ctx, &if_expr.then_block),
         },
-        span: if_expr.then_block.label.as_ref().map_or(Span::default(), |l| l.span),
+        span: if_expr
+            .then_block
+            .label
+            .as_ref()
+            .map_or(Span::default(), |l| l.span),
         ty: Ty {
             kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
             span: Span::default(),
         },
     });
 
-    let else_branch = if_expr.else_expr.as_ref().map(|e| Box::new(lower_expr(ctx, e)));
+    let else_branch = if_expr
+        .else_expr
+        .as_ref()
+        .map(|e| Box::new(lower_expr(ctx, e)));
 
     ExprKind::If {
         cond: Box::new(cond),
@@ -756,7 +861,10 @@ fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> Exp
     ExprKind::Struct {
         path: res,
         fields,
-        rest: struct_expr.rest.as_ref().map(|e| Box::new(lower_expr(ctx, e))),
+        rest: struct_expr
+            .rest
+            .as_ref()
+            .map(|e| Box::new(lower_expr(ctx, e))),
     }
 }
 
@@ -833,7 +941,9 @@ fn lower_try_expr(
     let ok_body = Expr {
         hir_id: ctx.next_hir_id(),
         kind: ExprKind::Path {
-            res: Res::Local { hir_id: ok_pat.hir_id },
+            res: Res::Local {
+                hir_id: ok_pat.hir_id,
+            },
         },
         span,
         ty: Ty {
@@ -859,7 +969,9 @@ fn lower_try_expr(
                     args: vec![Expr {
                         hir_id: ctx.next_hir_id(),
                         kind: ExprKind::Path {
-                            res: Res::Local { hir_id: err_pat.hir_id },
+                            res: Res::Local {
+                                hir_id: err_pat.hir_id,
+                            },
                         },
                         span,
                         ty: Ty {
@@ -901,11 +1013,7 @@ fn lower_try_expr(
 }
 
 /// Desugar `expr.await` into a match expression.
-fn lower_await_expr(
-    ctx: &mut LoweringContext,
-    expr: &yelang_ast::Expr,
-    span: Span,
-) -> ExprKind {
+fn lower_await_expr(ctx: &mut LoweringContext, expr: &yelang_ast::Expr, span: Span) -> ExprKind {
     let base = lower_expr(ctx, expr);
     // Simplified: just return the base expression.
     // In a full implementation this would desugar to poll-based logic.
@@ -920,7 +1028,11 @@ fn lower_comprehension_expr(
 ) -> ExprKind {
     // For MVP, lower to a call to a builtin collector function.
     let element = lower_expr(ctx, &comp.element);
-    let sources: Vec<Expr> = comp.variables.iter().map(|v| lower_expr(ctx, &v.source)).collect();
+    let sources: Vec<Expr> = comp
+        .variables
+        .iter()
+        .map(|v| lower_expr(ctx, &v.source))
+        .collect();
     ExprKind::Call {
         func: Box::new(Expr {
             hir_id: ctx.next_hir_id(),

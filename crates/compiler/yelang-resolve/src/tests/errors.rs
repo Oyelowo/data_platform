@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 #[test]
 fn error_not_found() {
@@ -7,7 +7,12 @@ fn error_not_found() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(!resolved.errors.is_empty(), "expected at least one error");
-    assert!(resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })));
+    assert!(
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::NotFound { .. }))
+    );
 }
 
 #[test]
@@ -18,7 +23,12 @@ fn error_duplicate_definition() {
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.iter().any(|e| matches!(e, ResolutionError::DuplicateDefinition { .. })));
+    assert!(
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::DuplicateDefinition { .. }))
+    );
 }
 
 #[test]
@@ -36,7 +46,11 @@ fn error_ambiguous() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     // At least one error (ambiguous or duplicate definition from imports).
-    assert!(!resolved.errors.is_empty(), "expected errors: {:?}", resolved.errors);
+    assert!(
+        !resolved.errors.is_empty(),
+        "expected errors: {:?}",
+        resolved.errors
+    );
 }
 
 #[test]
@@ -64,7 +78,11 @@ fn error_wrong_namespace() {
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "expected no resolution errors: {:?}", resolved.errors);
+    assert!(
+        resolved.errors.is_empty(),
+        "expected no resolution errors: {:?}",
+        resolved.errors
+    );
 }
 
 #[test]
@@ -75,5 +93,9 @@ fn error_missing_import_path() {
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    assert!(!resolved.errors.is_empty(), "expected errors: {:?}", resolved.errors);
+    assert!(
+        !resolved.errors.is_empty(),
+        "expected errors: {:?}",
+        resolved.errors
+    );
 }

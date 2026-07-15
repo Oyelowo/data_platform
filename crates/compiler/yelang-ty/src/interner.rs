@@ -22,8 +22,18 @@ pub struct Interner<'tcx> {
     arena: Bump,
     types: RefCell<FxHashMap<TyKind<'tcx>, Ty<'tcx>>>,
     ty_lists: RefCell<FxHashMap<SliceKey<Ty<'tcx>>, List<Ty<'tcx>>>>,
-    generic_args: RefCell<FxHashMap<SliceKey<crate::generic::GenericArg<'tcx>>, List<crate::generic::GenericArg<'tcx>>>>,
-    bound_var_lists: RefCell<FxHashMap<SliceKey<crate::binder::BoundVariableKind>, List<crate::binder::BoundVariableKind>>>,
+    generic_args: RefCell<
+        FxHashMap<
+            SliceKey<crate::generic::GenericArg<'tcx>>,
+            List<crate::generic::GenericArg<'tcx>>,
+        >,
+    >,
+    bound_var_lists: RefCell<
+        FxHashMap<
+            SliceKey<crate::binder::BoundVariableKind>,
+            List<crate::binder::BoundVariableKind>,
+        >,
+    >,
     _marker: PhantomData<&'tcx ()>,
 }
 

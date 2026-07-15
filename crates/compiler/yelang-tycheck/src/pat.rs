@@ -15,14 +15,20 @@ pub fn check_pat<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: &Pat, expected_ty: Ty<'tcx>)
         PatKind::Wild => {
             fcx.record_pat_ty(pat.hir_id, expected_ty);
         }
-        PatKind::Binding { name: _, subpat, .. } => {
+        PatKind::Binding {
+            name: _, subpat, ..
+        } => {
             fcx.insert_local(pat.hir_id, expected_ty);
             fcx.record_pat_ty(pat.hir_id, expected_ty);
             if let Some(sub) = subpat {
                 check_pat(fcx, sub, expected_ty);
             }
         }
-        PatKind::Struct { res: _, fields, rest } => {
+        PatKind::Struct {
+            res: _,
+            fields,
+            rest,
+        } => {
             // TODO: check field types against struct definition
             for field in fields {
                 check_pat(fcx, &field.pat, expected_ty);
@@ -52,7 +58,11 @@ pub fn check_pat<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: &Pat, expected_ty: Ty<'tcx>)
             // TODO: check literal type against expected type
             fcx.record_pat_ty(pat.hir_id, expected_ty);
         }
-        PatKind::Range { start, end, end_inclusive: _ } => {
+        PatKind::Range {
+            start,
+            end,
+            end_inclusive: _,
+        } => {
             if let Some(s) = start {
                 check_pat(fcx, s, expected_ty);
             }
@@ -67,7 +77,11 @@ pub fn check_pat<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: &Pat, expected_ty: Ty<'tcx>)
             }
             fcx.record_pat_ty(pat.hir_id, expected_ty);
         }
-        PatKind::Slice { prefix, middle, suffix } => {
+        PatKind::Slice {
+            prefix,
+            middle,
+            suffix,
+        } => {
             for p in prefix {
                 check_pat(fcx, p, expected_ty);
             }

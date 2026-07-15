@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 #[test]
 fn inherent_assoc_fn_resolve() {
@@ -87,7 +87,10 @@ fn associated_item_not_found() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::NotFound { .. })),
         "expected NotFound: {:?}",
         resolved.errors
     );
@@ -103,7 +106,10 @@ fn trait_impl_not_found() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::NotFound { .. })),
         "expected NotFound: {:?}",
         resolved.errors
     );
@@ -194,7 +200,14 @@ fn resolve_qualified_assoc_fn_directly() {
     "#;
     let (program, interner) = parse_program(src);
     let collector = def_collector::DefCollector::new(&interner).collect(&program);
-    let mut resolver = scope::Resolver::new(&interner, collector.module_tree, collector.definitions, collector.prelude, collector.lang_items, collector.enum_variants);
+    let mut resolver = scope::Resolver::new(
+        &interner,
+        collector.module_tree,
+        collector.definitions,
+        collector.prelude,
+        collector.lang_items,
+        collector.enum_variants,
+    );
     resolver.inherent_impls = collector.inherent_impls;
     resolver.trait_impls = collector.trait_impls;
     resolver.impl_item_names = collector.impl_item_names;
@@ -203,24 +216,36 @@ fn resolve_qualified_assoc_fn_directly() {
         qself: Some(Box::new(yelang_ast::QSelf {
             ty: yelang_ast::Type {
                 kind: yelang_ast::TypeKind::Named(yelang_ast::Path::new_single_ident(
-                    yelang_ast::Ident::new(interner.get_or_intern("Point"), yelang_lexer::Span::default())
+                    yelang_ast::Ident::new(
+                        interner.get_or_intern("Point"),
+                        yelang_lexer::Span::default(),
+                    ),
                 )),
                 span: yelang_lexer::Span::default(),
             },
             as_trait: Some(Box::new(yelang_ast::Path::new_single_ident(
-                yelang_ast::Ident::new(interner.get_or_intern("Display"), yelang_lexer::Span::default())
+                yelang_ast::Ident::new(
+                    interner.get_or_intern("Display"),
+                    yelang_lexer::Span::default(),
+                ),
             ))),
             span: yelang_lexer::Span::default(),
         })),
         segments: vec![yelang_ast::PathSegment {
-            ident: yelang_ast::Ident::new(interner.get_or_intern("fmt"), yelang_lexer::Span::default()),
+            ident: yelang_ast::Ident::new(
+                interner.get_or_intern("fmt"),
+                yelang_lexer::Span::default(),
+            ),
             args: None,
         }],
         is_absolute: false,
         span: yelang_lexer::Span::default(),
     };
     let res = associated::resolve_associated_item(&resolver, &path, namespaces::Namespace::Value);
-    assert!(res.is_some(), "expected fmt to resolve via qualified associated item resolution");
+    assert!(
+        res.is_some(),
+        "expected fmt to resolve via qualified associated item resolution"
+    );
 }
 
 #[test]
@@ -386,7 +411,10 @@ fn private_assoc_item_not_accessible_externally() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::PrivacyError { .. })),
         "expected PrivacyError: {:?}",
         resolved.errors
     );
@@ -526,7 +554,10 @@ fn enum_variant_type_path_not_found() {
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(
-        resolved.errors.iter().any(|e| matches!(e, ResolutionError::NotFound { .. })),
+        resolved
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::NotFound { .. })),
         "expected NotFound: {:?}",
         resolved.errors
     );

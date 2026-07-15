@@ -1,10 +1,10 @@
 //! Exhaustive tests for AST item -> HIR item lowering.
 
-use crate::hir::{ItemKind, VariantData, Defaultness};
+use crate::hir::{Defaultness, ItemKind, VariantData};
 use crate::hir_expr::ExprKind;
 use crate::hir_ty::TyKind;
 use crate::lowering::lower_crate;
-use crate::tests::common::{parse_program, stub_resolved, resolved_with_defs};
+use crate::tests::common::{parse_program, resolved_with_defs, stub_resolved};
 
 // ---------------------------------------------------------------------------
 // Functions
@@ -28,7 +28,9 @@ fn lower_fn_with_params() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { sig, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { sig, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     assert_eq!(sig.inputs.len(), 2);
 }
 
@@ -39,7 +41,9 @@ fn lower_fn_with_generics() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { generics, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     assert_eq!(generics.params.len(), 1);
 }
 
@@ -50,7 +54,9 @@ fn lower_fn_with_where_clause() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { generics, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     assert!(generics.where_clause.is_some());
 }
 
@@ -61,7 +67,9 @@ fn lower_async_fn() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Fn { sig, .. } = &item.kind else { panic!("expected fn") };
+    let ItemKind::Fn { sig, .. } = &item.kind else {
+        panic!("expected fn")
+    };
     assert!(sig.is_async);
 }
 
@@ -76,7 +84,9 @@ fn lower_struct_named_fields() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Struct { data, .. } = &item.kind else { panic!("expected struct") };
+    let ItemKind::Struct { data, .. } = &item.kind else {
+        panic!("expected struct")
+    };
     match data {
         VariantData::Struct { fields } => assert_eq!(fields.len(), 2),
         _ => panic!("expected named fields"),
@@ -90,7 +100,9 @@ fn lower_tuple_struct() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Struct { data, .. } = &item.kind else { panic!("expected struct") };
+    let ItemKind::Struct { data, .. } = &item.kind else {
+        panic!("expected struct")
+    };
     match data {
         VariantData::Tuple { fields } => assert_eq!(fields.len(), 2),
         _ => panic!("expected tuple fields"),
@@ -104,7 +116,9 @@ fn lower_unit_struct() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Struct { data, .. } = &item.kind else { panic!("expected struct") };
+    let ItemKind::Struct { data, .. } = &item.kind else {
+        panic!("expected struct")
+    };
     assert!(matches!(data, VariantData::Unit));
 }
 
@@ -115,7 +129,9 @@ fn lower_struct_with_generics() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Struct { generics, .. } = &item.kind else { panic!("expected struct") };
+    let ItemKind::Struct { generics, .. } = &item.kind else {
+        panic!("expected struct")
+    };
     assert_eq!(generics.params.len(), 1);
 }
 
@@ -130,7 +146,9 @@ fn lower_enum_unit_variants() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else { panic!("expected enum") };
+    let ItemKind::Enum { def, .. } = &item.kind else {
+        panic!("expected enum")
+    };
     assert_eq!(def.variants.len(), 2);
     assert!(matches!(def.variants[0].data, VariantData::Unit));
 }
@@ -142,7 +160,9 @@ fn lower_enum_tuple_variants() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else { panic!("expected enum") };
+    let ItemKind::Enum { def, .. } = &item.kind else {
+        panic!("expected enum")
+    };
     assert_eq!(def.variants.len(), 2);
     match &def.variants[0].data {
         VariantData::Tuple { fields } => assert_eq!(fields.len(), 1),
@@ -157,7 +177,9 @@ fn lower_enum_struct_variants() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else { panic!("expected enum") };
+    let ItemKind::Enum { def, .. } = &item.kind else {
+        panic!("expected enum")
+    };
     assert_eq!(def.variants.len(), 2);
     match &def.variants[1].data {
         VariantData::Struct { fields } => assert_eq!(fields.len(), 2),
@@ -172,7 +194,9 @@ fn lower_enum_with_discriminant() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else { panic!("expected enum") };
+    let ItemKind::Enum { def, .. } = &item.kind else {
+        panic!("expected enum")
+    };
     assert!(def.variants[0].discriminant.is_some());
 }
 
@@ -187,7 +211,9 @@ fn lower_trait_with_methods() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Trait { items, .. } = &item.kind else { panic!("expected trait") };
+    let ItemKind::Trait { items, .. } = &item.kind else {
+        panic!("expected trait")
+    };
     assert_eq!(items.len(), 1);
 }
 
@@ -203,7 +229,9 @@ fn lower_trait_with_const_and_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Trait { items, .. } = &item.kind else { panic!("expected trait") };
+    let ItemKind::Trait { items, .. } = &item.kind else {
+        panic!("expected trait")
+    };
     assert_eq!(items.len(), 2);
 }
 
@@ -224,10 +252,14 @@ fn lower_inherent_impl() {
 
     // Should have Point struct and impl item
     assert_eq!(crate_hir.items.len(), 2);
-    let impl_item = crate_hir.items.values()
+    let impl_item = crate_hir
+        .items
+        .values()
         .find(|i| matches!(i.kind, ItemKind::Impl { .. }))
         .expect("expected impl item");
-    let ItemKind::Impl { self_ty, .. } = &impl_item.kind else { unreachable!() };
+    let ItemKind::Impl { self_ty, .. } = &impl_item.kind else {
+        unreachable!()
+    };
     assert!(matches!(self_ty.kind, TyKind::Path { .. }));
 }
 
@@ -244,17 +276,34 @@ fn lower_self_struct_literal_in_impl() {
     let resolved = resolved_with_defs(&[(point_sym, yelang_resolve::DefKind::Struct)]);
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let impl_item = crate_hir.items.values()
+    let impl_item = crate_hir
+        .items
+        .values()
         .find(|i| matches!(i.kind, ItemKind::Impl { .. }))
         .expect("expected impl item");
-    let ItemKind::Impl { items, .. } = &impl_item.kind else { unreachable!() };
-    let method = items.iter().find(|i| i.ident.as_str(&interner) == "origin").expect("expected origin");
-    let crate::hir::ImplItemKind::Fn { body, .. } = &method.kind else { panic!("expected fn") };
+    let ItemKind::Impl { items, .. } = &impl_item.kind else {
+        unreachable!()
+    };
+    let method = items
+        .iter()
+        .find(|i| i.ident.as_str(&interner) == "origin")
+        .expect("expected origin");
+    let crate::hir::ImplItemKind::Fn { body, .. } = &method.kind else {
+        panic!("expected fn")
+    };
     let body = crate_hir.bodies.get(body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else { panic!("expected block") };
+    let ExprKind::Block { block, .. } = &body.value.kind else {
+        panic!("expected block")
+    };
     let tail = block.expr.as_ref().expect("expected tail expr");
-    let ExprKind::Struct { path, .. } = &tail.kind else { panic!("expected struct literal, got {:?}", tail.kind) };
-    assert!(matches!(path, crate::res::Res::SelfTy { .. }), "expected SelfTy, got {:?}", path);
+    let ExprKind::Struct { path, .. } = &tail.kind else {
+        panic!("expected struct literal, got {:?}", tail.kind)
+    };
+    assert!(
+        matches!(path, crate::res::Res::SelfTy { .. }),
+        "expected SelfTy, got {:?}",
+        path
+    );
 }
 
 #[test]
@@ -269,10 +318,17 @@ fn lower_trait_impl() {
     let (program, interner) = parse_program(src);
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
-    let impl_item = crate_hir.items.values()
+    let impl_item = crate_hir
+        .items
+        .values()
         .find(|i| matches!(i.kind, ItemKind::Impl { .. }))
         .expect("expected impl item");
-    let ItemKind::Impl { of_trait, generics, .. } = &impl_item.kind else { unreachable!() };
+    let ItemKind::Impl {
+        of_trait, generics, ..
+    } = &impl_item.kind
+    else {
+        unreachable!()
+    };
     assert!(of_trait.is_some());
     assert_eq!(generics.params.len(), 1);
 }
@@ -288,7 +344,9 @@ fn lower_type_alias() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::TyAlias { ty, .. } = &item.kind else { panic!("expected type alias") };
+    let ItemKind::TyAlias { ty, .. } = &item.kind else {
+        panic!("expected type alias")
+    };
     assert!(matches!(ty.kind, TyKind::Path { .. }));
 }
 
@@ -299,7 +357,9 @@ fn lower_type_alias_with_generics() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::TyAlias { generics, .. } = &item.kind else { panic!("expected type alias") };
+    let ItemKind::TyAlias { generics, .. } = &item.kind else {
+        panic!("expected type alias")
+    };
     assert_eq!(generics.params.len(), 1);
 }
 
@@ -324,7 +384,9 @@ fn lower_static_item() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Static { mutability, .. } = &item.kind else { panic!("expected static") };
+    let ItemKind::Static { mutability, .. } = &item.kind else {
+        panic!("expected static")
+    };
     assert!(matches!(mutability, yelang_ast::Mutability::Immutable));
 }
 
@@ -335,7 +397,9 @@ fn lower_mutable_static_item() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Static { mutability, .. } = &item.kind else { panic!("expected static") };
+    let ItemKind::Static { mutability, .. } = &item.kind else {
+        panic!("expected static")
+    };
     assert!(matches!(mutability, yelang_ast::Mutability::Mutable));
 }
 
@@ -355,7 +419,9 @@ fn lower_inline_module() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().next().unwrap();
-    let ItemKind::Mod { items } = &item.kind else { panic!("expected module") };
+    let ItemKind::Mod { items } = &item.kind else {
+        panic!("expected module")
+    };
     assert_eq!(items.len(), 2);
 }
 

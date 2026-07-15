@@ -5,11 +5,7 @@ use crate::rib::Resolution;
 use crate::scope::Resolver;
 
 /// Resolve a path in the given namespace, starting from the current module.
-pub fn resolve_path(
-    resolver: &Resolver,
-    path: &Path,
-    ns: Namespace,
-) -> Option<Resolution> {
+pub fn resolve_path(resolver: &Resolver, path: &Path, ns: Namespace) -> Option<Resolution> {
     if path.segments.is_empty() {
         return None;
     }
@@ -25,11 +21,7 @@ pub fn resolve_path(
     }
 }
 
-fn resolve_path_standard(
-    resolver: &Resolver,
-    path: &Path,
-    ns: Namespace,
-) -> Option<Resolution> {
+fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Option<Resolution> {
     let first = &path.segments[0];
     let first_str = first.ident.as_str(resolver.interner);
 
@@ -69,7 +61,13 @@ fn resolve_path_standard(
         resolver.resolve_name(ns, first.ident.symbol).or_else(|| {
             resolver
                 .resolve_name_in_module(current_module, ns, first.ident.symbol)
-                .or_else(|| resolver.resolve_name_in_module(current_module, Namespace::Type, first.ident.symbol))
+                .or_else(|| {
+                    resolver.resolve_name_in_module(
+                        current_module,
+                        Namespace::Type,
+                        first.ident.symbol,
+                    )
+                })
                 .map(|def_id| Resolution::Def { def_id })
         })
     };
@@ -105,8 +103,11 @@ fn resolve_path_standard(
                 let second_res = resolver
                     .resolve_name_in_module(current_module, ns, second.ident.symbol)
                     .or_else(|| {
-                        resolver
-                            .resolve_name_in_module(current_module, Namespace::Type, second.ident.symbol)
+                        resolver.resolve_name_in_module(
+                            current_module,
+                            Namespace::Type,
+                            second.ident.symbol,
+                        )
                     });
                 match second_res {
                     Some(def_id) => {
@@ -115,7 +116,11 @@ fn resolve_path_standard(
                             let next = resolver
                                 .resolve_name_in_module(cur, ns, seg.ident.symbol)
                                 .or_else(|| {
-                                    resolver.resolve_name_in_module(cur, Namespace::Type, seg.ident.symbol)
+                                    resolver.resolve_name_in_module(
+                                        cur,
+                                        Namespace::Type,
+                                        seg.ident.symbol,
+                                    )
                                 });
                             match next {
                                 Some(d) => cur = d,

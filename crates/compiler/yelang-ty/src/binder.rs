@@ -78,6 +78,9 @@ mod tests {
             kind: BoundTyKind::Anon,
         });
         let const_kind = BoundVariableKind::Const;
-        assert_ne!(std::mem::discriminant(&ty_kind), std::mem::discriminant(&const_kind));
+        assert_ne!(
+            std::mem::discriminant(&ty_kind),
+            std::mem::discriminant(&const_kind)
+        );
     }
 }

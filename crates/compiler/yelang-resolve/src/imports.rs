@@ -33,7 +33,9 @@ fn resolve_import_tree(
                     .map(|s| s.ident.symbol)
                     .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
                 if !crate::privacy::check_accessibility(resolver, def_id, module_id, name, span) {
-                    let def_module = resolver.definitions.get(&def_id)
+                    let def_module = resolver
+                        .definitions
+                        .get(&def_id)
                         .and_then(|d| d.parent)
                         .unwrap_or(resolver.module_tree.root.def_id);
                     resolver.errors.push(ResolutionError::PrivacyError {
@@ -51,7 +53,9 @@ fn resolve_import_tree(
                     .last()
                     .map(|s| s.ident.symbol)
                     .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
-                resolver.errors.push(ResolutionError::NotFound { name, span });
+                resolver
+                    .errors
+                    .push(ResolutionError::NotFound { name, span });
             }
         }
         yelang_ast::UseTree::Rename { path, alias, .. } => {
@@ -62,7 +66,9 @@ fn resolve_import_tree(
                     .map(|s| s.ident.symbol)
                     .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
                 if !crate::privacy::check_accessibility(resolver, def_id, module_id, name, span) {
-                    let def_module = resolver.definitions.get(&def_id)
+                    let def_module = resolver
+                        .definitions
+                        .get(&def_id)
                         .and_then(|d| d.parent)
                         .unwrap_or(resolver.module_tree.root.def_id);
                     resolver.errors.push(ResolutionError::PrivacyError {
@@ -80,7 +86,9 @@ fn resolve_import_tree(
                     .last()
                     .map(|s| s.ident.symbol)
                     .unwrap_or_else(|| resolver.interner.get_or_intern("<import>"));
-                resolver.errors.push(ResolutionError::NotFound { name, span });
+                resolver
+                    .errors
+                    .push(ResolutionError::NotFound { name, span });
             }
         }
         yelang_ast::UseTree::Glob { path, .. } => {
@@ -104,19 +112,33 @@ fn prepend_prefix_to_use_tree(
         yelang_ast::UseTree::Simple { path, span } => {
             let mut new_path = prefix.clone();
             new_path.segments.extend(path.segments);
-            yelang_ast::UseTree::Simple { path: new_path, span }
+            yelang_ast::UseTree::Simple {
+                path: new_path,
+                span,
+            }
         }
         yelang_ast::UseTree::Rename { path, alias, span } => {
             let mut new_path = prefix.clone();
             new_path.segments.extend(path.segments);
-            yelang_ast::UseTree::Rename { path: new_path, alias, span }
+            yelang_ast::UseTree::Rename {
+                path: new_path,
+                alias,
+                span,
+            }
         }
         yelang_ast::UseTree::Glob { path, span } => {
             let mut new_path = prefix.clone();
             new_path.segments.extend(path.segments);
-            yelang_ast::UseTree::Glob { path: new_path, span }
+            yelang_ast::UseTree::Glob {
+                path: new_path,
+                span,
+            }
         }
-        yelang_ast::UseTree::Nested { prefix: inner_prefix, items, span } => {
+        yelang_ast::UseTree::Nested {
+            prefix: inner_prefix,
+            items,
+            span,
+        } => {
             let mut new_prefix = prefix.clone();
             new_prefix.segments.extend(inner_prefix.segments);
             yelang_ast::UseTree::Nested {
@@ -156,7 +178,9 @@ fn resolve_import_path(
     } else {
         let found = resolver
             .resolve_name_in_module(current, Namespace::Type, first.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol));
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol)
+            });
         match found {
             Some(def_id) => current = def_id,
             None => return None,
@@ -166,14 +190,20 @@ fn resolve_import_path(
     for seg in &segments[1..] {
         let found = resolver
             .resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol));
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol)
+            });
         match found {
             Some(def_id) => current = def_id,
             None => return None,
         }
     }
 
-    if let Some(ns) = resolver.definitions.get(&current).and_then(|d| d.namespace()) {
+    if let Some(ns) = resolver
+        .definitions
+        .get(&current)
+        .and_then(|d| d.namespace())
+    {
         return Some((ns, current));
     }
 
@@ -209,7 +239,9 @@ fn resolve_glob_import(
     } else {
         let found = resolver
             .resolve_name_in_module(current, Namespace::Type, first.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol));
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol)
+            });
         match found {
             Some(def_id) => current = def_id,
             None => return,
@@ -219,29 +251,30 @@ fn resolve_glob_import(
     for seg in &segments[1..] {
         let found = resolver
             .resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
-            .or_else(|| resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol));
+            .or_else(|| {
+                resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol)
+            });
         match found {
             Some(def_id) => current = def_id,
             None => return,
         }
     }
 
-    let target_module = resolver
-        .definitions
-        .get(&current)
-        .and_then(|d| {
-            if matches!(d.kind, crate::def_collector::DefKind::Module) {
-                Some(current)
-            } else {
-                None
-            }
-        });
+    let target_module = resolver.definitions.get(&current).and_then(|d| {
+        if matches!(d.kind, crate::def_collector::DefKind::Module) {
+            Some(current)
+        } else {
+            None
+        }
+    });
 
     if let Some(target) = target_module {
         if let Some(node) = resolver.module_tree.modules.get(&target).cloned() {
             for (ns, map) in node.items.iter() {
                 for (name, def_id) in map.iter() {
-                    if crate::privacy::check_accessibility(resolver, *def_id, module_id, *name, span) {
+                    if crate::privacy::check_accessibility(
+                        resolver, *def_id, module_id, *name, span,
+                    ) {
                         add_imported_item(resolver, module_id, *ns, *name, *def_id, span);
                     }
                 }

@@ -54,9 +54,12 @@ fn check_expr_kind<'tcx>(fcx: &mut FnCtxt<'tcx>, kind: &ExprKind, hir_id: HirId)
         ExprKind::Binary { op, left, right } => check_binary(fcx, *op, left, right),
         ExprKind::Unary { op, expr } => check_unary(fcx, *op, expr),
         ExprKind::Call { func, args } => check_call(fcx, func, args),
-        ExprKind::MethodCall { receiver, method: _, args, .. } => {
-            check_method_call(fcx, receiver, args)
-        }
+        ExprKind::MethodCall {
+            receiver,
+            method: _,
+            args,
+            ..
+        } => check_method_call(fcx, receiver, args),
         ExprKind::Field { expr, field } => check_field(fcx, expr, field),
         ExprKind::Index { expr, index } => check_index(fcx, expr, index),
         ExprKind::Assign { left, right } => check_assign(fcx, left, right),
@@ -66,12 +69,16 @@ fn check_expr_kind<'tcx>(fcx: &mut FnCtxt<'tcx>, kind: &ExprKind, hir_id: HirId)
         ExprKind::Continue { label } => check_continue(fcx, label.as_ref()),
         ExprKind::Return { expr } => check_return(fcx, expr.as_deref()),
         ExprKind::Match { expr, arms } => check_match(fcx, expr, arms),
-        ExprKind::If { cond, then_branch, else_branch } => {
-            check_if(fcx, cond, then_branch, else_branch.as_deref())
-        }
+        ExprKind::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => check_if(fcx, cond, then_branch, else_branch.as_deref()),
         ExprKind::Let { pat, expr } => check_let_expr(fcx, pat, expr),
         ExprKind::Closure { params, body, .. } => check_closure(fcx, params, *body),
-        ExprKind::Struct { path, fields, rest } => check_struct_literal(fcx, path, fields, rest.as_deref()),
+        ExprKind::Struct { path, fields, rest } => {
+            check_struct_literal(fcx, path, fields, rest.as_deref())
+        }
         ExprKind::Tuple { exprs } => check_tuple(fcx, exprs),
         ExprKind::Array { exprs } => check_array(fcx, exprs),
         ExprKind::Cast { expr, ty } => check_cast(fcx, expr, ty),
@@ -90,8 +97,14 @@ fn check_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, lit: &Lit) -> Ty<'tcx> {
         Lit::Bool(_) => fcx.mk_bool(),
         Lit::Char(_) => fcx.mk_char(),
         Lit::Str(_) => fcx.mk_str(),
-        Lit::Regex(_) | Lit::DateTime(_) | Lit::Duration(_) | Lit::Uuid(_) |
-        Lit::Bytes(_) | Lit::Geometry(_) | Lit::RecordId(_) | Lit::Unit => {
+        Lit::Regex(_)
+        | Lit::DateTime(_)
+        | Lit::Duration(_)
+        | Lit::Uuid(_)
+        | Lit::Bytes(_)
+        | Lit::Geometry(_)
+        | Lit::RecordId(_)
+        | Lit::Unit => {
             // TODO: define types for these literals
             fcx.new_ty_var()
         }
@@ -147,7 +160,12 @@ fn check_binary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: BinaryOp, left: &Expr, right: 
 
     match op {
         // Arithmetic: both operands must be numeric, result is same type
-        BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Modulo | BinaryOp::Power => {
+        BinaryOp::Add
+        | BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Modulo
+        | BinaryOp::Power => {
             let _ = fcx.eq(left_ty, right_ty);
             left_ty
         }
@@ -157,7 +175,17 @@ fn check_binary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: BinaryOp, left: &Expr, right: 
             left_ty
         }
         // Comparison: both operands must be comparable, result is bool
-        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte | BinaryOp::Like | BinaryOp::ILike | BinaryOp::Regex | BinaryOp::In | BinaryOp::NotIn => {
+        BinaryOp::Eq
+        | BinaryOp::Ne
+        | BinaryOp::Lt
+        | BinaryOp::Lte
+        | BinaryOp::Gt
+        | BinaryOp::Gte
+        | BinaryOp::Like
+        | BinaryOp::ILike
+        | BinaryOp::Regex
+        | BinaryOp::In
+        | BinaryOp::NotIn => {
             let _ = fcx.eq(left_ty, right_ty);
             fcx.mk_bool()
         }
@@ -196,9 +224,7 @@ fn check_unary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: yelang_ast::UnaryOp, expr: &Exp
                     let _ = fcx.eq(expr_ty, ptr);
                     inner
                 }
-                _ => {
-                    fcx.mk_error()
-                }
+                _ => fcx.mk_error(),
             }
         }
         yelang_ast::UnaryOp::Ref => {
@@ -249,7 +275,10 @@ fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: &Expr, args: &[Expr]) -> Ty<'t
             // Function type not yet known: create expected arg types and return type
             let arg_tys: Vec<_> = args.iter().map(|arg| check_expr(fcx, arg)).collect();
             let arg_args = fcx.interner.mk_generic_args(
-                &arg_tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>(),
+                &arg_tys
+                    .iter()
+                    .map(|&t| GenericArg::Type(t))
+                    .collect::<Vec<_>>(),
             );
             let ret_ty = fcx.new_ty_var();
             let expected = fcx.mk_fn_ptr(arg_args, ret_ty);
@@ -388,7 +417,11 @@ fn check_stmt<'tcx>(fcx: &mut FnCtxt<'tcx>, stmt: &Stmt) {
 // Loop checking
 // ---------------------------------------------------------------------------
 
-fn check_loop<'tcx>(fcx: &mut FnCtxt<'tcx>, block: &Block, label: Option<&yelang_ast::Label>) -> Ty<'tcx> {
+fn check_loop<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    block: &Block,
+    label: Option<&yelang_ast::Label>,
+) -> Ty<'tcx> {
     fcx.push_breakable(BreakableScope {
         label: label.cloned(),
         kind: BreakableKind::Loop,
@@ -413,13 +446,19 @@ fn check_loop<'tcx>(fcx: &mut FnCtxt<'tcx>, block: &Block, label: Option<&yelang
 // Break checking
 // ---------------------------------------------------------------------------
 
-fn check_break<'tcx>(fcx: &mut FnCtxt<'tcx>, label: Option<&yelang_ast::Label>, expr: Option<&Expr>) -> Ty<'tcx> {
+fn check_break<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    label: Option<&yelang_ast::Label>,
+    expr: Option<&Expr>,
+) -> Ty<'tcx> {
     let breakable_idx = if let Some(lbl) = label {
         fcx.breakable_scopes.iter().rposition(|s| {
             s.label.as_ref().map(|l| l.symbol.as_usize()) == Some(lbl.symbol.as_usize())
         })
     } else {
-        fcx.breakable_scopes.iter().rposition(|s| s.kind == BreakableKind::Loop)
+        fcx.breakable_scopes
+            .iter()
+            .rposition(|s| s.kind == BreakableKind::Loop)
     };
 
     if let Some(idx) = breakable_idx {
@@ -449,11 +488,15 @@ fn check_break<'tcx>(fcx: &mut FnCtxt<'tcx>, label: Option<&yelang_ast::Label>, 
 
 fn check_continue<'tcx>(fcx: &mut FnCtxt<'tcx>, label: Option<&yelang_ast::Label>) -> Ty<'tcx> {
     let _ = if let Some(lbl) = label {
-        fcx.breakable_scopes.iter().rev().find(|s| {
-            s.label.as_ref().map(|l| l.symbol.as_usize()) == Some(lbl.symbol.as_usize())
-        })
+        fcx.breakable_scopes
+            .iter()
+            .rev()
+            .find(|s| s.label.as_ref().map(|l| l.symbol.as_usize()) == Some(lbl.symbol.as_usize()))
     } else {
-        fcx.breakable_scopes.iter().rev().find(|s| s.kind == BreakableKind::Loop)
+        fcx.breakable_scopes
+            .iter()
+            .rev()
+            .find(|s| s.kind == BreakableKind::Loop)
     };
     fcx.mk_never()
 }
@@ -498,7 +541,12 @@ fn check_match<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, arms: &[Arm]) -> Ty<'t
 // If checking
 // ---------------------------------------------------------------------------
 
-fn check_if<'tcx>(fcx: &mut FnCtxt<'tcx>, cond: &Expr, then_branch: &Expr, else_branch: Option<&Expr>) -> Ty<'tcx> {
+fn check_if<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    cond: &Expr,
+    then_branch: &Expr,
+    else_branch: Option<&Expr>,
+) -> Ty<'tcx> {
     let cond_ty = check_expr(fcx, cond);
     let _ = fcx.eq(cond_ty, fcx.mk_bool());
 
@@ -569,9 +617,9 @@ fn check_struct_literal<'tcx>(
 
 fn check_tuple<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
     let tys: Vec<_> = exprs.iter().map(|e| check_expr(fcx, e)).collect();
-    let args = fcx.interner.mk_generic_args(
-        &tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>(),
-    );
+    let args = fcx
+        .interner
+        .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
     fcx.mk_ty(TyKind::Tuple(args))
 }
 
@@ -582,7 +630,10 @@ fn check_tuple<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
 fn check_array<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
     if exprs.is_empty() {
         let elem_ty = fcx.new_ty_var();
-        let len = yelang_ty::ty::Const { kind: yelang_ty::ty::ConstKind::Value(yelang_ty::ty::ConstValue::Int(0)), ty: fcx.mk_int(IntTy::I32) };
+        let len = yelang_ty::ty::Const {
+            kind: yelang_ty::ty::ConstKind::Value(yelang_ty::ty::ConstValue::Int(0)),
+            ty: fcx.mk_int(IntTy::I32),
+        };
         return fcx.mk_array(elem_ty, len);
     }
 

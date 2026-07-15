@@ -6,8 +6,8 @@ use yelang_lexer::TokenStream;
 use yelang_util::DefId;
 
 use crate::hir::{ExprKind, ItemKind, StmtKind};
-use crate::res::ResolvedCrate;
 use crate::lowering::lower_crate;
+use crate::res::ResolvedCrate;
 
 fn parse_program(src: &str) -> (Program, Interner) {
     let mut interner = Interner::new();

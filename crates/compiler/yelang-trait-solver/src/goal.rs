@@ -11,6 +11,9 @@ pub struct Goal<'tcx> {
 
 impl<'tcx> Goal<'tcx> {
     pub fn new(param_env: ParamEnv<'tcx>, predicate: Predicate<'tcx>) -> Self {
-        Self { param_env, predicate }
+        Self {
+            param_env,
+            predicate,
+        }
     }
 }

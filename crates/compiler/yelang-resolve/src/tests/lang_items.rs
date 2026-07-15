@@ -14,9 +14,23 @@ fn primitives_are_seeded_as_lang_items() {
 
     // Every primitive should be present in the registry.
     let primitives = [
-        LangItem::I8, LangItem::I16, LangItem::I32, LangItem::I64, LangItem::I128, LangItem::Isize,
-        LangItem::U8, LangItem::U16, LangItem::U32, LangItem::U64, LangItem::U128, LangItem::Usize,
-        LangItem::F32, LangItem::F64, LangItem::Bool, LangItem::Char, LangItem::Str,
+        LangItem::I8,
+        LangItem::I16,
+        LangItem::I32,
+        LangItem::I64,
+        LangItem::I128,
+        LangItem::Isize,
+        LangItem::U8,
+        LangItem::U16,
+        LangItem::U32,
+        LangItem::U64,
+        LangItem::U128,
+        LangItem::Usize,
+        LangItem::F32,
+        LangItem::F64,
+        LangItem::Bool,
+        LangItem::Char,
+        LangItem::Str,
     ];
     for p in &primitives {
         assert!(
@@ -33,8 +47,14 @@ fn primitive_definitions_have_lang_item_field() {
     let (program, interner) = parse_program(src);
     let collector = def_collector::DefCollector::new(&interner).collect(&program);
 
-    let i32_def_id = collector.lang_items.get(LangItem::I32).expect("i32 lang item");
-    let def = collector.definitions.get(&i32_def_id).expect("i32 definition");
+    let i32_def_id = collector
+        .lang_items
+        .get(LangItem::I32)
+        .expect("i32 lang item");
+    let def = collector
+        .definitions
+        .get(&i32_def_id)
+        .expect("i32 definition");
     assert_eq!(def.lang_item, Some(LangItem::I32));
     assert_eq!(interner.resolve(&def.name), "i32");
     assert!(matches!(def.kind, def_collector::DefKind::TypeAlias));
@@ -107,7 +127,10 @@ fn duplicate_lang_item_emits_error() {
     let collector = def_collector::DefCollector::new(&interner).collect(&program);
 
     assert!(
-        collector.errors.iter().any(|e| matches!(e, ResolutionError::DuplicateLangItem { .. })),
+        collector
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::DuplicateLangItem { .. })),
         "duplicate @lang(copy) should emit DuplicateLangItem error"
     );
 }
@@ -124,7 +147,10 @@ fn duplicate_lang_item_primitive_and_attr() {
     let collector = def_collector::DefCollector::new(&interner).collect(&program);
 
     assert!(
-        collector.errors.iter().any(|e| matches!(e, ResolutionError::DuplicateLangItem { .. })),
+        collector
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::DuplicateLangItem { .. })),
         "@lang(i32) colliding with seeded primitive should emit error"
     );
 }
@@ -213,7 +239,10 @@ fn resolver_inherits_lang_items() {
     // The resolved crate doesn't directly expose lang_items, but we can verify
     // no errors occurred for a valid program.
     assert!(
-        resolved.errors.iter().all(|e| !matches!(e, ResolutionError::DuplicateLangItem { .. })),
+        resolved
+            .errors
+            .iter()
+            .all(|e| !matches!(e, ResolutionError::DuplicateLangItem { .. })),
         "valid @lang usage should not produce duplicate errors"
     );
 }
@@ -235,7 +264,10 @@ fn unknown_lang_attribute_is_ignored() {
     // Unknown lang items are silently ignored; no definition gets a lang_item tag.
     // We just verify no crash and no DuplicateLangItem error.
     assert!(
-        !collector.errors.iter().any(|e| matches!(e, ResolutionError::DuplicateLangItem { .. })),
+        !collector
+            .errors
+            .iter()
+            .any(|e| matches!(e, ResolutionError::DuplicateLangItem { .. })),
         "unknown lang item should not produce duplicate error"
     );
 }

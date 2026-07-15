@@ -4,20 +4,19 @@
 //! and shared auxiliary types (`Block`, `Stmt`, `Arm`, `FnSig`, …).
 //! The `*Kind` enums live in their own sub-modules to keep file sizes
 /// reasonable.
-
 pub use yelang_ast::{Ident, Label, Mutability, Visibility};
 use yelang_lexer::Span;
 
+pub use crate::hir_body::{Body, Param};
 pub use crate::hir_expr::{Expr, ExprKind};
 pub use crate::hir_item::{Item, ItemKind};
 pub use crate::hir_pat::{Pat, PatKind};
+pub use crate::hir_struct::{FieldDef, StructField, VariantData};
 pub use crate::hir_ty::{Ty, TyKind};
-pub use crate::hir_body::{Body, Param};
-pub use crate::hir_struct::{VariantData, FieldDef, StructField};
 
+use crate::hir_ty::Const;
 use crate::ids::{BodyId, DefId, HirId};
 use crate::res::Res;
-use crate::hir_ty::Const;
 
 /// Re-export commonly-used AST types that contain no unresolved names.
 pub type Lit = yelang_lexer::Literal;
@@ -49,7 +48,11 @@ pub enum StmtKind {
     /// Expression statement (with or without semicolon).
     Expr { expr: Box<Expr> },
     /// `let` binding.
-    Let { pat: Pat, ty: Option<Ty>, init: Option<Box<Expr>> },
+    Let {
+        pat: Pat,
+        ty: Option<Ty>,
+        init: Option<Box<Expr>>,
+    },
     /// Nested item declaration.
     Item { item: Item },
 }
@@ -146,14 +149,8 @@ pub struct WhereClause {
 /// A single predicate in a `where` clause.
 #[derive(Debug, Clone)]
 pub enum WherePredicate {
-    TraitBound {
-        ty: Ty,
-        bounds: Vec<TraitBound>,
-    },
-    TypeEq {
-        lhs: Ty,
-        rhs: Ty,
-    },
+    TraitBound { ty: Ty, bounds: Vec<TraitBound> },
+    TypeEq { lhs: Ty, rhs: Ty },
 }
 
 // ---------------------------------------------------------------------------
@@ -232,17 +229,9 @@ pub struct ImplItem {
 /// Kinds of impl items.
 #[derive(Debug, Clone)]
 pub enum ImplItemKind {
-    Fn {
-        sig: FnSig,
-        body: BodyId,
-    },
-    Const {
-        ty: Ty,
-        body: BodyId,
-    },
-    Type {
-        ty: Ty,
-    },
+    Fn { sig: FnSig, body: BodyId },
+    Const { ty: Ty, body: BodyId },
+    Type { ty: Ty },
 }
 
 /// Reference to a trait in an `impl Trait for Type`.
@@ -264,9 +253,7 @@ pub struct UsePath {
 pub enum UseKind {
     Single,
     Glob,
-    Nested {
-        items: Vec<UsePath>,
-    },
+    Nested { items: Vec<UsePath> },
 }
 
 /// Macro definition item.
@@ -287,13 +274,8 @@ pub struct ForeignItem {
 /// Kinds of foreign items.
 #[derive(Debug, Clone)]
 pub enum ForeignItemKind {
-    Fn {
-        sig: FnSig,
-    },
-    Static {
-        ty: Ty,
-        mutability: Mutability,
-    },
+    Fn { sig: FnSig },
+    Static { ty: Ty, mutability: Mutability },
     Type,
 }
 

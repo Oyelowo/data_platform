@@ -28,7 +28,7 @@ pub fn is_sized(ty_kind: &TyKind<'_>) -> bool {
             _ => true,
         }),
         TyKind::Array(ty, _) => is_sized(ty.kind()),
-        TyKind::Slice(_) => false, // Dynamically sized
+        TyKind::Slice(_) => false,   // Dynamically sized
         TyKind::Dynamic(_) => false, // Dynamically sized
         TyKind::Error => true,
         TyKind::Alias(_) => true, // TODO: check alias expansion
@@ -84,7 +84,11 @@ mod tests {
         let interner = Interner::new();
         assert!(is_sized(interner.mk_ty(TyKind::Bool).kind()));
         assert!(is_sized(interner.mk_ty(TyKind::Int(IntTy::I32)).kind()));
-        assert!(is_sized(interner.mk_ty(TyKind::Float(yelang_ty::primitive::FloatTy::F64)).kind()));
+        assert!(is_sized(
+            interner
+                .mk_ty(TyKind::Float(yelang_ty::primitive::FloatTy::F64))
+                .kind()
+        ));
     }
 
     #[test]

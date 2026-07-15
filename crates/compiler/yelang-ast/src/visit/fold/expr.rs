@@ -518,14 +518,9 @@ pub fn fold_macro_invocation<F: Folder + ?Sized>(
     f: &mut F,
     m: crate::expr::MacroInvocation,
 ) -> crate::expr::MacroInvocation {
-    use crate::expr::MacroArgs;
     crate::expr::MacroInvocation {
         path: f.fold_path(m.path),
-        args: match m.args {
-            MacroArgs::Paren(exprs) => MacroArgs::Paren(exprs.into_iter().map(|e| f.fold_expr(e)).collect()),
-            MacroArgs::Bracket(exprs) => MacroArgs::Bracket(exprs.into_iter().map(|e| f.fold_expr(e)).collect()),
-            MacroArgs::Brace(stmts) => MacroArgs::Brace(stmts.into_iter().map(|s| f.fold_stmt(s)).collect()),
-        },
+        args: m.args,
         span: m.span,
     }
 }

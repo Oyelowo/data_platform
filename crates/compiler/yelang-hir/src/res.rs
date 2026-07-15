@@ -3,8 +3,8 @@
 //! `Res` describes how a name was resolved: to a definition, a local variable,
 //! a primitive type, etc.
 
-use yelang_util::DefId;
 use crate::ids::HirId;
+use yelang_util::DefId;
 
 /// How a path was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,5 +1,5 @@
-use crate::*;
 use crate::tests::parse_program;
+use crate::*;
 
 #[test]
 fn resolve_simple_use() {
@@ -57,7 +57,11 @@ fn unresolved_import_error() {
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    assert!(!resolved.errors.is_empty(), "expected errors: {:?}", resolved.errors);
+    assert!(
+        !resolved.errors.is_empty(),
+        "expected errors: {:?}",
+        resolved.errors
+    );
 }
 
 #[test]

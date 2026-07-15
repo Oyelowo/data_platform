@@ -26,7 +26,11 @@ pub struct TraitPredicate<'tcx> {
 
 impl<'tcx> std::fmt::Debug for TraitPredicate<'tcx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TraitPredicate({:?}, {:?})", self.trait_ref.def_id, self.polarity)
+        write!(
+            f,
+            "TraitPredicate({:?}, {:?})",
+            self.trait_ref.def_id, self.polarity
+        )
     }
 }
 
@@ -46,7 +50,11 @@ pub struct ProjectionPredicate<'tcx> {
 
 impl<'tcx> std::fmt::Debug for ProjectionPredicate<'tcx> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ProjectionPredicate({:?} == {:?})", self.projection_ty.def_id, self.term)
+        write!(
+            f,
+            "ProjectionPredicate({:?} == {:?})",
+            self.projection_ty.def_id, self.term
+        )
     }
 }
 
@@ -80,7 +88,11 @@ impl<'tcx> fmt::Debug for Predicate<'tcx> {
                 write!(f, "Trait({:?}, {:?})", tp.trait_ref.def_id, tp.polarity)
             }
             Predicate::Projection(pp) => {
-                write!(f, "Projection({:?} == {:?})", pp.projection_ty.def_id, pp.term)
+                write!(
+                    f,
+                    "Projection({:?} == {:?})",
+                    pp.projection_ty.def_id, pp.term
+                )
             }
             Predicate::TypeOutlives(_) => write!(f, "TypeOutlives"),
             Predicate::ConstEvaluatable(ct) => write!(f, "ConstEvaluatable({:?})", ct),

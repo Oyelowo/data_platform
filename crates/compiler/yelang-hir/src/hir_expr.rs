@@ -3,14 +3,12 @@
 use yelang_ast::{Ident, Label};
 use yelang_lexer::Span;
 
-use crate::ids::{BodyId, HirId};
-use crate::res::Res;
-use crate::hir::{
-    Arm, Block, CaptureClause, FieldExpr, FnSig, Lit, Stmt,
-};
+use crate::hir::{Arm, Block, CaptureClause, FieldExpr, FnSig, Lit, Stmt};
 use crate::hir_body::Param;
 use crate::hir_pat::Pat;
 use crate::hir_ty::Ty;
+use crate::ids::{BodyId, HirId};
+use crate::res::Res;
 
 /// An expression node.
 #[derive(Debug, Clone)]
@@ -41,10 +39,7 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     /// Function call.
-    Call {
-        func: Box<Expr>,
-        args: Vec<Expr>,
-    },
+    Call { func: Box<Expr>, args: Vec<Expr> },
     /// Method call.
     MethodCall {
         receiver: Box<Expr>,
@@ -53,47 +48,26 @@ pub enum ExprKind {
         trait_def_id: Option<crate::ids::DefId>,
     },
     /// Field access.
-    Field {
-        expr: Box<Expr>,
-        field: Ident,
-    },
+    Field { expr: Box<Expr>, field: Ident },
     /// Array/slice index.
-    Index {
-        expr: Box<Expr>,
-        index: Box<Expr>,
-    },
+    Index { expr: Box<Expr>, index: Box<Expr> },
     /// Assignment.
-    Assign {
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
+    Assign { left: Box<Expr>, right: Box<Expr> },
     /// Block expression.
-    Block {
-        block: Block,
-    },
+    Block { block: Block },
     /// Infinite loop.
-    Loop {
-        block: Block,
-        label: Option<Label>,
-    },
+    Loop { block: Block, label: Option<Label> },
     /// Break from a loop.
     Break {
         label: Option<Label>,
         expr: Option<Box<Expr>>,
     },
     /// Continue a loop.
-    Continue {
-        label: Option<Label>,
-    },
+    Continue { label: Option<Label> },
     /// Return from a function.
-    Return {
-        expr: Option<Box<Expr>>,
-    },
+    Return { expr: Option<Box<Expr>> },
     /// Match expression.
-    Match {
-        expr: Box<Expr>,
-        arms: Vec<Arm>,
-    },
+    Match { expr: Box<Expr>, arms: Vec<Arm> },
     /// If expression.
     If {
         cond: Box<Expr>,
@@ -113,23 +87,13 @@ pub enum ExprKind {
         rest: Option<Box<Expr>>,
     },
     /// Tuple literal.
-    Tuple {
-        exprs: Vec<Expr>,
-    },
+    Tuple { exprs: Vec<Expr> },
     /// Array literal.
-    Array {
-        exprs: Vec<Expr>,
-    },
+    Array { exprs: Vec<Expr> },
     /// Type cast.
-    Cast {
-        expr: Box<Expr>,
-        ty: Ty,
-    },
+    Cast { expr: Box<Expr>, ty: Ty },
     /// Let expression (used inside `if let`).
-    Let {
-        pat: Pat,
-        expr: Box<Expr>,
-    },
+    Let { pat: Pat, expr: Box<Expr> },
     /// Error recovery.
     Err,
 }

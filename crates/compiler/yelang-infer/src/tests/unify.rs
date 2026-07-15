@@ -1,4 +1,4 @@
-use crate::unify::{UnificationTable, UnifyKey, Snapshot};
+use crate::unify::{Snapshot, UnificationTable, UnifyKey};
 
 #[derive(Clone, Debug, PartialEq)]
 enum TestValue {
@@ -85,7 +85,10 @@ fn rollback_restores_parent() {
     assert_eq!(table.find(v1), table.find(v2));
 
     table.rollback_to(snap);
-    assert_ne!(table.find_without_compression(v1), table.find_without_compression(v2));
+    assert_ne!(
+        table.find_without_compression(v1),
+        table.find_without_compression(v2)
+    );
 }
 
 #[test]

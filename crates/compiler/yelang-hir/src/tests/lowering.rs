@@ -5,11 +5,11 @@ use yelang_interner::Interner;
 use yelang_lexer::{Span, TokenStream};
 use yelang_util::{DefId, FxHashMap};
 
+use crate::crate_hir::Crate;
 use crate::hir::{ExprKind, ItemKind, StmtKind};
+use crate::lowering::lower_crate;
 use crate::map::Map;
 use crate::res::ResolvedCrate;
-use crate::lowering::lower_crate;
-use crate::crate_hir::Crate;
 
 fn parse_program(src: &str) -> (Program, Interner) {
     let interner = Interner::new();

@@ -22,6 +22,7 @@ mod program;
 pub mod ptr;
 pub mod query;
 mod stmt;
+pub mod token;
 pub mod tokenizer;
 mod types;
 pub mod validation;

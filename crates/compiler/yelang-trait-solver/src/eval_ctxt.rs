@@ -37,10 +37,7 @@ impl<'tcx> EvalCtxt<'tcx> {
     }
 
     /// Entry point: evaluate a root goal.
-    pub fn evaluate_root_goal(
-        &mut self,
-        goal: Goal<'tcx>,
-    ) -> SolverResult<'tcx> {
+    pub fn evaluate_root_goal(&mut self, goal: Goal<'tcx>) -> SolverResult<'tcx> {
         let canonical_goal = self.canonicalize_goal(goal);
         self.evaluate_canonical_goal(canonical_goal)
     }
@@ -71,7 +68,8 @@ impl<'tcx> EvalCtxt<'tcx> {
 
         // 4. Cache the result.
         if let Ok(ref response) = result {
-            self.search_graph.insert_cache(canonical_goal, response.clone());
+            self.search_graph
+                .insert_cache(canonical_goal, response.clone());
         }
 
         result
@@ -153,10 +151,7 @@ impl<'tcx> EvalCtxt<'tcx> {
     }
 
     /// Merge multiple responses into one.
-    fn merge_responses(
-        &mut self,
-        responses: &[CanonicalResponse<'tcx>],
-    ) -> SolverResult<'tcx> {
+    fn merge_responses(&mut self, responses: &[CanonicalResponse<'tcx>]) -> SolverResult<'tcx> {
         match responses.len() {
             0 => Err(NoSolution),
             1 => Ok(responses[0].clone()),

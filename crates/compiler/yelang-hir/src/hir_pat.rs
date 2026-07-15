@@ -3,9 +3,9 @@
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
+use crate::hir::Lit;
 use crate::ids::HirId;
 use crate::res::Res;
-use crate::hir::Lit;
 
 /// A pattern node.
 #[derive(Debug, Clone)]
@@ -35,10 +35,7 @@ pub enum PatKind {
     /// Tuple pattern: `(a, b)`
     Tuple { pats: Vec<Pat> },
     /// Tuple-struct pattern: `Some(x)`
-    TupleStruct {
-        res: Res,
-        pats: Vec<Pat>,
-    },
+    TupleStruct { res: Res, pats: Vec<Pat> },
     /// Path pattern (enum variant without data, or constant).
     Path { res: Res },
     /// Literal pattern.

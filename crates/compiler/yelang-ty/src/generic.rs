@@ -34,14 +34,8 @@ pub struct GenericParamDef {
 /// The kind of a generic parameter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GenericParamDefKind {
-    Type {
-        has_default: bool,
-        synthetic: bool,
-    },
-    Const {
-        ty: ConstParamTy,
-        has_default: bool,
-    },
+    Type { has_default: bool, synthetic: bool },
+    Const { ty: ConstParamTy, has_default: bool },
 }
 
 impl Default for GenericParamDefKind {
@@ -167,10 +161,7 @@ mod tests {
         let interner = Interner::new();
         let t1 = interner.mk_ty(TyKind::Int(IntTy::I32));
         let t2 = interner.mk_ty(TyKind::Bool);
-        let sub = Substitution::from_args(vec![
-            GenericArg::Type(t1),
-            GenericArg::Type(t2),
-        ]);
+        let sub = Substitution::from_args(vec![GenericArg::Type(t1), GenericArg::Type(t2)]);
         assert_eq!(sub.len(), 2);
         assert_eq!(sub.type_at(0), t1);
         assert_eq!(sub.type_at(1), t2);
