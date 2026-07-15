@@ -115,47 +115,35 @@ fn match_op(
                     Ok(Bindings::new())
                 }
             },
-            RepetitionKind::ZeroOrMore => {
+            RepetitionKind::ZeroOrMore | RepetitionKind::OneOrMore => {
                 let mut iterations = Vec::new();
+                let is_plus = matches!(kind, RepetitionKind::OneOrMore);
                 loop {
                     match match_ops(ops, cursor, interner) {
                         Ok(iter_bindings) => iterations.push(iter_bindings),
                         Err(_) => break,
                     }
                     if let Some(sep_tree) = sep {
-                        if cursor
+                        if !cursor
                             .peek()
                             .map(|t| trees_equal(t, sep_tree))
                             .unwrap_or(false)
                         {
-                            cursor.advance();
-                        } else {
                             break;
                         }
-                    }
-                }
-                Ok(Bindings::from_repeat_iterations(iterations))
-            }
-            RepetitionKind::OneOrMore => {
-                let mut iterations = Vec::new();
-                loop {
-                    match match_ops(ops, cursor, interner) {
-                        Ok(iter_bindings) => iterations.push(iter_bindings),
-                        Err(_) => break,
-                    }
-                    if let Some(sep_tree) = sep {
-                        if cursor
-                            .peek()
-                            .map(|t| trees_equal(t, sep_tree))
-                            .unwrap_or(false)
-                        {
+                        // Lookahead past the separator to see if another element
+                        // follows. If not, this is a trailing separator: consume
+                        // it and stop.
+                        let mut lookahead = cursor.clone();
+                        lookahead.advance();
+                        if match_ops(ops, &mut lookahead, interner).is_err() {
                             cursor.advance();
-                        } else {
                             break;
                         }
+                        cursor.advance();
                     }
                 }
-                if iterations.is_empty() {
+                if is_plus && iterations.is_empty() {
                     return Err(MatcherError::InvalidMatcher(
                         "expected at least one repetition".to_string(),
                     ));

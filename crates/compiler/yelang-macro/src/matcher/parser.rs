@@ -1,9 +1,11 @@
 use yelang_interner::Interner;
-use yelang_macro_core::token_tree::TokenTree;
+use yelang_macro_core::token_tree::{Delimiter, TokenTree};
 
 use super::cursor::TokenCursor;
+use super::follow::validate_rule;
 use super::types::{
-    FragmentKind, MacroKind, MacroRule, MatcherError, MatcherOp, RepetitionKind, TranscriberOp,
+    FragmentKind, MacroKind, MacroRule, MatcherError, MatcherOp, MetavarExpr, RepetitionKind,
+    TranscriberOp,
 };
 
 /// Parse all rules from the body of a `macro name { ... }` definition.
@@ -91,12 +93,15 @@ pub fn parse_rules(
         let transcriber =
             parse_transcriber_seq(&mut TokenCursor::new(transcriber_group.stream), interner)?;
 
-        rules.push(MacroRule {
+        let rule = MacroRule {
             kind,
             attr_args,
             matcher,
             transcriber,
-        });
+        };
+        validate_rule(&rule, interner)?;
+
+        rules.push(rule);
 
         // Optional trailing semicolon after a rule.
         if cursor.peek().map(is_semicolon).unwrap_or(false) {
@@ -191,6 +196,13 @@ fn parse_transcriber_seq(
             cursor.advance(); // consume '$'
             let next = cursor.advance().ok_or(MatcherError::UnexpectedEof)?;
             match next {
+                TokenTree::Group(group) if group.delimiter == Delimiter::Brace => {
+                    let expr = parse_metavar_expr(&group.stream, interner)?;
+                    ops.push(TranscriberOp::MetavarExpr(expr));
+                }
+                TokenTree::Punct(p) if p.ch == '$' => {
+                    ops.push(TranscriberOp::DollarDollar);
+                }
                 TokenTree::Ident(ident) => {
                     ops.push(TranscriberOp::Subst(ident.sym));
                 }
@@ -206,7 +218,7 @@ fn parse_transcriber_seq(
                 }
                 other => {
                     return Err(MatcherError::InvalidTranscriber(format!(
-                        "expected identifier or group after `$`, found {}",
+                        "expected identifier, group, or `$$` after `$`, found {}",
                         other.render(interner)
                     )));
                 }
@@ -225,6 +237,118 @@ fn parse_transcriber_seq(
     }
 
     Ok(ops)
+}
+
+/// Parse a metavariable expression from the contents of a `${ ... }` group.
+fn parse_metavar_expr(
+    stream: &yelang_macro_core::token_tree::TokenStream,
+    interner: &Interner,
+) -> Result<MetavarExpr, MatcherError> {
+    let mut cursor = TokenCursor::new(stream.clone());
+
+    let name = expect_ident(&mut cursor)?;
+    let name_str = interner.resolve(&name);
+
+    let args_group = match cursor.advance() {
+        Some(TokenTree::Group(g)) if g.delimiter == Delimiter::Parenthesis => g,
+        Some(other) => {
+            return Err(MatcherError::InvalidMetavarExpr(format!(
+                "expected `(...)` after `{}`, found {}",
+                name_str,
+                other.render(interner)
+            )));
+        }
+        None => {
+            return Err(MatcherError::InvalidMetavarExpr(format!(
+                "expected `(...)` after `{}`",
+                name_str
+            )));
+        }
+    };
+
+    let mut args = TokenCursor::new(args_group.stream);
+
+    let expr = match name_str {
+        "count" => {
+            let var = expect_ident(&mut args)?;
+            let depth = if args.peek().map(is_comma).unwrap_or(false) {
+                args.advance();
+                Some(expect_usize_literal(&mut args, interner)?)
+            } else {
+                None
+            };
+            MetavarExpr::Count { name: var, depth }
+        }
+        "index" => {
+            let depth = if args.is_eof() {
+                None
+            } else {
+                Some(expect_usize_literal(&mut args, interner)?)
+            };
+            MetavarExpr::Index { depth }
+        }
+        "len" => {
+            let depth = if args.is_eof() {
+                None
+            } else {
+                Some(expect_usize_literal(&mut args, interner)?)
+            };
+            MetavarExpr::Len { depth }
+        }
+        "ignore" => {
+            let var = expect_ident(&mut args)?;
+            MetavarExpr::Ignore { name: var }
+        }
+        other => {
+            return Err(MatcherError::InvalidMetavarExpr(format!(
+                "unknown metavariable expression `{}`",
+                other
+            )));
+        }
+    };
+
+    if !args.is_eof() {
+        return Err(MatcherError::InvalidMetavarExpr(
+            "trailing tokens in metavariable expression arguments".to_string(),
+        ));
+    }
+
+    if !cursor.is_eof() {
+        return Err(MatcherError::InvalidMetavarExpr(
+            "trailing tokens in metavariable expression".to_string(),
+        ));
+    }
+
+    Ok(expr)
+}
+
+fn is_comma(tree: &TokenTree) -> bool {
+    matches!(tree, TokenTree::Punct(p) if p.ch == ',')
+}
+
+fn expect_usize_literal(
+    cursor: &mut TokenCursor,
+    interner: &Interner,
+) -> Result<usize, MatcherError> {
+    match cursor.advance() {
+        Some(TokenTree::Literal(l)) => match &l.kind {
+            yelang_macro_core::token_tree::LitKind::Int { value, .. } => {
+                let s = interner.resolve(value);
+                s.parse::<usize>().map_err(|e| {
+                    MatcherError::InvalidMetavarExpr(format!("expected usize literal: {}", e))
+                })
+            }
+            _ => Err(MatcherError::InvalidMetavarExpr(format!(
+                "expected usize literal, found {}",
+                TokenTree::Literal(l.clone()).render(interner)
+            ))),
+        },
+        Some(other) => Err(MatcherError::InvalidMetavarExpr(format!(
+            "expected usize literal, found {}",
+            other.render(interner)
+        ))),
+        None => Err(MatcherError::UnexpectedEof),
+    }
 }
 
 /// Parse the optional separator and required repetition operator after a
@@ -400,6 +524,42 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].kind, MacroKind::Derive);
         assert!(rules[0].attr_args.is_empty());
+    }
+
+    #[test]
+    fn parse_metavar_expr_count() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body("($x:expr) => ( ${count(x)} )", &mut interner);
+        let rules = parse_rules(&body, &interner).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].transcriber.len(), 1);
+        assert!(
+            matches!(
+                rules[0].transcriber[0],
+                TranscriberOp::MetavarExpr(MetavarExpr::Count { .. })
+            ),
+            "got {:?}",
+            rules[0].transcriber[0]
+        );
+    }
+
+    #[test]
+    fn parse_metavar_expr_index() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body("($x:expr) => ( ${index()} )", &mut interner);
+        let rules = parse_rules(&body, &interner).unwrap();
+        assert!(matches!(
+            rules[0].transcriber[0],
+            TranscriberOp::MetavarExpr(MetavarExpr::Index { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_transcriber_tuple_group() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body("($x:expr) => ( (${index()}, ${len()}) )", &mut interner);
+        let rules = parse_rules(&body, &interner).unwrap();
+        eprintln!("transcriber ops: {:?}", rules[0].transcriber);
     }
 
     #[test]

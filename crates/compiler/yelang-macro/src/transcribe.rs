@@ -1,8 +1,8 @@
 use yelang_interner::Interner;
 use yelang_macro_core::SyntaxContextId;
-use yelang_macro_core::token_tree::{Group, TokenStream, TokenTree};
+use yelang_macro_core::token_tree::{Group, Literal, Punct, Spacing, TokenStream, TokenTree};
 
-use crate::matcher::types::{RepetitionKind, TranscriberOp};
+use crate::matcher::types::{MetavarExpr, RepetitionKind, TranscriberOp};
 use crate::matcher::{Binding, Bindings};
 
 /// Transcribe a macro rule's transcriber ops with the captured bindings.
@@ -18,18 +18,31 @@ pub fn transcribe(
 ) -> Result<TokenStream, String> {
     let mut env = Vec::new();
     env.push(bindings.clone());
-    transcribe_ops(ops, &mut env, interner, generated_ctx)
+    let mut repeat_stack = Vec::new();
+    transcribe_ops(ops, &mut env, &mut repeat_stack, interner, generated_ctx)
+}
+
+struct RepeatFrame {
+    index: usize,
+    len: usize,
 }
 
 fn transcribe_ops(
     ops: &[TranscriberOp],
     env: &mut Vec<Bindings>,
+    repeat_stack: &mut Vec<RepeatFrame>,
     interner: &Interner,
     generated_ctx: SyntaxContextId,
 ) -> Result<TokenStream, String> {
     let mut out = TokenStream::new();
     for op in ops {
-        out.extend(transcribe_op(op, env, interner, generated_ctx)?);
+        out.extend(transcribe_op(
+            op,
+            env,
+            repeat_stack,
+            interner,
+            generated_ctx,
+        )?);
     }
     Ok(out)
 }
@@ -37,6 +50,7 @@ fn transcribe_ops(
 fn transcribe_op(
     op: &TranscriberOp,
     env: &mut Vec<Bindings>,
+    repeat_stack: &mut Vec<RepeatFrame>,
     interner: &Interner,
     generated_ctx: SyntaxContextId,
 ) -> Result<TokenStream, String> {
@@ -47,7 +61,7 @@ fn transcribe_op(
             Ok(TokenStream::from_vec(vec![tree]))
         }
         TranscriberOp::Group { delimiter, ops } => {
-            let inner = transcribe_ops(ops, env, interner, generated_ctx)?;
+            let inner = transcribe_ops(ops, env, repeat_stack, interner, generated_ctx)?;
             let mut group = TokenTree::Group(Group::new(*delimiter, inner, Default::default()));
             apply_ctx_to_tree(&mut group, generated_ctx);
             Ok(TokenStream::from_vec(vec![group]))
@@ -59,6 +73,12 @@ fn transcribe_op(
             let stream = binding.expect_single(&resolve_name(interner, *name))?;
             Ok(stream)
         }
+        TranscriberOp::MetavarExpr(expr) => {
+            evaluate_metavar_expr(expr, repeat_stack, env, interner, generated_ctx)
+        }
+        TranscriberOp::DollarDollar => Ok(TokenStream::from_vec(vec![TokenTree::Punct(
+            Punct::new('$', Spacing::Alone, Default::default()),
+        )])),
         TranscriberOp::Repeat { kind, sep, ops } => {
             let names = referenced_names(ops);
             let count = resolve_repeat_count(*kind, &names, env, interner)?;
@@ -79,7 +99,12 @@ fn transcribe_op(
                     }
                 }
                 env.push(frame);
-                let part = transcribe_ops(ops, env, interner, generated_ctx)?;
+                repeat_stack.push(RepeatFrame {
+                    index: i,
+                    len: count,
+                });
+                let part = transcribe_ops(ops, env, repeat_stack, interner, generated_ctx)?;
+                repeat_stack.pop();
                 env.pop();
                 out.extend(part);
 
@@ -94,6 +119,80 @@ fn transcribe_op(
             Ok(out)
         }
     }
+}
+
+fn evaluate_metavar_expr(
+    expr: &MetavarExpr,
+    repeat_stack: &[RepeatFrame],
+    env: &[Bindings],
+    interner: &Interner,
+    generated_ctx: SyntaxContextId,
+) -> Result<TokenStream, String> {
+    match expr {
+        MetavarExpr::Count { name, depth } => {
+            let binding = lookup_binding(env, *name).ok_or_else(|| {
+                format!(
+                    "metavariable expression `${{count({})}}` refers to unknown metavariable",
+                    resolve_name(interner, *name)
+                )
+            })?;
+            let value = match depth {
+                Some(d) => count_at_depth(binding, *d),
+                None => count_total(binding),
+            };
+            Ok(int_literal_stream(value, interner, generated_ctx))
+        }
+        MetavarExpr::Index { depth } => {
+            let frame = frame_at_depth(repeat_stack, depth.unwrap_or(0))?;
+            Ok(int_literal_stream(frame.index, interner, generated_ctx))
+        }
+        MetavarExpr::Len { depth } => {
+            let frame = frame_at_depth(repeat_stack, depth.unwrap_or(0))?;
+            Ok(int_literal_stream(frame.len, interner, generated_ctx))
+        }
+        MetavarExpr::Ignore { .. } => Ok(TokenStream::new()),
+    }
+}
+
+fn frame_at_depth(repeat_stack: &[RepeatFrame], depth: usize) -> Result<&RepeatFrame, String> {
+    if repeat_stack.is_empty() {
+        return Err(
+            "metavariable expression requires a repetition context, but none is active".to_string(),
+        );
+    }
+    repeat_stack
+        .iter()
+        .rev()
+        .nth(depth)
+        .ok_or_else(|| format!("repetition depth {} is out of range", depth))
+}
+
+fn count_total(binding: &Binding) -> usize {
+    match binding {
+        Binding::Single(_) => 1,
+        Binding::Repeat(list) => list.iter().map(count_total).sum(),
+    }
+}
+
+fn count_at_depth(binding: &Binding, depth: usize) -> usize {
+    if depth == 0 {
+        match binding {
+            Binding::Single(_) => 1,
+            Binding::Repeat(list) => list.len(),
+        }
+    } else {
+        match binding {
+            Binding::Single(_) => 0,
+            Binding::Repeat(list) => list.iter().map(|b| count_at_depth(b, depth - 1)).sum(),
+        }
+    }
+}
+
+fn int_literal_stream(value: usize, interner: &Interner, ctx: SyntaxContextId) -> TokenStream {
+    let symbol = interner.get_or_intern(&value.to_string());
+    let mut lit = TokenTree::Literal(Literal::int(symbol, Default::default()));
+    apply_ctx_to_tree(&mut lit, ctx);
+    TokenStream::from_vec(vec![lit])
 }
 
 fn lookup_binding(env: &[Bindings], name: yelang_interner::Symbol) -> Option<&Binding> {
@@ -203,7 +302,12 @@ fn referenced_names(ops: &[TranscriberOp]) -> Vec<yelang_interner::Symbol> {
             TranscriberOp::Group { ops, .. } | TranscriberOp::Repeat { ops, .. } => {
                 names.extend(referenced_names(ops));
             }
-            TranscriberOp::Terminal(_) => {}
+            TranscriberOp::MetavarExpr(expr) => {
+                if let MetavarExpr::Count { name, .. } | MetavarExpr::Ignore { name } = expr {
+                    names.push(*name);
+                }
+            }
+            TranscriberOp::Terminal(_) | TranscriberOp::DollarDollar => {}
         }
     }
     names.sort();
@@ -262,6 +366,24 @@ mod tests {
         let bindings = Bindings::new();
         let ops = vec![TranscriberOp::Subst(interner.get_or_intern("x"))];
         assert!(transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).is_err());
+    }
+
+    #[test]
+    fn transcribe_dollar_dollar_escapes_to_literal_dollar() {
+        let interner = Interner::new();
+        let bindings = Bindings::new();
+        let ops = vec![TranscriberOp::DollarDollar];
+        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let trees: Vec<_> = out.into_iter().collect();
+        assert_eq!(trees.len(), 1);
+        assert!(matches!(
+            trees[0],
+            TokenTree::Punct(Punct {
+                ch: '$',
+                spacing: Spacing::Alone,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -326,6 +448,48 @@ mod tests {
         }];
         let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn transcribe_count_total_repetitions() {
+        let interner = Interner::new();
+        let mut bindings = Bindings::new();
+        let repeated: Vec<Binding> = vec![
+            single_ident_binding("x", "a", &interner),
+            single_ident_binding("x", "b", &interner),
+            single_ident_binding("x", "c", &interner),
+        ];
+        bindings.insert(interner.get_or_intern("x"), Binding::Repeat(repeated));
+        let ops = vec![TranscriberOp::MetavarExpr(MetavarExpr::Count {
+            name: interner.get_or_intern("x"),
+            depth: None,
+        })];
+        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        assert_eq!(out.render(&interner), "3");
+    }
+
+    #[test]
+    fn transcribe_tuple_group() {
+        let interner = Interner::new();
+        let mut bindings = Bindings::new();
+        bindings.insert(
+            interner.get_or_intern("x"),
+            single_ident_binding("x", "42", &interner),
+        );
+        let ops = vec![TranscriberOp::Group {
+            delimiter: yelang_macro_core::token_tree::Delimiter::Parenthesis,
+            ops: vec![
+                TranscriberOp::Subst(interner.get_or_intern("x")),
+                TranscriberOp::Terminal(TokenTree::Punct(Punct::new(
+                    ',',
+                    Spacing::Alone,
+                    Span::default(),
+                ))),
+                TranscriberOp::Subst(interner.get_or_intern("x")),
+            ],
+        }];
+        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        assert_eq!(out.render(&interner), "(42, 42)");
     }
 
     #[test]

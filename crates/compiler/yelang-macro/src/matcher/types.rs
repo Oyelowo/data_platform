@@ -24,6 +24,19 @@ pub enum MatcherOp {
     },
 }
 
+/// A metavariable expression inside a transcriber.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetavarExpr {
+    /// `${count(name)}` or `${count(name, depth)}`.
+    Count { name: Symbol, depth: Option<usize> },
+    /// `${index()}` or `${index(depth)}`.
+    Index { depth: Option<usize> },
+    /// `${len()}` or `${len(depth)}`.
+    Len { depth: Option<usize> },
+    /// `${ignore(name)}`.
+    Ignore { name: Symbol },
+}
+
 /// A single transcriber atom inside a macro rule.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriberOp {
@@ -42,10 +55,14 @@ pub enum TranscriberOp {
         sep: Option<TokenTree>,
         ops: Vec<TranscriberOp>,
     },
+    /// A metavariable expression: `${count(x)}`, `${index()}`, etc.
+    MetavarExpr(MetavarExpr),
+    /// `$$` — expands to a single `$` token.
+    DollarDollar,
 }
 
 /// Fragment specifiers supported by the matcher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FragmentKind {
     Ident,
     Expr,
@@ -137,6 +154,13 @@ pub enum MatcherError {
     InvalidRepetition,
     InvalidMatcher(String),
     InvalidTranscriber(String),
+    /// A fragment specifier is followed by a token outside its follow set.
+    FollowSetViolation {
+        fragment: FragmentKind,
+        followed_by: String,
+    },
+    /// An invalid metavariable expression in the transcriber.
+    InvalidMetavarExpr(String),
 }
 
 impl std::fmt::Display for MatcherError {
@@ -148,6 +172,17 @@ impl std::fmt::Display for MatcherError {
             MatcherError::InvalidRepetition => write!(f, "invalid repetition syntax"),
             MatcherError::InvalidMatcher(s) => write!(f, "invalid matcher: {}", s),
             MatcherError::InvalidTranscriber(s) => write!(f, "invalid transcriber: {}", s),
+            MatcherError::FollowSetViolation {
+                fragment,
+                followed_by,
+            } => write!(
+                f,
+                "`{:?}` fragment may not be followed by `{}`",
+                fragment, followed_by
+            ),
+            MatcherError::InvalidMetavarExpr(s) => {
+                write!(f, "invalid metavariable expression: {}", s)
+            }
         }
     }
 }

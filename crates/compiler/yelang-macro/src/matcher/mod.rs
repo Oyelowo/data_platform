@@ -1,6 +1,7 @@
 pub mod bindings;
 pub mod cursor;
 pub mod engine;
+pub mod follow;
 pub mod fragment;
 pub mod parser;
 pub mod types;

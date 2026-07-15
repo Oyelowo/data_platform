@@ -76,5 +76,10 @@ pub fn needs_space(prev: &str, next: &str) -> bool {
         || next_first == '"'
         || next_first == '\'';
 
-    prev_is_word_like && next_is_word_like
+    // Separators also need a space before a word-like token so that
+    // `(a,b)` renders as `(a, b)`. We match the whole rendered previous token
+    // to avoid splitting multi-character punctuation.
+    let prev_is_lonely_separator = prev == "," || prev == ";";
+
+    (prev_is_word_like || prev_is_lonely_separator) && next_is_word_like
 }
