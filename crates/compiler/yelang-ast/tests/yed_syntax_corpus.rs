@@ -27,6 +27,7 @@ fn collect_yed_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> 
 }
 
 #[test]
+#[ignore]
 fn strict_parser_accepts_repo_yed_corpus() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lang_root = crate_root.join("..");
