@@ -73,6 +73,9 @@ pub enum PatternKind {
 
     /// Grouped pattern: `(pattern)`.
     Grouped(Box<Pattern>),
+
+    /// Macro invocation in pattern position: `MyPat!()`.
+    MacroInvocation(crate::expr::MacroInvocation),
 }
 
 /// A field in a struct pattern.

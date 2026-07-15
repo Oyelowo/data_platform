@@ -113,6 +113,11 @@ impl Codegen for Pattern {
                 pattern.codegen(f, interner)?;
                 write!(f, ")")
             }
+            PatternKind::MacroInvocation(inv) => {
+                inv.path.codegen(f, interner)?;
+                write!(f, "!")?;
+                write!(f, "{}", inv.args.render(interner))
+            }
         }
     }
 }

@@ -4,6 +4,7 @@
  * for checking a single function body.
  */
 
+use yelang_arena::{DefId, FxHashMap, HirId};
 use yelang_ast::Label;
 use yelang_lexer::Span;
 use yelang_ty::generic::GenericArg;
@@ -13,7 +14,6 @@ use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{
     AdtDef, Const, ConstKind, ConstValue, InferTy, Mutability, Ty, TyKind, TypeAndMut,
 };
-use yelang_arena::{DefId, FxHashMap, HirId};
 
 use yelang_infer::context::InferCtxt;
 use yelang_infer::error::TypeError;

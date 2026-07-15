@@ -1,9 +1,9 @@
 //! Lowering correctness tests.
 
+use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Program;
 use yelang_interner::Interner;
 use yelang_lexer::{Span, TokenStream};
-use yelang_arena::{DefId, FxHashMap};
 
 use crate::crate_hir::Crate;
 use crate::hir::{ExprKind, ItemKind, StmtKind};

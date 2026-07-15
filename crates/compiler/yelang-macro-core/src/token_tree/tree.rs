@@ -3,8 +3,8 @@ use std::fmt;
 use yelang_interner::Interner;
 
 use super::{
-    render::{render_group, render_ident, render_literal},
     Span, TokenId,
+    render::{render_group, render_ident, render_literal},
 };
 
 /// A single token or delimited group.

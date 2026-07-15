@@ -2,8 +2,8 @@
 use yelang_ast::ImplItemKind;
 use yelang_ast::{
     AssignEqExpr, AssignOpExpr, Attribute, AttributeArgs, BinaryExpr, BlockExpr, Codegen, Expr,
-    ExprKind, IfExpr, Item, ItemKind, MacroInvocation, MemberAccess, NamedArg, Program, Stmt,
-    StmtKind, TokenKind, UnaryExpr,
+    ExprKind, IfExpr, Item, ItemKind, MacroInvocation, MemberAccess, NamedArg, Pattern,
+    PatternKind, Program, Stmt, StmtKind, TokenKind, Type, TypeKind, UnaryExpr,
 };
 
 use yelang_interner::Interner;
@@ -116,18 +116,18 @@ impl<'a> MacroExpander<'a> {
     /// Returns a vec because decorators such as `@derive` may generate
     /// additional items (e.g. `impl` blocks) alongside the original item.
     pub fn expand_item(&mut self, item: Item) -> Result<Vec<Item>, ExpandError> {
-        let (mut primary, side_items) = self.expand_item_attributes(item)?;
+        let (primary, side_items) = self.expand_item_attributes(item)?;
 
-        // Deeply expand the primary item.
+        // Deeply expand the primary item. It may expand to multiple items if it
+        // is an item-position macro invocation.
         let (expanded_primary, _) = self.expand_item_deep(primary);
-        primary = expanded_primary;
 
         // Deeply expand side items (they keep any attributes they were generated
         // with and are not further attribute-expanded in this phase).
-        let mut expanded_items = vec![primary];
+        let mut expanded_items = expanded_primary;
         for side in side_items {
             let (expanded, _) = self.expand_item_deep(side);
-            expanded_items.push(expanded);
+            expanded_items.extend(expanded);
         }
         Ok(expanded_items)
     }
@@ -182,42 +182,112 @@ impl<'a> MacroExpander<'a> {
     }
 
     /// Deeply expand all macro invocations inside an item.
-    /// Returns (expanded_item, whether_anything_changed).
-    fn expand_item_deep(&mut self, mut item: Item) -> (Item, bool) {
+    ///
+    /// Returns a vector because an item-position macro invocation may expand to
+    /// multiple items. For ordinary items the vector contains a single element.
+    fn expand_item_deep(&mut self, mut item: Item) -> (Vec<Item>, bool) {
+        // Item-position macro invocation: expand to items.
+        if let ItemKind::MacroInvocation(inv) = &item.kind {
+            match self.expand_macro_invocation(inv) {
+                Ok(stream) => match parse_items_from_token_stream(&stream, self.interner) {
+                    Ok(items) => return (items, true),
+                    Err(reason) => {
+                        self.errors.push(ExpandError::MalformedMacroArgs {
+                            reason: format!(
+                                "macro expansion did not produce valid items: {}",
+                                reason
+                            ),
+                            span: inv.span,
+                        });
+                    }
+                },
+                Err(e) => self.errors.push(e),
+            }
+            return (vec![item], false);
+        }
+
         let mut changed = false;
 
         match &mut item.kind {
             ItemKind::Fn(func) => {
+                changed |= self.expand_fn_sig(&mut func.sig);
                 let (new_body, body_changed) = self.expand_block_expr(&func.body);
                 func.body = new_body;
                 changed |= body_changed;
             }
             ItemKind::Const(c) => {
+                let (new_ty, ty_changed) = self.expand_type(&c.ty);
+                c.ty = new_ty;
+                changed |= ty_changed;
                 let (new_expr, expr_changed) = self.expand_expr(&c.value);
                 c.value = new_expr;
                 changed |= expr_changed;
             }
             ItemKind::Static(s) => {
+                let (new_ty, ty_changed) = self.expand_type(&s.ty);
+                s.ty = new_ty;
+                changed |= ty_changed;
                 let (new_expr, expr_changed) = self.expand_expr(&s.value);
                 s.value = new_expr;
                 changed |= expr_changed;
             }
             ItemKind::Impl(i) => {
+                let (new_self_ty, self_ty_changed) = self.expand_type(&i.self_ty);
+                i.self_ty = new_self_ty;
+                changed |= self_ty_changed;
                 for item in &mut i.items {
-                    if let yelang_ast::ImplItemKind::Method(m) = &mut item.item {
-                        let (new_body, body_changed) = self.expand_block_expr(&m.body);
-                        m.body = new_body;
-                        changed |= body_changed;
+                    match &mut item.item {
+                        yelang_ast::ImplItemKind::Method(m) => {
+                            changed |= self.expand_fn_sig(&mut m.sig);
+                            let (new_body, body_changed) = self.expand_block_expr(&m.body);
+                            m.body = new_body;
+                            changed |= body_changed;
+                        }
+                        yelang_ast::ImplItemKind::AssociatedType(at) => {
+                            let (new_ty, ty_changed) = self.expand_type(&at.ty);
+                            at.ty = new_ty;
+                            changed |= ty_changed;
+                        }
+                        yelang_ast::ImplItemKind::Constant(c) => {
+                            let (new_ty, ty_changed) = self.expand_type(&c.ty);
+                            c.ty = new_ty;
+                            changed |= ty_changed;
+                            if let Some(value) = &mut c.value {
+                                let (new_value, value_changed) = self.expand_expr(value);
+                                *value = new_value;
+                                changed |= value_changed;
+                            }
+                        }
                     }
                 }
             }
             ItemKind::Trait(t) => {
                 for item in &mut t.items {
-                    if let yelang_ast::TraitItemKind::Method(m) = &mut item.item {
-                        if let Some(body) = &mut m.body {
-                            let (new_body, body_changed) = self.expand_block_expr(body);
-                            *body = new_body;
-                            changed |= body_changed;
+                    match &mut item.item {
+                        yelang_ast::TraitItemKind::Method(m) => {
+                            changed |= self.expand_fn_sig(&mut m.sig);
+                            if let Some(body) = &mut m.body {
+                                let (new_body, body_changed) = self.expand_block_expr(body);
+                                *body = new_body;
+                                changed |= body_changed;
+                            }
+                        }
+                        yelang_ast::TraitItemKind::AssociatedType(at) => {
+                            if let Some(default) = &mut at.default {
+                                let (new_ty, ty_changed) = self.expand_type(default);
+                                *default = new_ty;
+                                changed |= ty_changed;
+                            }
+                        }
+                        yelang_ast::TraitItemKind::Constant(c) => {
+                            let (new_ty, ty_changed) = self.expand_type(&c.ty);
+                            c.ty = new_ty;
+                            changed |= ty_changed;
+                            if let Some(value) = &mut c.value {
+                                let (new_value, value_changed) = self.expand_expr(value);
+                                *value = new_value;
+                                changed |= value_changed;
+                            }
                         }
                     }
                 }
@@ -226,17 +296,99 @@ impl<'a> MacroExpander<'a> {
                 if let yelang_ast::ModKind::Inline { items: mod_items } = &mut m.kind {
                     let mut new_items = vec![];
                     for mi in std::mem::take(mod_items) {
-                        let (expanded, ci) = self.expand_item_deep(mi);
-                        new_items.push(expanded);
-                        changed |= ci;
+                        let original = mi.clone();
+                        match self.expand_item(mi) {
+                            Ok(expanded) => {
+                                new_items.extend(expanded);
+                                changed = true;
+                            }
+                            Err(e) => {
+                                self.errors.push(e);
+                                new_items.push(original);
+                            }
+                        }
                     }
                     *mod_items = new_items;
                 }
             }
+            ItemKind::Struct(s) => match &mut s.fields {
+                yelang_ast::StructFields::Named(fields) => {
+                    for f in fields {
+                        let (new_ty, ty_changed) = self.expand_type(&f.ty);
+                        f.ty = new_ty;
+                        changed |= ty_changed;
+                    }
+                }
+                yelang_ast::StructFields::Tuple(types) => {
+                    let old_types = std::mem::take(types);
+                    let mut new_types = vec![];
+                    for t in old_types {
+                        let (nt, c) = self.expand_type(&t);
+                        new_types.push(nt);
+                        changed |= c;
+                    }
+                    *types = new_types;
+                }
+                yelang_ast::StructFields::Unit => {}
+            },
+            ItemKind::Enum(e) => {
+                for v in &mut e.variants {
+                    match &mut v.kind {
+                        yelang_ast::VariantKind::Tuple(types) => {
+                            let old_types = std::mem::take(types);
+                            let mut new_types = vec![];
+                            for t in old_types {
+                                let (nt, c) = self.expand_type(&t);
+                                new_types.push(nt);
+                                changed |= c;
+                            }
+                            *types = new_types;
+                        }
+                        yelang_ast::VariantKind::Struct(fields) => {
+                            for f in fields {
+                                let (new_ty, ty_changed) = self.expand_type(&f.ty);
+                                f.ty = new_ty;
+                                changed |= ty_changed;
+                            }
+                        }
+                        yelang_ast::VariantKind::Unit => {}
+                    }
+                    if let Some(disc) = &mut v.discriminant {
+                        let (new_disc, disc_changed) = self.expand_expr(disc);
+                        *disc = new_disc;
+                        changed |= disc_changed;
+                    }
+                }
+            }
+            ItemKind::TypeAlias(ta) => {
+                let (new_target, target_changed) = self.expand_type(&ta.target);
+                ta.target = new_target;
+                changed |= target_changed;
+            }
             _ => {}
         }
 
-        (item, changed)
+        (vec![item], changed)
+    }
+
+    /// Expand macros in a function signature (parameter patterns/types and return type).
+    /// Returns whether anything changed.
+    fn expand_fn_sig(&mut self, sig: &mut yelang_ast::FnSig) -> bool {
+        let mut changed = false;
+        for param in &mut sig.params {
+            let (new_pattern, pattern_changed) = self.expand_pattern(&param.pattern);
+            param.pattern = new_pattern;
+            changed |= pattern_changed;
+            let (new_ty, ty_changed) = self.expand_type(&param.ty);
+            param.ty = new_ty;
+            changed |= ty_changed;
+        }
+        if let yelang_ast::FnRefType::Type(ret) = &mut sig.return_type {
+            let (new_ret, ret_changed) = self.expand_type(ret);
+            *ret = new_ret;
+            changed |= ret_changed;
+        }
+        changed
     }
 
     /// Expand all macros in a block expression.
@@ -257,6 +409,513 @@ impl<'a> MacroExpander<'a> {
             },
             changed,
         )
+    }
+
+    /// Expand all macros in a type annotation, recursively.
+    fn expand_type(&mut self, ty: &Type) -> (Type, bool) {
+        match &ty.kind {
+            TypeKind::MacroInvocation(inv) => {
+                match self.expand_macro_invocation(inv) {
+                    Ok(stream) => match parse_type_from_token_stream(&stream, self.interner) {
+                        Ok(expanded) => {
+                            let (recursed, recursed_changed) = self.expand_type(&expanded);
+                            return (recursed, true || recursed_changed);
+                        }
+                        Err(reason) => {
+                            self.errors.push(ExpandError::MalformedMacroArgs {
+                                reason: format!(
+                                    "macro expansion did not produce a valid type: {}",
+                                    reason
+                                ),
+                                span: inv.span,
+                            });
+                        }
+                    },
+                    Err(e) => self.errors.push(e),
+                }
+                (ty.clone(), false)
+            }
+            TypeKind::Ref { ty: inner, is_mut } => {
+                let (new_inner, changed) = self.expand_type(inner);
+                (
+                    Type {
+                        kind: TypeKind::Ref {
+                            ty: Box::new(new_inner),
+                            is_mut: *is_mut,
+                        },
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::Tuple(types) => {
+                let mut new_types = vec![];
+                let mut changed = false;
+                for t in types {
+                    let (nt, c) = self.expand_type(t);
+                    new_types.push(nt);
+                    changed |= c;
+                }
+                (
+                    Type {
+                        kind: TypeKind::Tuple(new_types),
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::Array(inner, size) => {
+                let (new_inner, inner_changed) = self.expand_type(inner);
+                let (new_size, size_changed) = self.expand_expr(size);
+                (
+                    Type {
+                        kind: TypeKind::Array(Box::new(new_inner), Box::new(new_size)),
+                        span: ty.span,
+                    },
+                    inner_changed || size_changed,
+                )
+            }
+            TypeKind::Slice(inner) => {
+                let (new_inner, changed) = self.expand_type(inner);
+                (
+                    Type {
+                        kind: TypeKind::Slice(Box::new(new_inner)),
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::Function(func) => {
+                let mut new_params = vec![];
+                let mut changed = false;
+                for p in &func.params {
+                    let (np, c) = self.expand_type(p);
+                    new_params.push(np);
+                    changed |= c;
+                }
+                let (new_ret, ret_changed) = self.expand_type(&func.return_type);
+                changed |= ret_changed;
+                (
+                    Type {
+                        kind: TypeKind::Function(yelang_ast::FunctionType {
+                            is_async: func.is_async,
+                            params: new_params,
+                            return_type: Box::new(new_ret),
+                            is_variadic: func.is_variadic,
+                        }),
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::ForAll { params, ty: inner } => {
+                let (new_inner, changed) = self.expand_type(inner);
+                (
+                    Type {
+                        kind: TypeKind::ForAll {
+                            params: params.clone(),
+                            ty: Box::new(new_inner),
+                        },
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::Union(types) => {
+                let mut new_types = vec![];
+                let mut changed = false;
+                for t in types {
+                    let (nt, c) = self.expand_type(t);
+                    new_types.push(nt);
+                    changed |= c;
+                }
+                (
+                    Type {
+                        kind: TypeKind::Union(new_types),
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::Structural(fields) => {
+                let mut new_fields = vec![];
+                let mut changed = false;
+                for f in fields {
+                    let (nt, c) = self.expand_type(&f.ty);
+                    changed |= c;
+                    new_fields.push(yelang_ast::StructuralField {
+                        name: f.name,
+                        ty: nt,
+                        optional: f.optional,
+                    });
+                }
+                (
+                    Type {
+                        kind: TypeKind::Structural(new_fields),
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            TypeKind::Operator(op) => match op {
+                yelang_ast::TypeOperator::TypeOf(expr) => {
+                    let (new_expr, changed) = self.expand_expr(expr);
+                    (
+                        Type {
+                            kind: TypeKind::Operator(yelang_ast::TypeOperator::TypeOf(Box::new(
+                                new_expr,
+                            ))),
+                            span: ty.span,
+                        },
+                        changed,
+                    )
+                }
+                yelang_ast::TypeOperator::ReturnType(inner)
+                | yelang_ast::TypeOperator::Parameters(inner) => {
+                    let (new_inner, changed) = self.expand_type(inner);
+                    (
+                        Type {
+                            kind: TypeKind::Operator(match op {
+                                yelang_ast::TypeOperator::ReturnType(_) => {
+                                    yelang_ast::TypeOperator::ReturnType(Box::new(new_inner))
+                                }
+                                _ => yelang_ast::TypeOperator::Parameters(Box::new(new_inner)),
+                            }),
+                            span: ty.span,
+                        },
+                        changed,
+                    )
+                }
+                yelang_ast::TypeOperator::Pick(base, keys)
+                | yelang_ast::TypeOperator::Omit(base, keys) => {
+                    let (new_base, base_changed) = self.expand_type(base);
+                    let (new_keys, keys_changed) = self.expand_type(keys);
+                    (
+                        Type {
+                            kind: TypeKind::Operator(match op {
+                                yelang_ast::TypeOperator::Pick(_, _) => {
+                                    yelang_ast::TypeOperator::Pick(
+                                        Box::new(new_base),
+                                        Box::new(new_keys),
+                                    )
+                                }
+                                _ => yelang_ast::TypeOperator::Omit(
+                                    Box::new(new_base),
+                                    Box::new(new_keys),
+                                ),
+                            }),
+                            span: ty.span,
+                        },
+                        base_changed || keys_changed,
+                    )
+                }
+            },
+            TypeKind::Named(path) | TypeKind::ImplTrait(path) | TypeKind::DynTrait(path) => {
+                let (new_path, changed) = self.expand_path_type_args(path);
+                (
+                    Type {
+                        kind: match &ty.kind {
+                            TypeKind::Named(_) => TypeKind::Named(new_path),
+                            TypeKind::ImplTrait(_) => TypeKind::ImplTrait(new_path),
+                            _ => TypeKind::DynTrait(new_path),
+                        },
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
+            _ => (ty.clone(), false),
+        }
+    }
+
+    /// Expand any macro invocations inside generic arguments on a path.
+    fn expand_path_type_args(&mut self, path: &yelang_ast::Path) -> (yelang_ast::Path, bool) {
+        let mut changed = false;
+        let mut new_segments = vec![];
+        for seg in &path.segments {
+            let new_args = if let Some(args) = &seg.args {
+                let (new_args, c) = self.expand_generic_args(args);
+                changed |= c;
+                Some(new_args)
+            } else {
+                None
+            };
+            new_segments.push(yelang_ast::PathSegment {
+                ident: seg.ident,
+                args: new_args,
+            });
+        }
+        (
+            yelang_ast::Path {
+                segments: new_segments,
+                qself: path.qself.clone(),
+                is_absolute: path.is_absolute,
+                span: path.span,
+            },
+            changed,
+        )
+    }
+
+    /// Expand any macro invocations inside generic arguments.
+    fn expand_generic_args(
+        &mut self,
+        args: &yelang_ast::GenericArgs,
+    ) -> (yelang_ast::GenericArgs, bool) {
+        match args {
+            yelang_ast::GenericArgs::AngleBracketed(ab) => {
+                let mut new_args = vec![];
+                let mut changed = false;
+                for arg in &ab.args {
+                    let (new_arg, c) = match arg {
+                        yelang_ast::AngleBracketedArg::Type(t) => {
+                            let (nt, c) = self.expand_type(t);
+                            (yelang_ast::AngleBracketedArg::Type(nt), c)
+                        }
+                        yelang_ast::AngleBracketedArg::Const(e) => {
+                            let (ne, c) = self.expand_expr(e);
+                            (yelang_ast::AngleBracketedArg::Const(ne), c)
+                        }
+                        yelang_ast::AngleBracketedArg::AssociatedType { name, ty } => {
+                            let (nt, c) = self.expand_type(ty);
+                            (
+                                yelang_ast::AngleBracketedArg::AssociatedType {
+                                    name: *name,
+                                    ty: nt,
+                                },
+                                c,
+                            )
+                        }
+                    };
+                    new_args.push(new_arg);
+                    changed |= c;
+                }
+                (
+                    yelang_ast::GenericArgs::AngleBracketed(yelang_ast::AngleBracketedArgs {
+                        args: new_args,
+                        span: ab.span,
+                    }),
+                    changed,
+                )
+            }
+            yelang_ast::GenericArgs::Parenthesized(pa) => {
+                let mut new_ins = vec![];
+                let mut changed = false;
+                for t in &pa.ins {
+                    let (nt, c) = self.expand_type(t);
+                    new_ins.push(nt);
+                    changed |= c;
+                }
+                let (new_out, out_changed) = if let Some(out) = &pa.out {
+                    let (no, c) = self.expand_type(out);
+                    (Some(no), c)
+                } else {
+                    (None, false)
+                };
+                changed |= out_changed;
+                (
+                    yelang_ast::GenericArgs::Parenthesized(yelang_ast::ParenthesizedArgs {
+                        ins: new_ins,
+                        out: new_out,
+                        span: pa.span,
+                    }),
+                    changed,
+                )
+            }
+        }
+    }
+
+    /// Expand all macros in a pattern, recursively.
+    fn expand_pattern(&mut self, pat: &Pattern) -> (Pattern, bool) {
+        match &pat.pattern {
+            PatternKind::MacroInvocation(inv) => {
+                match self.expand_macro_invocation(inv) {
+                    Ok(stream) => match parse_pattern_from_token_stream(&stream, self.interner) {
+                        Ok(expanded) => {
+                            let (recursed, recursed_changed) = self.expand_pattern(&expanded);
+                            return (recursed, true || recursed_changed);
+                        }
+                        Err(reason) => {
+                            self.errors.push(ExpandError::MalformedMacroArgs {
+                                reason: format!(
+                                    "macro expansion did not produce a valid pattern: {}",
+                                    reason
+                                ),
+                                span: inv.span,
+                            });
+                        }
+                    },
+                    Err(e) => self.errors.push(e),
+                }
+                (pat.clone(), false)
+            }
+            PatternKind::Binding {
+                name,
+                mutability,
+                subpattern,
+            } => {
+                let (new_sub, changed) = if let Some(sub) = subpattern {
+                    let (ns, c) = self.expand_pattern(sub);
+                    (Some(Box::new(ns)), c)
+                } else {
+                    (None, false)
+                };
+                (
+                    Pattern {
+                        pattern: PatternKind::Binding {
+                            name: *name,
+                            mutability: mutability.clone(),
+                            subpattern: new_sub,
+                        },
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::Tuple { patterns }
+            | PatternKind::Slice { patterns }
+            | PatternKind::Or(patterns) => {
+                let mut new_patterns = vec![];
+                let mut changed = false;
+                for p in patterns {
+                    let (np, c) = self.expand_pattern(p);
+                    new_patterns.push(np);
+                    changed |= c;
+                }
+                let kind = match &pat.pattern {
+                    PatternKind::Tuple { .. } => PatternKind::Tuple {
+                        patterns: new_patterns,
+                    },
+                    PatternKind::Slice { .. } => PatternKind::Slice {
+                        patterns: new_patterns,
+                    },
+                    _ => PatternKind::Or(new_patterns),
+                };
+                (
+                    Pattern {
+                        pattern: kind,
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::Struct { path, fields, rest } => {
+                let mut new_fields = vec![];
+                let mut changed = false;
+                for f in fields {
+                    let (np, c) = self.expand_pattern(&f.pattern);
+                    changed |= c;
+                    new_fields.push(yelang_ast::FieldPattern {
+                        name: f.name,
+                        pattern: np,
+                        is_shorthand: f.is_shorthand,
+                        is_placeholder: f.is_placeholder,
+                    });
+                }
+                (
+                    Pattern {
+                        pattern: PatternKind::Struct {
+                            path: path.clone(),
+                            fields: new_fields,
+                            rest: *rest,
+                        },
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::Record { fields, rest } => {
+                let mut new_fields = vec![];
+                let mut changed = false;
+                for f in fields {
+                    let (np, c) = self.expand_pattern(&f.pattern);
+                    changed |= c;
+                    new_fields.push(yelang_ast::FieldPattern {
+                        name: f.name,
+                        pattern: np,
+                        is_shorthand: f.is_shorthand,
+                        is_placeholder: f.is_placeholder,
+                    });
+                }
+                (
+                    Pattern {
+                        pattern: PatternKind::Record {
+                            fields: new_fields,
+                            rest: *rest,
+                        },
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::TupleStruct { path, patterns } => {
+                let mut new_patterns = vec![];
+                let mut changed = false;
+                for p in patterns {
+                    let (np, c) = self.expand_pattern(p);
+                    new_patterns.push(np);
+                    changed |= c;
+                }
+                (
+                    Pattern {
+                        pattern: PatternKind::TupleStruct {
+                            path: path.clone(),
+                            patterns: new_patterns,
+                        },
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::Ref { pattern, is_mut } => {
+                let (new_pat, changed) = self.expand_pattern(pattern);
+                (
+                    Pattern {
+                        pattern: PatternKind::Ref {
+                            pattern: Box::new(new_pat),
+                            is_mut: *is_mut,
+                        },
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::Grouped(inner) => {
+                let (new_inner, changed) = self.expand_pattern(inner);
+                (
+                    Pattern {
+                        pattern: PatternKind::Grouped(Box::new(new_inner)),
+                        span: pat.span,
+                    },
+                    changed,
+                )
+            }
+            PatternKind::Range(range) => {
+                let (new_start, start_changed) = if let Some(start) = &range.start {
+                    let (ns, c) = self.expand_expr(start);
+                    (Some(ns), c)
+                } else {
+                    (None, false)
+                };
+                let (new_end, end_changed) = if let Some(end) = &range.end {
+                    let (ne, c) = self.expand_expr(end);
+                    (Some(ne), c)
+                } else {
+                    (None, false)
+                };
+                (
+                    Pattern {
+                        pattern: PatternKind::Range(yelang_ast::RangeExpr {
+                            start: new_start.map(Box::new),
+                            op: range.op.clone(),
+                            end: new_end.map(Box::new),
+                        }),
+                        span: pat.span,
+                    },
+                    start_changed || end_changed,
+                )
+            }
+            _ => (pat.clone(), false),
+        }
     }
 
     /// Expand all macros in a statement.
@@ -283,6 +942,13 @@ impl<'a> MacroExpander<'a> {
                 )
             }
             StmtKind::Let(let_stmt) => {
+                let (new_pattern, pattern_changed) = self.expand_pattern(&let_stmt.pattern);
+                let (new_ty, ty_changed) = if let Some(ty) = &let_stmt.ty {
+                    let (nt, c) = self.expand_type(ty);
+                    (Some(nt), c)
+                } else {
+                    (None, false)
+                };
                 let (new_init, init_changed) = if let Some(init) = &let_stmt.init {
                     let (e, c) = self.expand_expr(init);
                     (Some(Box::new(e)), c)
@@ -292,15 +958,15 @@ impl<'a> MacroExpander<'a> {
                 (
                     Stmt {
                         kind: StmtKind::Let(Box::new(yelang_ast::LetStmt {
-                            pattern: let_stmt.pattern.clone(),
-                            ty: let_stmt.ty.clone(),
+                            pattern: Box::new(new_pattern),
+                            ty: new_ty.map(Box::new),
                             init: new_init,
                             span: let_stmt.span,
                             attrs: let_stmt.attrs.clone(),
                         })),
                         span: stmt.span,
                     },
-                    init_changed,
+                    pattern_changed || ty_changed || init_changed,
                 )
             }
             StmtKind::Item(item) => {
@@ -343,21 +1009,21 @@ impl<'a> MacroExpander<'a> {
                 if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
                     return (expanded, true);
                 }
-                if let Some(expanded) = self.expand_user_macro(inv) {
-                    return (expanded, true);
+                match self.expand_macro_invocation(inv) {
+                    Ok(stream) => match parse_expr_from_token_stream(&stream, self.interner) {
+                        Ok(expanded) => return (expanded, true),
+                        Err(reason) => {
+                            self.errors.push(ExpandError::MalformedMacroArgs {
+                                reason: format!(
+                                    "macro expansion did not produce a valid expression: {}",
+                                    reason
+                                ),
+                                span: inv.span,
+                            });
+                        }
+                    },
+                    Err(e) => self.errors.push(e),
                 }
-                // Unknown macro — emit error and keep as-is.
-                let path_name = if inv.path.segments.len() == 1 {
-                    self.interner
-                        .resolve(&inv.path.segments[0].ident.symbol)
-                        .to_string()
-                } else {
-                    "(qualified)".to_string()
-                };
-                self.errors.push(ExpandError::UnknownMacro {
-                    path: path_name,
-                    span: inv.span,
-                });
                 (expr.clone(), false)
             }
             ExprKind::Binary(bin) => {
@@ -453,6 +1119,7 @@ impl<'a> MacroExpander<'a> {
                 let mut arms = vec![];
                 let mut arms_changed = false;
                 for arm in &match_expr.arms {
+                    let (pattern, pattern_changed) = self.expand_pattern(&arm.pattern);
                     let (body, body_changed) = self.expand_expr(&arm.body);
                     let (guard, guard_changed) = if let Some(g) = &arm.guard {
                         let (ng, nc) = self.expand_expr(g);
@@ -461,12 +1128,12 @@ impl<'a> MacroExpander<'a> {
                         (None, false)
                     };
                     arms.push(yelang_ast::MatchArm {
-                        pattern: arm.pattern.clone(),
+                        pattern,
                         guard: guard.map(Box::new),
                         body: Box::new(body),
                         span: arm.span,
                     });
-                    arms_changed |= body_changed || guard_changed;
+                    arms_changed |= pattern_changed || body_changed || guard_changed;
                 }
                 (
                     Expr {
@@ -480,17 +1147,19 @@ impl<'a> MacroExpander<'a> {
                 )
             }
             ExprKind::Lambda(lambda) => {
-                let (body, changed) = self.expand_expr(&lambda.body);
+                let mut fn_sig = lambda.fn_sig.clone();
+                let sig_changed = self.expand_fn_sig(&mut fn_sig);
+                let (body, body_changed) = self.expand_expr(&lambda.body);
                 (
                     Expr {
                         kind: ExprKind::Lambda(yelang_ast::LambdaExpr {
                             header_span: lambda.header_span,
-                            fn_sig: lambda.fn_sig.clone(),
+                            fn_sig,
                             body: Box::new(body),
                         }),
                         span: expr.span,
                     },
-                    changed,
+                    sig_changed || body_changed,
                 )
             }
             ExprKind::Return(ret) => {
@@ -688,44 +1357,45 @@ impl<'a> MacroExpander<'a> {
                 )
             }
             ExprKind::TypeCast(cast) => {
-                let (base, changed) = self.expand_expr(&cast.base);
+                let (base, base_changed) = self.expand_expr(&cast.base);
+                let (new_ty, ty_changed) = self.expand_type(&cast.ty);
                 (
                     Expr {
                         kind: ExprKind::TypeCast(yelang_ast::TypeCast {
                             base: Box::new(base),
-                            ty: cast.ty.clone(),
+                            ty: new_ty,
                         }),
                         span: expr.span,
                     },
-                    changed,
+                    base_changed || ty_changed,
                 )
             }
             ExprKind::TypeAscription(asc) => {
-                let (new_expr, changed) = self.expand_expr(&asc.expr);
-                let span = new_expr.span;
+                let (new_expr, expr_changed) = self.expand_expr(&asc.expr);
+                let (new_ty, ty_changed) = self.expand_type(&asc.ty);
                 (
                     Expr {
                         kind: ExprKind::TypeAscription(yelang_ast::TypeAscription {
                             expr: Box::new(new_expr),
-                            ty: asc.ty.clone(),
+                            ty: new_ty,
                         }),
-                        span,
+                        span: expr.span,
                     },
-                    changed,
+                    expr_changed || ty_changed,
                 )
             }
             ExprKind::IsType(is_type) => {
-                let (new_expr, changed) = self.expand_expr(&is_type.expr);
-                let span = new_expr.span;
+                let (new_expr, expr_changed) = self.expand_expr(&is_type.expr);
+                let (new_ty, ty_changed) = self.expand_type(&is_type.ty);
                 (
                     Expr {
                         kind: ExprKind::IsType(yelang_ast::IsTypeExpr {
                             expr: Box::new(new_expr),
-                            ty: is_type.ty.clone(),
+                            ty: new_ty,
                         }),
-                        span,
+                        span: expr.span,
                     },
-                    changed,
+                    expr_changed || ty_changed,
                 )
             }
             ExprKind::Try(try_expr) => {
@@ -742,19 +1412,20 @@ impl<'a> MacroExpander<'a> {
                 )
             }
             ExprKind::ForLoop(for_loop) => {
+                let (pat, pat_changed) = self.expand_pattern(&for_loop.pat);
                 let (iter, iter_changed) = self.expand_expr(&for_loop.iter);
                 let (body, body_changed) = self.expand_block_expr(&for_loop.body);
                 (
                     Expr {
                         kind: ExprKind::ForLoop(yelang_ast::ForLoopExpr {
-                            pat: for_loop.pat.clone(),
+                            pat,
                             label: for_loop.label.clone(),
                             iter: Box::new(iter),
                             body,
                         }),
                         span: expr.span,
                     },
-                    iter_changed || body_changed,
+                    pat_changed || iter_changed || body_changed,
                 )
             }
             ExprKind::While(while_expr) => {
@@ -843,17 +1514,17 @@ impl<'a> MacroExpander<'a> {
                 )
             }
             ExprKind::Let(let_expr) => {
-                let (new_expr, changed) = self.expand_expr(&let_expr.expr);
-                let span = new_expr.span;
+                let (new_pattern, pattern_changed) = self.expand_pattern(&let_expr.pattern);
+                let (new_expr, expr_changed) = self.expand_expr(&let_expr.expr);
                 (
                     Expr {
                         kind: ExprKind::Let(yelang_ast::LetExpr {
-                            pattern: let_expr.pattern.clone(),
+                            pattern: new_pattern,
                             expr: Box::new(new_expr),
                         }),
-                        span,
+                        span: expr.span,
                     },
-                    changed,
+                    pattern_changed || expr_changed,
                 )
             }
             ExprKind::Comprehension(comp) => {
@@ -861,12 +1532,13 @@ impl<'a> MacroExpander<'a> {
                 let mut vars = vec![];
                 let mut vars_changed = false;
                 for var in &comp.variables {
+                    let (pattern, pattern_changed) = self.expand_pattern(&var.pattern);
                     let (source, source_changed) = self.expand_expr(&var.source);
                     vars.push(yelang_ast::ComprehensionVar {
-                        pattern: var.pattern.clone(),
+                        pattern,
                         source: Box::new(source),
                     });
-                    vars_changed |= source_changed;
+                    vars_changed |= pattern_changed || source_changed;
                 }
                 let (cond, cond_changed) = if let Some(c) = &comp.condition {
                     let (nc, cc) = self.expand_expr(c);
@@ -1267,14 +1939,25 @@ impl<'a> MacroExpander<'a> {
         }
     }
 
-    /// Try to expand a user-defined declarative macro invocation.
-    fn expand_user_macro(&mut self, inv: &MacroInvocation) -> Option<Expr> {
-        let name = inv.name(self.interner)?;
-        let mac = self.resolver.resolve(&name)?.clone();
+    /// Try to expand a user-defined macro invocation and return the raw expanded
+    /// token stream. The caller parses the stream according to the expected
+    /// syntactic category (expression, type, pattern, item, or statement).
+    fn expand_macro_invocation(
+        &mut self,
+        inv: &MacroInvocation,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let name = inv
+            .name(self.interner)
+            .unwrap_or_else(|| "(qualified)".to_string());
         let span = inv.span;
 
+        let Some(mac) = self.resolver.resolve(&name) else {
+            return Err(ExpandError::UnknownMacro { path: name, span });
+        };
+        let mac = mac.clone();
+
         if !self.before_expand(&name, span) {
-            return None;
+            return Err(ExpandError::ExpansionLoop { path: name, span });
         }
 
         // The invocation's `args` field preserves the delimiter group from the
@@ -1301,7 +1984,11 @@ impl<'a> MacroExpander<'a> {
                     span,
                 });
                 self.after_expand();
-                return None;
+                return Err(ExpandError::MacroMatchError {
+                    name: name.clone(),
+                    reason: "no rule matched the invocation".to_string(),
+                    span,
+                });
             }
             1 => (&matches[0].0, &matches[0].1),
             _ => {
@@ -1310,7 +1997,10 @@ impl<'a> MacroExpander<'a> {
                     span,
                 });
                 self.after_expand();
-                return None;
+                return Err(ExpandError::AmbiguousMacro {
+                    name: name.clone(),
+                    span,
+                });
             }
         };
 
@@ -1318,24 +2008,16 @@ impl<'a> MacroExpander<'a> {
             Some(stream) => stream,
             None => {
                 self.after_expand();
-                return None;
+                return Err(ExpandError::MacroTranscribeError {
+                    name: name.clone(),
+                    reason: "transcription failed".to_string(),
+                    span,
+                });
             }
         };
 
         self.after_expand();
-        match parse_expr_from_token_stream(&expanded_stream, self.interner) {
-            Ok(expr) => Some(expr),
-            Err(reason) => {
-                self.errors.push(ExpandError::MalformedMacroArgs {
-                    reason: format!(
-                        "macro expansion did not produce a valid expression: {}",
-                        reason
-                    ),
-                    span,
-                });
-                None
-            }
-        }
+        Ok(expanded_stream)
     }
 }
 
@@ -1378,6 +2060,40 @@ fn parse_items_from_token_stream(
     }
     let _ = local_interner;
     Ok(program.items)
+}
+
+/// Parse a token stream produced by a macro transcriber into a single type.
+fn parse_type_from_token_stream(
+    stream: &yelang_macro_core::token_tree::TokenStream,
+    interner: &Interner,
+) -> Result<Type, String> {
+    let rendered = stream.render(interner);
+    let mut local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+        .map_err(|e| format!("tokenize: {}", e))?;
+    let ty = lex.parse::<Type>().map_err(|e| e.to_string())?;
+    if !lex.is_eof() {
+        return Err("trailing tokens after type".to_string());
+    }
+    let _ = local_interner;
+    Ok(ty)
+}
+
+/// Parse a token stream produced by a macro transcriber into a single pattern.
+fn parse_pattern_from_token_stream(
+    stream: &yelang_macro_core::token_tree::TokenStream,
+    interner: &Interner,
+) -> Result<Pattern, String> {
+    let rendered = stream.render(interner);
+    let mut local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+        .map_err(|e| format!("tokenize: {}", e))?;
+    let pat = lex.parse::<Pattern>().map_err(|e| e.to_string())?;
+    if !lex.is_eof() {
+        return Err("trailing tokens after pattern".to_string());
+    }
+    let _ = local_interner;
+    Ok(pat)
 }
 
 /// Convert attribute arguments back into a macro `TokenStream` so that

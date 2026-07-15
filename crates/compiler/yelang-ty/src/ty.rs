@@ -7,8 +7,8 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use yelang_interner::Symbol;
 use yelang_arena::DefId;
+use yelang_interner::Symbol;
 
 use crate::binder::{BoundTy, BoundVar, BoundVariableKind, DebruijnIndex};
 use crate::generic::GenericArg;

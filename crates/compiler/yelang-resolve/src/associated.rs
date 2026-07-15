@@ -1,6 +1,6 @@
+use yelang_arena::DefId;
 use yelang_ast::Path;
 use yelang_interner::Symbol;
-use yelang_arena::DefId;
 
 use crate::{def_collector::DefKind, namespaces::Namespace, rib::Resolution, scope::Resolver};
 

@@ -37,6 +37,11 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         AstItemKind::Module(m) => lower_module_item(ctx, m, def_id),
         AstItemKind::Use(u) => lower_use_item(ctx, u, def_id),
         AstItemKind::MacroDef(_) => return None,
+        AstItemKind::MacroInvocation(_) => {
+            // Unexpanded macro invocations should have produced an error during
+            // macro expansion; do not lower them to HIR.
+            return None;
+        }
     };
 
     let hir_item = Item {
@@ -56,6 +61,9 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
             }
             AstItemKind::MacroDef(_) => {
                 unreachable!("macro definitions are removed before HIR lowering")
+            }
+            AstItemKind::MacroInvocation(_) => {
+                unreachable!("macro invocations are expanded before HIR lowering")
             }
         },
         kind,

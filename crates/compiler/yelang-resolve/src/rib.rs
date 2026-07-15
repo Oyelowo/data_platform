@@ -1,5 +1,5 @@
-use yelang_interner::Symbol;
 use yelang_arena::{DefId, FxHashMap};
+use yelang_interner::Symbol;
 
 use crate::namespaces::Namespace;
 

@@ -6,10 +6,10 @@
 //! Prelude names are checked as a final fallback during name resolution, meaning
 //! they can be shadowed by any local definition, import, or ancestor module item.
 
+use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Visibility;
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
-use yelang_arena::{DefId, FxHashMap};
 
 use crate::{
     def_collector::{DefKind, Definition},

@@ -5,9 +5,9 @@
  * variables and applying default fallback (int -> i32, float -> f64).
  */
 
+use yelang_arena::HirId;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{InferTy, Ty, TyKind};
-use yelang_arena::HirId;
 
 use crate::fn_ctxt::FnCtxt;
 

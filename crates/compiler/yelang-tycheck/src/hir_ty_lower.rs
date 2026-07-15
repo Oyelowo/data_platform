@@ -4,6 +4,7 @@
  * This module converts them to the interned type representation.
  */
 
+use yelang_arena::DefId;
 use yelang_hir::hir_ty::{
     AnonField as HirAnonField, Ty as HirTy, TyKind as HirTyKind, UtilityKind as HirUtilityKind,
 };
@@ -14,7 +15,6 @@ use yelang_ty::primitive::{FloatTy, IntTy, UintTy};
 use yelang_ty::ty::{
     AdtDef, AliasTy, AnonField, AnonStructDef, ConstKind, Mutability, Ty, TyKind, TypeAndMut,
 };
-use yelang_arena::DefId;
 
 use crate::fn_ctxt::FnCtxt;
 

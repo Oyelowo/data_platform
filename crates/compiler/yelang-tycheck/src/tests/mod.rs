@@ -4,6 +4,7 @@
  * and error recovery paths.
  */
 
+use yelang_arena::{DefId, FxHashMap, HirId};
 use yelang_ast::{BinaryOp, UnaryOp};
 use yelang_hir::hir::{Arm, Block, Expr, ExprKind, FieldExpr, Stmt, StmtKind};
 use yelang_hir::hir_pat::{BindingMode, Pat, PatKind};
@@ -14,7 +15,6 @@ use yelang_lexer::{Position, Span};
 use yelang_ty::interner::Interner;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{Mutability, Ty, TyKind};
-use yelang_arena::{DefId, FxHashMap, HirId};
 
 use crate::check::{check_body, check_expr};
 use crate::coerce::Coerce;

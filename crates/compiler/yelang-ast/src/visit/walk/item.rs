@@ -27,6 +27,7 @@ pub fn walk_item<V: Visitor>(v: &mut V, item: &Item) -> ControlFlow<()> {
         ItemKind::Static(s) => v.visit_static(s),
         ItemKind::Use(u) => v.visit_use(u),
         ItemKind::MacroDef(_) => ControlFlow::Continue(()),
+        ItemKind::MacroInvocation(inv) => v.visit_path(&inv.path),
     }
 }
 
@@ -245,6 +246,7 @@ pub fn walk_type<V: Visitor>(v: &mut V, ty: &Type) -> ControlFlow<()> {
             }
         },
         TypeKind::ImplTrait(path) | TypeKind::DynTrait(path) => v.visit_path(path),
+        TypeKind::MacroInvocation(inv) => v.visit_path(&inv.path),
         TypeKind::Error => ControlFlow::Continue(()),
     }
 }
@@ -304,6 +306,7 @@ pub fn walk_pattern<V: Visitor>(v: &mut V, pat: &Pattern) -> ControlFlow<()> {
             ControlFlow::Continue(())
         }
         PatternKind::Grouped(pat) => v.visit_pattern(pat),
+        PatternKind::MacroInvocation(inv) => v.visit_path(&inv.path),
     }
 }
 

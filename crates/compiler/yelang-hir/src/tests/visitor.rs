@@ -1,9 +1,9 @@
 //! Tests for the HIR visitor.
 
+use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
 use yelang_lexer::TokenStream;
-use yelang_arena::DefId;
 
 use crate::crate_hir::Crate;
 use crate::hir::{Expr, ExprKind, Item, Stmt};

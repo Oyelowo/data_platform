@@ -11,8 +11,8 @@
 //! Lang items are loaded lazily: the compiler emits an error only when a
 //! required lang item is needed but not found.
 
-use yelang_interner::{Interner, Symbol};
 use yelang_arena::{DefId, FxHashMap};
+use yelang_interner::{Interner, Symbol};
 
 /// A language item — an item that the compiler knows about by name rather than
 /// by path.

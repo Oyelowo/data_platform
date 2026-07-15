@@ -1,7 +1,7 @@
 /*! Generic arguments, substitutions, and generic parameter definitions. */
 
-use yelang_interner::Symbol;
 use yelang_arena::DefId;
+use yelang_interner::Symbol;
 
 use crate::primitive::{IntTy, UintTy};
 use crate::ty::{Const, Ty};

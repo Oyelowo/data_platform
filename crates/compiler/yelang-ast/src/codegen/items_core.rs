@@ -39,6 +39,11 @@ impl Codegen for ItemKind {
                 write!(w, "{}", def.body.render(interner))?;
                 write!(w, "}}")
             }
+            ItemKind::MacroInvocation(inv) => {
+                inv.path.codegen(w, interner)?;
+                write!(w, "!")?;
+                write!(w, "{}", inv.args.render(interner))
+            }
         }
     }
 }

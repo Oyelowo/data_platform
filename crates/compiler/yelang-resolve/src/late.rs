@@ -1,3 +1,4 @@
+use yelang_arena::DefId;
 use yelang_ast::item::{Const, Enum, Impl, Static, Struct, Trait, TypeAlias};
 use yelang_ast::{
     Array, AssignEqExpr, AssignOpExpr, AsyncExpr, BinaryExpr, BlockExpr, BreakExpr, CallExpr,
@@ -9,7 +10,6 @@ use yelang_ast::{
 };
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use yelang_arena::DefId;
 
 use crate::{
     def_collector::DefKind,
@@ -65,6 +65,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ItemKind::Use(_) => {}
             ItemKind::MacroDef(_) => {
                 // Macro definitions are removed before name resolution.
+            }
+            ItemKind::MacroInvocation(_) => {
+                // Unexpanded macro invocations do not need name resolution.
             }
         }
     }
@@ -567,6 +570,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 // Impls have no namespace binding; uses are resolved separately.
                 // Macro definitions are removed before name resolution.
             }
+            ItemKind::MacroInvocation(_) => {
+                // Unexpanded macro invocations do not hoist names.
+            }
         }
     }
 
@@ -654,6 +660,10 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_pattern(pat);
             }
             PatternKind::Absent => {}
+            PatternKind::MacroInvocation(_) => {
+                // Unexpanded macro invocations in pattern position do not need
+                // name resolution.
+            }
         }
     }
 
@@ -728,6 +738,10 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_type_path(path);
             }
             TypeKind::Error => {}
+            TypeKind::MacroInvocation(_) => {
+                // Unexpanded macro invocations in type position do not need
+                // name resolution.
+            }
         }
     }
 

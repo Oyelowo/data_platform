@@ -1,9 +1,9 @@
 //! Main lowering entry point and `LoweringContext`.
 
+use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
-use yelang_arena::{DefId, FxHashMap};
 
 use crate::crate_hir::Crate;
 use crate::ids::{BodyId, HirId};
@@ -127,6 +127,7 @@ fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {
         AstItemKind::Impl(_) => DefKind::Impl,
         AstItemKind::Use(_) => DefKind::Use,
         AstItemKind::MacroDef(_) => return None,
+        AstItemKind::MacroInvocation(_) => return None,
     })
 }
 
@@ -141,5 +142,6 @@ fn item_name(item: &AstItem) -> Option<Symbol> {
         AstItemKind::Const(c) => c.name.symbol,
         AstItemKind::Static(s) => s.name.symbol,
         AstItemKind::Impl(_) | AstItemKind::Use(_) | AstItemKind::MacroDef(_) => return None,
+        AstItemKind::MacroInvocation(_) => return None,
     })
 }

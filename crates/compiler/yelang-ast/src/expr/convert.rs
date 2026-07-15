@@ -43,7 +43,8 @@ fn convert_token(
             convert_literal(lit, span).map(|l| (vec![TokenTree::Literal(l)], 1))
         }
         AstTokenKind::OpenParen => {
-            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Parenthesis, interner)?;
+            let (inner, consumed) =
+                read_delimited(tokens, start, Delimiter::Parenthesis, interner)?;
             Some((vec![TokenTree::Group(inner)], consumed))
         }
         AstTokenKind::OpenBrace => {
@@ -69,11 +70,7 @@ fn convert_token(
 /// Keywords are not represented by a dedicated token-tree variant, so we store
 /// them as identifiers.  This lets macro bodies such as `let` statements round
 /// trip through macro expansion.
-fn convert_keyword(
-    kind: &AstTokenKind,
-    span: Span,
-    interner: &Interner,
-) -> Option<TokenTree> {
+fn convert_keyword(kind: &AstTokenKind, span: Span, interner: &Interner) -> Option<TokenTree> {
     let text = match kind {
         AstTokenKind::Select => "select",
         AstTokenKind::From_ => "from",

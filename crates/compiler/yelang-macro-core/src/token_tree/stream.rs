@@ -2,7 +2,7 @@ use std::fmt;
 
 use yelang_interner::Interner;
 
-use super::{render::needs_space, TokenTree};
+use super::{TokenTree, render::needs_space};
 
 /// A stream of tokens produced by the lexer or by a macro expansion.
 ///

@@ -1,4 +1,7 @@
-use crate::{Expr, ExprKind, ExprPath, Ident, Literal, Path, RangeExpr, RangeOp, T};
+use crate::expr::parse_macro_args;
+use crate::{
+    Expr, ExprKind, ExprPath, Ident, Literal, MacroInvocation, Path, RangeExpr, RangeOp, T,
+};
 use yelang_lexer::{Either, ParseTokenStream, SeparatedList, TokenResult, TokenStream, match_map};
 
 use super::{
@@ -52,7 +55,22 @@ fn parse_path_led_pattern(
 ) -> TokenResult<PatternKind> {
     use crate::tokenizer::TokenKind;
 
+    let checkpoint = stream.checkpoint();
     let path = stream.parse::<ExprPath>()?.0;
+
+    // Macro invocation in pattern position: `MyPat!(...)`, `MyPat![...]`, `MyPat!{...}`.
+    if matches!(
+        stream.peek().map(|token| token.kind()),
+        Some(TokenKind::Bang)
+    ) {
+        stream.advance(); // consume `!`
+        let args = parse_macro_args(stream)?;
+        return Ok(PatternKind::MacroInvocation(MacroInvocation {
+            path,
+            args,
+            span: stream.span_since(checkpoint),
+        }));
+    }
 
     if matches!(
         stream.peek().map(|token| token.kind()),

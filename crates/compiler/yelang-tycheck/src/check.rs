@@ -4,6 +4,7 @@
  * within a function body.
  */
 
+use yelang_arena::HirId;
 use yelang_ast::BinaryOp;
 use yelang_hir::hir::{Arm, Block, Expr, ExprKind, FieldExpr, Lit, Stmt, StmtKind};
 use yelang_hir::hir_pat::Pat;
@@ -12,7 +13,6 @@ use yelang_ty::generic::GenericArg;
 use yelang_ty::list::List;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{InferTy, Mutability, Ty, TyKind, TypeAndMut};
-use yelang_arena::HirId;
 
 use yelang_infer::error::TypeError;
 

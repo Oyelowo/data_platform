@@ -1,9 +1,9 @@
 //! Tests for AST desugarings performed during lowering.
 
+use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
 use yelang_lexer::TokenStream;
-use yelang_arena::DefId;
 
 use crate::hir::{ExprKind, ItemKind, StmtKind};
 use crate::lowering::lower_crate;

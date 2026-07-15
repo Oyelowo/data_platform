@@ -1,7 +1,7 @@
+use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Visibility;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use yelang_arena::{DefId, FxHashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefKind {
@@ -239,6 +239,9 @@ impl<'a> DefCollector<'a> {
             ItemKind::MacroDef(_) => {
                 // Macro definitions are consumed by the macro expansion phase
                 // and do not reach name resolution.
+            }
+            ItemKind::MacroInvocation(_) => {
+                // Unexpanded macro invocations do not define names.
             }
         }
     }
