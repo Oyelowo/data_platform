@@ -14,7 +14,7 @@ yelang-ast = { path = "../yelang-ast" }
 yelang-interner = { path = "../yelang-interner" }
 yelang-lexer = { path = "../yelang-lexer" }
 yelang-resolve = { path = "../yelang-resolve" }
-yelang-util = { path = "../yelang-util" }
+yelang-arena = { path = "../yelang-arena" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

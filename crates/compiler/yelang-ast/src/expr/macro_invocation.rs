@@ -5,8 +5,10 @@
  * Date 13/07/2025
  */
 
-use crate::token::{TokenStream as MacroTokenStream, convert::from_lexer_tokens};
 use crate::{Expr, Ident, Path, Stmt, T};
+use yelang_macro_core::token_tree::TokenStream as MacroTokenStream;
+
+use super::convert::from_lexer_tokens;
 use yelang_lexer::{ArrayCreator, ParseTokenStream, Token, TokenResult, TokenStream};
 
 /// Macro invocation expression: `assert!(true)`, `vec![1, 2, 3]`, `macro! { stmt }`
@@ -68,7 +70,7 @@ pub fn parse_macro_args(
     };
 
     let tokens = consume_balanced(stream, open_kind, close_kind)?;
-    Ok(from_lexer_tokens(&tokens))
+    Ok(from_lexer_tokens(&tokens, stream.interner()))
 }
 
 /// Consume a balanced delimited sequence from the lexer stream, including the

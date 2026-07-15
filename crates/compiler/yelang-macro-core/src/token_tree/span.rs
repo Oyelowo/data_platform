@@ -1,4 +1,4 @@
-use yelang_util::SyntaxContextId;
+use crate::id::SyntaxContextId;
 
 /// A region of source code plus hygiene context.
 ///

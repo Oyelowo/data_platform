@@ -51,6 +51,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::CancelTransaction => write!(f, "canceltransaction"),
             TokenKind::Enumerate => write!(f, "enumerate"),
             TokenKind::Match => write!(f, "match"),
+            TokenKind::Macro => write!(f, "macro"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Else => write!(f, "else"),
             TokenKind::While => write!(f, "while"),
@@ -194,6 +195,7 @@ impl std::fmt::Debug for TokenKind {
             // TODO: enumerate would probably just be a normal function
             TokenKind::Enumerate => write!(f, "enumerate"),
             TokenKind::Match => write!(f, "match"),
+            TokenKind::Macro => write!(f, "macro"),
             TokenKind::If => write!(f, "if"),
             TokenKind::Else => write!(f, "else"),
             TokenKind::While => write!(f, "while"),

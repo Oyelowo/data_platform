@@ -1,7 +1,7 @@
 /*! TypeckResults — stores the inferred types for a function body. */
 
 use yelang_ty::ty::Ty;
-use yelang_util::{DefId, FxHashMap, HirId};
+use yelang_arena::{DefId, FxHashMap, HirId};
 
 /// The result of type-checking a function body.
 ///

@@ -1,7 +1,7 @@
 use yelang_ast::Visibility;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use yelang_util::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefKind {
@@ -236,6 +236,10 @@ impl<'a> DefCollector<'a> {
             ),
             ItemKind::Impl(i) => self.collect_impl(i, item.span, item.visibility.clone()),
             ItemKind::Use(u) => self.collect_use(u, item.span, item.visibility.clone()),
+            ItemKind::MacroDef(_) => {
+                // Macro definitions are consumed by the macro expansion phase
+                // and do not reach name resolution.
+            }
         }
     }
 

@@ -1,5 +1,5 @@
 [package]
-name = "yelang-util"
+name = "yelang-arena"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -1,12 +1,12 @@
-use yelang_ast::token::{
-    Delimiter, Group as TokenGroup, Punct, Span as TokenSpan, TokenStream, TokenTree,
-};
 use yelang_ast::{
     BinaryExpr, BlockExpr, Codegen, Expr, ExprKind, IfExpr, Literal, MacroInvocation, Path,
     PathSegment, Stmt, StmtKind, StrKind, StringLit, TokenKind, UnaryExpr,
 };
 use yelang_interner::Interner;
-use yelang_lexer::{ParseTokenStream, Span, Token, TokenStream as LexerTokenStream};
+use yelang_lexer::{Span, Token, TokenStream as LexerTokenStream};
+use yelang_macro_core::token_tree::{
+    Delimiter, Group as TokenGroup, Punct, Span as TokenSpan, TokenStream, TokenTree,
+};
 
 /// Built-in macros recognized by the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,7 +395,7 @@ fn panic_expr(msg: &str, span: Span, interner: &Interner) -> Expr {
 }
 
 /// Expect the macro argument token stream to be a single parenthesized group.
-fn expect_paren_args(args: &TokenStream, span: Span) -> Result<TokenStream, String> {
+fn expect_paren_args(args: &TokenStream, _span: Span) -> Result<TokenStream, String> {
     match args.trees().first() {
         Some(TokenTree::Group(g)) if g.delimiter == Delimiter::Parenthesis => Ok(g.stream.clone()),
         _ => Err("macro requires parenthesized arguments".to_string()),
@@ -475,7 +475,7 @@ fn expr_to_tokens(expr: &Expr, interner: &Interner) -> TokenStream {
 }
 
 fn literal_to_tokens(lit: &Literal, span: TokenSpan, interner: &Interner) -> TokenStream {
-    use yelang_ast::token::Literal as TokenLiteral;
+    use yelang_macro_core::token_tree::Literal as TokenLiteral;
     match lit {
         Literal::Str(s) => {
             let value = interner.resolve(&s.value);
@@ -531,7 +531,7 @@ fn tokenize_rendered(src: &str, interner: &Interner) -> TokenStream {
     let mut lex = TokenKind::tokenize(src, &mut local_interner).unwrap_or_default();
     let tokens: Vec<Token<TokenKind>> =
         std::iter::from_fn(|| lex.advance().map(|t| t.clone())).collect();
-    yelang_ast::token::convert::from_lexer_tokens(&tokens)
+    yelang_ast::expr::convert::from_lexer_tokens(&tokens, interner)
 }
 
 #[cfg(test)]
@@ -539,7 +539,6 @@ mod tests {
     use super::*;
     use yelang_ast::TokenKind;
     use yelang_interner::Interner;
-    use yelang_lexer::ParseTokenStream;
 
     fn parse_macro_invocation(src: &str) -> (MacroInvocation, Interner) {
         let mut interner = Interner::new();
@@ -636,7 +635,7 @@ mod tests {
 
     #[test]
     fn builtin_macro_from_path() {
-        let mut interner = Interner::new();
+        let interner = Interner::new();
         let path = simple_path("assert", Span::default(), &interner);
         assert_eq!(
             BuiltinMacro::from_path(&path, &interner),

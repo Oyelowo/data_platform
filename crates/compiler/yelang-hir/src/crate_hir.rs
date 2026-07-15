@@ -2,7 +2,7 @@
 //!
 //! Items are stored out-of-band in maps keyed by `DefId` / `BodyId`,
 /// matching rustc's design.
-use yelang_util::FxHashMap;
+use yelang_arena::FxHashMap;
 
 use crate::hir::{ForeignItem, Impl, Item, Trait};
 use crate::ids::{BodyId, DefId};

@@ -1,7 +1,7 @@
 use yelang_ast::Visibility;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::{
     def_collector::{DefKind, Definition},

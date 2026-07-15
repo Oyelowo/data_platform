@@ -1,0 +1,18 @@
+[package]
+name = "yelang-macro-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-lexer = { path = "../yelang-lexer" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-arena = { path = "../yelang-arena" }
+
+[dev-dependencies]
+rstest = { workspace = true }

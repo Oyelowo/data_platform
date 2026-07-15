@@ -51,6 +51,8 @@ pub enum ItemKind {
     Impl(Box<Impl>),
     /// Use declaration
     Use(Use),
+    /// Declarative macro definition: `macro name { ... }`
+    MacroDef(Box<MacroDef>),
 }
 
 impl ParseTokenStream<crate::tokenizer::TokenKind> for ItemKind {
@@ -93,6 +95,11 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for ItemKind {
                         .map(|s| ItemKind::Static(Box::new(s)));
                 }
                 TokenKind::Use => return stream.parse::<Use>().map(ItemKind::Use),
+                TokenKind::Macro => {
+                    return stream
+                        .parse::<MacroDef>()
+                        .map(|m| ItemKind::MacroDef(Box::new(m)));
+                }
                 TokenKind::Mod => return stream.parse::<ModDef>().map(ItemKind::Module),
                 TokenKind::Impl => {
                     return stream.parse::<Impl>().map(|i| ItemKind::Impl(Box::new(i)));

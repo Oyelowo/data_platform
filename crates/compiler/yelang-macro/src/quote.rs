@@ -3,9 +3,9 @@
 /// For now this module provides programmatic helpers for constructing
 /// `TokenStream`s. A full `quote!` macro will be added once the token API is
 /// stable.
-use yelang_interner::{Interner, Symbol};
+use yelang_interner::Interner;
 
-use yelang_ast::token::{
+use yelang_macro_core::token_tree::{
     Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree,
 };
 
@@ -42,11 +42,6 @@ pub fn paren(stream: TokenStream, span: Span) -> Group {
 /// Create a braced group.
 pub fn brace(stream: TokenStream, span: Span) -> Group {
     Group::new(Delimiter::Brace, stream, span)
-}
-
-/// Create a bracketed group.
-pub fn bracket(stream: TokenStream, span: Span) -> Group {
-    Group::new(Delimiter::Bracket, stream, span)
 }
 
 /// Concatenate token streams.

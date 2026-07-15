@@ -14,7 +14,7 @@ use yelang_lexer::{Position, Span};
 use yelang_ty::interner::Interner;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{Mutability, Ty, TyKind};
-use yelang_util::{DefId, FxHashMap, HirId};
+use yelang_arena::{DefId, FxHashMap, HirId};
 
 use crate::check::{check_body, check_expr};
 use crate::coerce::Coerce;

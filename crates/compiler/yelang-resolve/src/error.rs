@@ -1,7 +1,7 @@
 use thiserror::Error;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::namespaces::Namespace;
 

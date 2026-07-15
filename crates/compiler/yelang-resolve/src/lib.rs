@@ -29,7 +29,7 @@ pub use rib::*;
 pub use scope::*;
 
 use yelang_interner::Interner;
-use yelang_util::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap};
 
 use crate::def_collector::Definition;
 

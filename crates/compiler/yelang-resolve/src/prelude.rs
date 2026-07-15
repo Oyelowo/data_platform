@@ -9,7 +9,7 @@
 use yelang_ast::Visibility;
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
-use yelang_util::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap};
 
 use crate::{
     def_collector::{DefKind, Definition},

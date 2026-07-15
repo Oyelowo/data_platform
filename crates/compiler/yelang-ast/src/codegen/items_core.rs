@@ -30,6 +30,11 @@ impl Codegen for ItemKind {
             ItemKind::Static(s) => s.codegen(w, interner),
             ItemKind::Impl(i) => i.codegen(w, interner),
             ItemKind::Use(u) => u.codegen(w, interner),
+            ItemKind::MacroDef(def) => {
+                write!(w, "macro {} {{", interner.resolve(&def.name.symbol))?;
+                write!(w, "{}", def.body.render(interner))?;
+                write!(w, "}}")
+            }
         }
     }
 }

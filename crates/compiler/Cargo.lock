@@ -781,6 +781,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-arena"
+version = "0.1.0"
+dependencies = [
+ "fxhash",
+ "indexmap",
+ "rustc-hash",
+ "slotmap",
+ "yelang-interner",
+ "yelang-lexer",
+]
+
+[[package]]
 name = "yelang-ast"
 version = "0.1.0"
 dependencies = [
@@ -789,9 +801,10 @@ dependencies = [
  "rustc-hash",
  "serde",
  "thiserror",
+ "yelang-arena",
  "yelang-interner",
  "yelang-lexer",
- "yelang-util",
+ "yelang-macro-core",
 ]
 
 [[package]]
@@ -801,11 +814,11 @@ dependencies = [
  "insta",
  "rstest",
  "thiserror",
+ "yelang-arena",
  "yelang-ast",
  "yelang-interner",
  "yelang-lexer",
  "yelang-resolve",
- "yelang-util",
 ]
 
 [[package]]
@@ -814,9 +827,9 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "rustc-hash",
+ "yelang-arena",
  "yelang-interner",
  "yelang-ty",
- "yelang-util",
 ]
 
 [[package]]
@@ -855,10 +868,21 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "thiserror",
+ "yelang-arena",
  "yelang-ast",
  "yelang-interner",
  "yelang-lexer",
- "yelang-util",
+ "yelang-macro-core",
+]
+
+[[package]]
+name = "yelang-macro-core"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "yelang-arena",
+ "yelang-interner",
+ "yelang-lexer",
 ]
 
 [[package]]
@@ -867,10 +891,10 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "thiserror",
+ "yelang-arena",
  "yelang-ast",
  "yelang-interner",
  "yelang-lexer",
- "yelang-util",
 ]
 
 [[package]]
@@ -883,10 +907,10 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "rustc-hash",
+ "yelang-arena",
  "yelang-infer",
  "yelang-interner",
  "yelang-ty",
- "yelang-util",
 ]
 
 [[package]]
@@ -896,8 +920,8 @@ dependencies = [
  "bumpalo",
  "rstest",
  "rustc-hash",
+ "yelang-arena",
  "yelang-interner",
- "yelang-util",
 ]
 
 [[package]]
@@ -906,6 +930,7 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "rustc-hash",
+ "yelang-arena",
  "yelang-ast",
  "yelang-hir",
  "yelang-infer",
@@ -914,19 +939,6 @@ dependencies = [
  "yelang-resolve",
  "yelang-trait-solver",
  "yelang-ty",
- "yelang-util",
-]
-
-[[package]]
-name = "yelang-util"
-version = "0.1.0"
-dependencies = [
- "fxhash",
- "indexmap",
- "rustc-hash",
- "slotmap",
- "yelang-interner",
- "yelang-lexer",
 ]
 
 [[package]]

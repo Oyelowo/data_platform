@@ -771,6 +771,7 @@ impl TokenKind {
                 "if" => TokenKind::If,
                 "else" => TokenKind::Else,
                 "match" => TokenKind::Match,
+                "macro" => TokenKind::Macro,
                 "loop" => TokenKind::Loop,
                 "while" => TokenKind::While,
                 "async" => TokenKind::Async,

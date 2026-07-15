@@ -36,6 +36,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         AstItemKind::Static(s) => lower_static_item(ctx, s, def_id),
         AstItemKind::Module(m) => lower_module_item(ctx, m, def_id),
         AstItemKind::Use(u) => lower_use_item(ctx, u, def_id),
+        AstItemKind::MacroDef(_) => return None,
     };
 
     let hir_item = Item {
@@ -52,6 +53,9 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
             AstItemKind::Impl(_) | AstItemKind::Use(_) => {
                 // Use a synthetic name for impls and uses.
                 yelang_ast::Ident::new(ctx.interner.get_or_intern("<item>"), item.span)
+            }
+            AstItemKind::MacroDef(_) => {
+                unreachable!("macro definitions are removed before HIR lowering")
             }
         },
         kind,

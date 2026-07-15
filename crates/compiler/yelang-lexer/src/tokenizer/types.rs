@@ -69,6 +69,7 @@ pub enum TokenKind {
     Enumerate,
     Distinct,
     Match,
+    Macro,
     If,
     Else,
     While,

@@ -4,7 +4,7 @@
  * built-in rules, auto-trait derivations, etc.
  */
 
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 /// A candidate solution for a goal.
 #[derive(Clone, Debug, PartialEq, Eq)]

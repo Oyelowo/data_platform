@@ -11,7 +11,7 @@ doctest = false
 [dependencies]
 yelang-ty = { path = "../yelang-ty" }
 yelang-infer = { path = "../yelang-infer" }
-yelang-util = { path = "../yelang-util" }
+yelang-arena = { path = "../yelang-arena" }
 yelang-interner = { path = "../yelang-interner" }
 rustc-hash = { workspace = true }
 

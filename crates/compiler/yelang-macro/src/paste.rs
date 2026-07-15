@@ -1,6 +1,6 @@
 use yelang_interner::Interner;
 
-use yelang_ast::token::{Ident, Span};
+use yelang_macro_core::token_tree::{Ident, Span};
 
 /// Concatenate identifier fragments into a single identifier.
 ///

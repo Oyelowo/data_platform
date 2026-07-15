@@ -1,7 +1,7 @@
 use crate::tokenizer::TokenKind as AstTokenKind;
+use yelang_interner::Interner;
 use yelang_lexer::{Literal as LexerLiteral, Token};
-
-use super::{
+use yelang_macro_core::token_tree::{
     Delimiter, Group, Ident, LitKind, Literal, Punct, Spacing, Span, TokenStream, TokenTree,
 };
 
@@ -10,11 +10,11 @@ use super::{
 /// This handles balanced delimiters by building nested `Group`s and expands
 /// compound punctuation into the correct sequence of `Punct` tokens so that
 /// the stream can be round-tripped back to source text.
-pub fn from_lexer_tokens(tokens: &[Token<AstTokenKind>]) -> TokenStream {
+pub fn from_lexer_tokens(tokens: &[Token<AstTokenKind>], interner: &Interner) -> TokenStream {
     let mut stream = TokenStream::new();
     let mut i = 0;
     while i < tokens.len() {
-        if let Some((trees, consumed)) = convert_token(tokens, i) {
+        if let Some((trees, consumed)) = convert_token(tokens, i, interner) {
             for tree in trees {
                 stream.push(tree);
             }
@@ -27,7 +27,11 @@ pub fn from_lexer_tokens(tokens: &[Token<AstTokenKind>]) -> TokenStream {
     stream
 }
 
-fn convert_token(tokens: &[Token<AstTokenKind>], start: usize) -> Option<(Vec<TokenTree>, usize)> {
+fn convert_token(
+    tokens: &[Token<AstTokenKind>],
+    start: usize,
+    interner: &Interner,
+) -> Option<(Vec<TokenTree>, usize)> {
     let token = tokens.get(start)?;
     let span: Span = token.span().into();
 
@@ -39,25 +43,128 @@ fn convert_token(tokens: &[Token<AstTokenKind>], start: usize) -> Option<(Vec<To
             convert_literal(lit, span).map(|l| (vec![TokenTree::Literal(l)], 1))
         }
         AstTokenKind::OpenParen => {
-            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Parenthesis)?;
+            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Parenthesis, interner)?;
             Some((vec![TokenTree::Group(inner)], consumed))
         }
         AstTokenKind::OpenBrace => {
-            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Brace)?;
+            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Brace, interner)?;
             Some((vec![TokenTree::Group(inner)], consumed))
         }
         AstTokenKind::OpenBracket => {
-            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Bracket)?;
+            let (inner, consumed) = read_delimited(tokens, start, Delimiter::Bracket, interner)?;
             Some((vec![TokenTree::Group(inner)], consumed))
         }
-        other => convert_punct(other, span).map(|trees| (trees, 1)),
+        other => {
+            if let Some(trees) = convert_punct(other, span) {
+                Some((trees, 1))
+            } else {
+                convert_keyword(other, span, interner).map(|tree| (vec![tree], 1))
+            }
+        }
     }
+}
+
+/// Convert a keyword token into a macro `Ident` token tree.
+///
+/// Keywords are not represented by a dedicated token-tree variant, so we store
+/// them as identifiers.  This lets macro bodies such as `let` statements round
+/// trip through macro expansion.
+fn convert_keyword(
+    kind: &AstTokenKind,
+    span: Span,
+    interner: &Interner,
+) -> Option<TokenTree> {
+    let text = match kind {
+        AstTokenKind::Select => "select",
+        AstTokenKind::From_ => "from",
+        AstTokenKind::Where => "where",
+        AstTokenKind::Struct => "struct",
+        AstTokenKind::Enum => "enum",
+        AstTokenKind::Trait => "trait",
+        AstTokenKind::Group => "group",
+        AstTokenKind::By => "by",
+        AstTokenKind::Order => "order",
+        AstTokenKind::Into => "into",
+        AstTokenKind::Let => "let",
+        AstTokenKind::Fn => "fn",
+        AstTokenKind::TypeToken => "type",
+        AstTokenKind::DefaultKw => "default",
+        AstTokenKind::TypeOf => "typeof",
+        AstTokenKind::ReturnType => "returntype",
+        AstTokenKind::Parameters => "parameters",
+        AstTokenKind::Pick => "pick",
+        AstTokenKind::Omit => "omit",
+        AstTokenKind::Pub => "pub",
+        AstTokenKind::As => "as",
+        AstTokenKind::Or => "or",
+        AstTokenKind::Mod => "mod",
+        AstTokenKind::Mut => "mut",
+        AstTokenKind::CreateIndex => "createindex",
+        AstTokenKind::Create => "create",
+        AstTokenKind::Crate => "crate",
+        AstTokenKind::SelfKw => "self",
+        AstTokenKind::SelfType => "Self",
+        AstTokenKind::Super => "super",
+        AstTokenKind::Pkg => "pkg",
+        AstTokenKind::Const => "const",
+        AstTokenKind::Static => "static",
+        AstTokenKind::Update => "update",
+        AstTokenKind::Set => "set",
+        AstTokenKind::Insert => "insert",
+        AstTokenKind::Impl => "impl",
+        AstTokenKind::Dyn => "dyn",
+        AstTokenKind::Delete => "delete",
+        AstTokenKind::For => "for",
+        AstTokenKind::Link => "link",
+        AstTokenKind::Unlink => "unlink",
+        AstTokenKind::Upsert => "upsert",
+        AstTokenKind::BeginTransaction => "begintransaction",
+        AstTokenKind::CommitTransaction => "committransaction",
+        AstTokenKind::CancelTransaction => "canceltransaction",
+        AstTokenKind::Enumerate => "enumerate",
+        AstTokenKind::Match => "match",
+        AstTokenKind::Macro => "macro",
+        AstTokenKind::If => "if",
+        AstTokenKind::Else => "else",
+        AstTokenKind::While => "while",
+        AstTokenKind::Loop => "loop",
+        AstTokenKind::Async => "async",
+        AstTokenKind::Gen => "gen",
+        AstTokenKind::Await => "await",
+        AstTokenKind::Continue => "continue",
+        AstTokenKind::Break => "break",
+        AstTokenKind::Yield => "yield",
+        AstTokenKind::Return => "return",
+        AstTokenKind::Links => "links",
+        AstTokenKind::And => "and",
+        AstTokenKind::Not => "not",
+        AstTokenKind::Xor => "xor",
+        AstTokenKind::Is => "is",
+        AstTokenKind::In => "in",
+        AstTokenKind::On => "on",
+        AstTokenKind::Asc => "asc",
+        AstTokenKind::Start => "start",
+        AstTokenKind::Limit => "limit",
+        AstTokenKind::Desc => "desc",
+        AstTokenKind::Use => "use",
+        AstTokenKind::Null => "null",
+        AstTokenKind::Underscore => "_",
+        AstTokenKind::Lifetime(sym) => {
+            return Some(TokenTree::Ident(Ident::new(*sym, span)));
+        }
+        _ => return None,
+    };
+    Some(TokenTree::Ident(Ident::new(
+        interner.get_or_intern(text),
+        span,
+    )))
 }
 
 fn read_delimited(
     tokens: &[Token<AstTokenKind>],
     start: usize,
     delimiter: Delimiter,
+    interner: &Interner,
 ) -> Option<(Group, usize)> {
     let open = tokens.get(start)?;
     let close_kind = close_kind(delimiter)?;
@@ -71,7 +178,7 @@ fn read_delimited(
             depth -= 1;
             if depth == 0 {
                 let inner_tokens = &tokens[start + 1..i];
-                let inner = from_lexer_tokens(inner_tokens);
+                let inner = from_lexer_tokens(inner_tokens, interner);
                 let merged = open.span().merge(token.span());
                 let span: Span = merged.into();
                 return Some((Group::new(delimiter, inner, span), i - start + 1));
@@ -150,6 +257,16 @@ fn convert_punct(kind: &AstTokenKind, span: Span) -> Option<Vec<TokenTree>> {
         LessThan => vec![('<', joint)],
         GreaterThan => vec![('>', joint)],
         Equal => vec![('=', joint)],
+        Dollar => vec![('$', joint)],
+        QuestionMark => vec![('?', joint)],
+        At => vec![('@', joint)],
+        Hash => vec![('#', joint)],
+        Tilde => vec![('~', joint)],
+        Backslash => vec![('\\', joint)],
+        Backtick => vec![('`', joint)],
+        SingleQuote => vec![('\'', joint)],
+        DoubleQuote => vec![('"', joint)],
+        Hyphen => vec![('-', joint)],
         // Compound operators.
         DotDotDot => vec![('.', joint), ('.', joint), ('.', alone)],
         DotDotEq => vec![('.', joint), ('.', joint), ('=', alone)],

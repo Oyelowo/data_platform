@@ -9,7 +9,7 @@ use yelang_ast::{
 };
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::{
     def_collector::DefKind,
@@ -63,6 +63,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ItemKind::Static(s) => self.resolve_static(s),
             ItemKind::Impl(i) => self.resolve_impl(i),
             ItemKind::Use(_) => {}
+            ItemKind::MacroDef(_) => {
+                // Macro definitions are removed before name resolution.
+            }
         }
     }
 
@@ -560,8 +563,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ItemKind::Static(s) => {
                 self.add_value_binding(s.name.symbol, s.name.span());
             }
-            ItemKind::Impl(_) | ItemKind::Use(_) => {
+            ItemKind::Impl(_) | ItemKind::Use(_) | ItemKind::MacroDef(_) => {
                 // Impls have no namespace binding; uses are resolved separately.
+                // Macro definitions are removed before name resolution.
             }
         }
     }

@@ -15,6 +15,7 @@ mod binary;
 mod block;
 mod break_continue;
 mod call;
+pub mod convert;
 mod document_access;
 mod expr;
 mod for_loop_expr;

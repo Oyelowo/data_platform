@@ -4,7 +4,7 @@
 //! a primitive type, etc.
 
 use crate::ids::HirId;
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 /// How a path was resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

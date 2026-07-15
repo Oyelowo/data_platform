@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use yelang_util::{
+use crate::id::{
     ExpnArena, ExpnData, ExpnId, ExpnKind, SyntaxContextArena, SyntaxContextData, SyntaxContextId,
     Transparency,
 };

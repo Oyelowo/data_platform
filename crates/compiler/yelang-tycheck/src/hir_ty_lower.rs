@@ -14,7 +14,7 @@ use yelang_ty::primitive::{FloatTy, IntTy, UintTy};
 use yelang_ty::ty::{
     AdtDef, AliasTy, AnonField, AnonStructDef, ConstKind, Mutability, Ty, TyKind, TypeAndMut,
 };
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::fn_ctxt::FnCtxt;
 

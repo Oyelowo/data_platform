@@ -12,7 +12,8 @@ doctest = false
 [dependencies]
 yelang-lexer = { path = "../yelang-lexer" }
 yelang-interner = { path = "../yelang-interner" }
-yelang-util = { path = "../yelang-util" }
+yelang-arena = { path = "../yelang-arena" }
+yelang-macro-core = { path = "../yelang-macro-core" }
 serde = { workspace = true, features = ["derive"] }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }

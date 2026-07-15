@@ -347,7 +347,7 @@ fn generate_copy_impl(
 
 fn generate_debug_impl(
     self_ty: Type,
-    fields: &StructFields,
+    _fields: &StructFields,
     struct_name: &Ident,
     generics: &yelang_ast::Generics,
     span: Span,
@@ -577,7 +577,7 @@ fn path_from_ident(ident: &Ident) -> Path {
     }
 }
 
-fn expr_from_str(src: &str, span: Span, interner: &Interner) -> Expr {
+fn expr_from_str(src: &str, _span: Span, interner: &Interner) -> Expr {
     // For the MVP, we tokenize and parse a tiny expression fragment.
     // In a production compiler we'd build the Expr directly.
     let mut stream = yelang_lexer::TokenKind::tokenize(src, interner).expect("tokenize expr");
@@ -619,7 +619,7 @@ fn apply_repr(attr: &Attribute, item: &Item, interner: &Interner) -> DecoratorRe
     };
 
     let _kind = repr.as_deref().and_then(ReprKind::from_str);
-    let mut new_item = item.clone();
+    let new_item = item.clone();
     // TODO: attach repr metadata to the item.
     let _ = _kind;
     DecoratorResult::single(new_item)
@@ -686,7 +686,6 @@ mod tests {
     use super::*;
     use yelang_ast::TokenKind;
     use yelang_interner::Interner;
-    use yelang_lexer::ParseTokenStream;
 
     fn parse_attribute(src: &str) -> (Attribute, Interner) {
         let mut interner = Interner::new();
@@ -723,7 +722,7 @@ mod tests {
     fn derive_recognizes_trait_names() {
         let (attr, interner) = parse_attribute("@derive(Debug, Clone)");
         let item = Item {
-            kind: ItemKind::Struct(yelang_ast::Struct {
+            kind: ItemKind::Struct(yelang_ast::item::Struct {
                 name: yelang_ast::Ident::new(interner.get_or_intern("Point"), Span::default()),
                 generics: yelang_ast::Generics::default(),
                 fields: yelang_ast::StructFields::Unit,
@@ -749,7 +748,7 @@ mod tests {
     #[test]
     fn test_applied_to_non_function_errors() {
         let item = Item {
-            kind: ItemKind::Struct(yelang_ast::Struct {
+            kind: ItemKind::Struct(yelang_ast::item::Struct {
                 name: yelang_ast::Ident::new(yelang_interner::Symbol::from(0u32), Span::default()),
                 generics: yelang_ast::Generics::default(),
                 fields: yelang_ast::StructFields::Unit,

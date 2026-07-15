@@ -5,7 +5,7 @@
  * cycles correctly.
  */
 
-use yelang_util::FxHashMap;
+use yelang_arena::FxHashMap;
 
 use crate::response::{CanonicalGoal, CanonicalResponse};
 

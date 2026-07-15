@@ -9,7 +9,7 @@ description = "Yelang core type system IR — types, predicates, generics, canon
 doctest = false
 
 [dependencies]
-yelang-util = { path = "../yelang-util" }
+yelang-arena = { path = "../yelang-arena" }
 yelang-interner = { path = "../yelang-interner" }
 bumpalo = { workspace = true }
 rustc-hash = { workspace = true }

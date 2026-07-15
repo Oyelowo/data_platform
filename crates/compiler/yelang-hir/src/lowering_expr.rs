@@ -7,7 +7,7 @@ use yelang_ast::{
 };
 use yelang_lexer::Span;
 
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::hir::{Arm, Block, CaptureClause, Expr, ExprKind, FieldExpr, Stmt, StmtKind};
 use crate::hir_item::Item;

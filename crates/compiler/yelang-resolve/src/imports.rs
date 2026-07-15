@@ -1,5 +1,5 @@
 use yelang_lexer::Span;
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::namespaces::Namespace;
 use crate::{ResolutionError, Resolver};

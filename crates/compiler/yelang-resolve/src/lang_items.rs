@@ -12,7 +12,7 @@
 //! required lang item is needed but not found.
 
 use yelang_interner::{Interner, Symbol};
-use yelang_util::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap};
 
 /// A language item — an item that the compiler knows about by name rather than
 /// by path.

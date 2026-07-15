@@ -1,9 +1,10 @@
 [workspace]
 members = [
-    "yelang-util",
+    "yelang-arena",
     "yelang-interner",
     "yelang-lexer",
     "yelang-ast",
+    "yelang-macro-core",
     "yelang-macro",
     "yelang-resolve",
     "yelang-hir",

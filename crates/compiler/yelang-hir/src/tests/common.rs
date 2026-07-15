@@ -3,7 +3,7 @@
 use yelang_ast::Program;
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::TokenStream;
-use yelang_util::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap};
 
 use crate::res::ResolvedCrate;
 use yelang_resolve::DefKind;

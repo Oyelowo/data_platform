@@ -12,7 +12,7 @@ use yelang_ty::generic::GenericArg;
 use yelang_ty::list::List;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{InferTy, Mutability, Ty, TyKind, TypeAndMut};
-use yelang_util::HirId;
+use yelang_arena::HirId;
 
 use yelang_infer::error::TypeError;
 

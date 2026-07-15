@@ -1,6 +1,6 @@
 /*! Predicates — trait bounds, projection equalities, and assumptions. */
 
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::ty::{AliasTy, Const, GenericArgsRef, ImplPolarity, Ty};
 

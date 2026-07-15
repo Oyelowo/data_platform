@@ -66,6 +66,7 @@ pub enum TokenKind {
     CancelTransaction,
     Enumerate,
     Match,
+    Macro,
     If,
     Else,
     While,

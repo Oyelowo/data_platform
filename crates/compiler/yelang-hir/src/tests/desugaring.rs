@@ -3,7 +3,7 @@
 use yelang_ast::Program;
 use yelang_interner::Interner;
 use yelang_lexer::TokenStream;
-use yelang_util::DefId;
+use yelang_arena::DefId;
 
 use crate::hir::{ExprKind, ItemKind, StmtKind};
 use crate::lowering::lower_crate;
@@ -25,14 +25,14 @@ fn stub_resolved() -> ResolvedCrate {
         None,
         yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
     );
-    let mut modules = yelang_util::FxHashMap::default();
+    let mut modules = yelang_arena::FxHashMap::default();
     modules.insert(root_id, root_node);
     let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
     ResolvedCrate {
         module_tree,
-        definitions: yelang_util::FxHashMap::default(),
+        definitions: yelang_arena::FxHashMap::default(),
         errors: vec![],
-        def_resolutions: yelang_util::FxHashMap::default(),
+        def_resolutions: yelang_arena::FxHashMap::default(),
     }
 }
 

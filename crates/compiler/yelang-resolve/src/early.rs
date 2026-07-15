@@ -50,7 +50,7 @@ impl<'a, 'b> EarlyResolver<'a, 'b> {
         }
     }
 
-    fn find_module_by_name(&self, name: yelang_interner::Symbol) -> Option<yelang_util::DefId> {
+    fn find_module_by_name(&self, name: yelang_interner::Symbol) -> Option<yelang_arena::DefId> {
         let current = self.resolver.current_module;
         self.resolver
             .module_tree

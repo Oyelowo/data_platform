@@ -13,7 +13,8 @@ doctest = false
 yelang-ast = { path = "../yelang-ast" }
 yelang-interner = { path = "../yelang-interner" }
 yelang-lexer = { path = "../yelang-lexer" }
-yelang-util = { path = "../yelang-util" }
+yelang-arena = { path = "../yelang-arena" }
+yelang-macro-core = { path = "../yelang-macro-core" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

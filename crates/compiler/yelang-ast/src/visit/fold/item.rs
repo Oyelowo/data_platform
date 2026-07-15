@@ -32,6 +32,7 @@ pub fn fold_item<F: Folder + ?Sized>(f: &mut F, node: Item) -> Item {
         ItemKind::Impl(i) => ItemKind::Impl(Box::new(f.fold_impl(*i))),
         ItemKind::Use(u) => ItemKind::Use(f.fold_use(u)),
         ItemKind::Module(m) => ItemKind::Module(f.fold_module(m)),
+        ItemKind::MacroDef(def) => ItemKind::MacroDef(def),
     };
 
     Item {

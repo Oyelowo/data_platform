@@ -26,6 +26,7 @@ pub fn walk_item<V: Visitor>(v: &mut V, item: &Item) -> ControlFlow<()> {
         ItemKind::Const(c) => v.visit_const(c),
         ItemKind::Static(s) => v.visit_static(s),
         ItemKind::Use(u) => v.visit_use(u),
+        ItemKind::MacroDef(_) => ControlFlow::Continue(()),
     }
 }
 

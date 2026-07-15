@@ -7,7 +7,7 @@
 
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{InferTy, Ty, TyKind};
-use yelang_util::HirId;
+use yelang_arena::HirId;
 
 use crate::fn_ctxt::FnCtxt;
 

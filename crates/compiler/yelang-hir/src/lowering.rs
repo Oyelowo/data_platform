@@ -3,7 +3,7 @@
 use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
-use yelang_util::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap};
 
 use crate::crate_hir::Crate;
 use crate::ids::{BodyId, HirId};
@@ -126,6 +126,7 @@ fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {
         AstItemKind::Static(_) => DefKind::Static,
         AstItemKind::Impl(_) => DefKind::Impl,
         AstItemKind::Use(_) => DefKind::Use,
+        AstItemKind::MacroDef(_) => return None,
     })
 }
 
@@ -139,6 +140,6 @@ fn item_name(item: &AstItem) -> Option<Symbol> {
         AstItemKind::Module(m) => m.name.symbol,
         AstItemKind::Const(c) => c.name.symbol,
         AstItemKind::Static(s) => s.name.symbol,
-        AstItemKind::Impl(_) | AstItemKind::Use(_) => return None,
+        AstItemKind::Impl(_) | AstItemKind::Use(_) | AstItemKind::MacroDef(_) => return None,
     })
 }

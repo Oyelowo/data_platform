@@ -1,55 +1,21 @@
+#[cfg(test)]
+use yelang_ast::ImplItemKind;
 use yelang_ast::{
-    ArrayAccess, AssignEqExpr, AssignOpExpr, BinaryExpr, BlockExpr, Expr, ExprKind, ForLoopExpr,
-    IfExpr, ImplItemKind, Item, ItemKind, LambdaExpr, LoopExpr, MacroInvocation, MatchExpr,
-    MemberAccess, Program, RangeExpr, Stmt, StmtKind, TernaryExpr, UnaryExpr, WhileExpr,
+    AssignEqExpr, AssignOpExpr, BinaryExpr, BlockExpr, Expr, ExprKind, IfExpr, Item, ItemKind,
+    MacroInvocation, MemberAccess, Program, Stmt, StmtKind, UnaryExpr,
 };
+
 use yelang_interner::Interner;
 
-use crate::builtin_decorators::{BuiltinDecorator, DecoratorResult, apply_decorator};
+use crate::builtin_decorators::{BuiltinDecorator, apply_decorator};
 use crate::builtin_macros::expand_builtin_macro;
-use yelang_util::ExpnId;
+use crate::error::ExpandError;
+use crate::matcher::try_match_rule;
+use crate::resolver::MacroResolver;
+use crate::transcribe::transcribe;
+use yelang_macro_core::{ExpnData, ExpnKind, HygieneData, Transparency};
 
-/// Error encountered during macro expansion.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExpandError {
-    UnknownMacro {
-        path: String,
-        span: yelang_lexer::Span,
-    },
-    MalformedMacroArgs {
-        reason: String,
-        span: yelang_lexer::Span,
-    },
-    DecoratorError {
-        reason: String,
-        span: yelang_lexer::Span,
-    },
-    ExpansionLoop {
-        path: String,
-        span: yelang_lexer::Span,
-    },
-}
-
-impl std::fmt::Display for ExpandError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExpandError::UnknownMacro { path, .. } => {
-                write!(f, "unknown macro: {}", path)
-            }
-            ExpandError::MalformedMacroArgs { reason, .. } => {
-                write!(f, "malformed macro arguments: {}", reason)
-            }
-            ExpandError::DecoratorError { reason, .. } => {
-                write!(f, "decorator error: {}", reason)
-            }
-            ExpandError::ExpansionLoop { path, .. } => {
-                write!(f, "expansion loop detected: {}", path)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ExpandError {}
+const MAX_EXPANSIONS: usize = 1000;
 
 /// Result of expanding a program.
 pub struct ExpandResult {
@@ -65,8 +31,14 @@ pub struct MacroExpander<'a> {
     interner: &'a Interner,
     /// Errors accumulated during expansion.
     errors: Vec<ExpandError>,
-    /// Current expansion ID for hygiene tracking.
-    _expn_id: ExpnId,
+    /// Declarative macro definitions collected before expansion.
+    resolver: MacroResolver,
+    /// Hygiene context allocation.
+    hygiene: HygieneData,
+    /// Stack of macro invocations currently being expanded (loop detection).
+    expansion_stack: Vec<(String, yelang_lexer::Span)>,
+    /// Total number of macro expansions performed.
+    expansion_count: usize,
 }
 
 impl<'a> MacroExpander<'a> {
@@ -74,22 +46,24 @@ impl<'a> MacroExpander<'a> {
         Self {
             interner,
             errors: vec![],
-            _expn_id: ExpnId::default(),
+            resolver: MacroResolver::new(),
+            hygiene: HygieneData::new(),
+            expansion_stack: vec![],
+            expansion_count: 0,
         }
     }
 
     /// Expand all macros in a program.
     pub fn expand(&mut self, program: &Program) -> ExpandResult {
-        let mut items = vec![];
-        for item in &program.items {
-            match self.expand_item(item.clone()) {
-                Ok(expanded) => items.extend(expanded),
-                Err(e) => self.errors.push(e),
-            }
-        }
+        let mut program = program.clone();
+        let collect_errors = self
+            .resolver
+            .collect_from_program(&mut program, self.interner);
+        self.errors.extend(collect_errors);
 
         // Iterative expansion: expanded output may contain new macro invocations.
         // We loop until no more changes are made (or max iterations reached to prevent infinite loops).
+        let mut items = program.items;
         let mut iterations = 0;
         const MAX_ITERATIONS: usize = 100;
         loop {
@@ -105,9 +79,20 @@ impl<'a> MacroExpander<'a> {
             let mut changed = false;
             let mut new_items = vec![];
             for item in items {
-                let (expanded, item_changed) = self.expand_item_deep(item);
-                new_items.push(expanded);
-                changed |= item_changed;
+                let original = item.clone();
+                match self.expand_item(item) {
+                    Ok(expanded) => {
+                        // expand_item returns the original item unchanged when an error occurs,
+                        // but it still reports the error. We consider a change only if the
+                        // returned item actually differs from the input.
+                        changed |= expanded.len() > 1 || item_differs(&expanded, &original);
+                        new_items.extend(expanded);
+                    }
+                    Err(e) => {
+                        self.errors.push(e);
+                        new_items.push(original);
+                    }
+                }
             }
             items = new_items;
 
@@ -299,7 +284,7 @@ impl<'a> MacroExpander<'a> {
             }
             StmtKind::Item(item) => {
                 match self.expand_item(*item.clone()) {
-                    Ok(mut expanded) => {
+                    Ok(expanded) => {
                         if expanded.len() > 1 {
                             // Decorators that generate side-items are not supported
                             // inside statement position.  Emit an error and keep only
@@ -335,6 +320,9 @@ impl<'a> MacroExpander<'a> {
         match &expr.kind {
             ExprKind::MacroInvocation(inv) => {
                 if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
+                    return (expanded, true);
+                }
+                if let Some(expanded) = self.expand_user_macro(inv) {
                     return (expanded, true);
                 }
                 // Unknown macro — emit error and keep as-is.
@@ -987,6 +975,156 @@ impl<'a> MacroExpander<'a> {
             _ => (expr.clone(), false),
         }
     }
+
+    /// Try to expand a user-defined declarative macro invocation.
+    fn expand_user_macro(&mut self, inv: &MacroInvocation) -> Option<Expr> {
+        let name = inv.name(self.interner)?;
+        let mac = self.resolver.resolve(&name)?.clone();
+        let span = inv.span;
+
+        self.expansion_count += 1;
+        if self.expansion_count > MAX_EXPANSIONS {
+            self.errors.push(ExpandError::ExpansionLoop {
+                path: name.clone(),
+                span,
+            });
+            return None;
+        }
+
+        self.expansion_stack.push((name.clone(), span));
+
+        // The invocation's `args` field preserves the delimiter group from the
+        // source (`id!(...)`).  Macro rules are written to match the tokens
+        // *inside* that delimiter, so unwrap one level when it is a single
+        // delimited group.
+        let macro_args = unwrap_macro_args(&inv.args);
+
+        let mut matches = Vec::new();
+        for rule in &mac.rules {
+            if let Ok(bindings) = try_match_rule(rule, &macro_args, self.interner) {
+                matches.push((rule, bindings));
+            }
+        }
+
+        let (rule, bindings) = match matches.len() {
+            0 => {
+                self.errors.push(ExpandError::MacroMatchError {
+                    name: name.clone(),
+                    reason: "no rule matched the invocation".to_string(),
+                    span,
+                });
+                self.expansion_stack.pop();
+                return None;
+            }
+            1 => (&matches[0].0, &matches[0].1),
+            _ => {
+                self.errors.push(ExpandError::AmbiguousMacro {
+                    name: name.clone(),
+                    span,
+                });
+                self.expansion_stack.pop();
+                return None;
+            }
+        };
+
+        let expn_id = self.hygiene.fresh_expn(ExpnData {
+            parent: self.hygiene.root_expn(),
+            call_site: span,
+            def_site: span,
+            kind: ExpnKind::Macro,
+            desc: format!("expand {}", name),
+        });
+        let generated_ctx = self.hygiene.apply_mark(
+            self.hygiene.root_syntax_context(),
+            expn_id,
+            Transparency::Opaque,
+        );
+
+        let expanded_stream =
+            match transcribe(&rule.transcriber, &bindings, self.interner, generated_ctx) {
+                Ok(stream) => stream,
+                Err(reason) => {
+                    self.errors.push(ExpandError::MacroTranscribeError {
+                        name: name.clone(),
+                        reason,
+                        span,
+                    });
+                    self.expansion_stack.pop();
+                    return None;
+                }
+            };
+
+        self.expansion_stack.pop();
+        match parse_expr_from_token_stream(&expanded_stream, self.interner) {
+            Ok(expr) => Some(expr),
+            Err(reason) => {
+                self.errors.push(ExpandError::MalformedMacroArgs {
+                    reason: format!(
+                        "macro expansion did not produce a valid expression: {}",
+                        reason
+                    ),
+                    span,
+                });
+                None
+            }
+        }
+    }
+}
+
+fn item_differs(expanded: &[Item], original: &Item) -> bool {
+    expanded.len() != 1 || expanded[0] != *original
+}
+
+fn parse_expr_from_token_stream(
+    stream: &yelang_macro_core::token_tree::TokenStream,
+    interner: &Interner,
+) -> Result<Expr, String> {
+    let rendered = stream.render(interner);
+    let mut local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+        .map_err(|e| format!("tokenize: {}", e))?;
+    let expr = lex.parse::<Expr>().map_err(|e| e.to_string())?;
+    if !lex.is_eof() {
+        return Err("trailing tokens after expression".to_string());
+    }
+    // Replace the local interner symbols with the original interner's symbols.
+    // The parsed expression carries symbol ids from `local_interner`; since the
+    // original interner was cloned, the same text gets the same ids, so the
+    // expression is valid in the original interner.
+    let _ = local_interner;
+    Ok(expr)
+}
+
+/// If `args` is a single delimited group, return its inner stream; otherwise
+/// return it unchanged.  This matches macro_rules semantics where the matcher
+/// sees the contents of `id!(...)`, not the delimiter itself.
+fn unwrap_macro_args(
+    args: &yelang_macro_core::token_tree::TokenStream,
+) -> yelang_macro_core::token_tree::TokenStream {
+    if args.trees().len() == 1 {
+        if let Some(yelang_macro_core::token_tree::TokenTree::Group(g)) = args.trees().first() {
+            return g.stream.clone();
+        }
+    }
+    args.clone()
+}
+
+/// Expand all macros and decorators in a program, returning the fully-expanded AST.
+///
+/// This is the primary entry point for the macro expansion phase.
+/// It runs the expander iteratively until no more macro invocations remain.
+pub fn expand_program(program: &Program, interner: &Interner) -> ExpandResult {
+    let mut expander = MacroExpander::new(interner);
+    expander.expand(program)
+}
+
+/// Expand macros and decorators on a single item.
+///
+/// Returns a vec because decorators such as `@derive` may generate
+/// additional items (e.g. `impl` blocks) alongside the original item.
+pub fn expand_item(item: &Item, interner: &Interner) -> Result<Vec<Item>, ExpandError> {
+    let mut expander = MacroExpander::new(interner);
+    expander.expand_item(item.clone())
 }
 
 #[cfg(test)]
@@ -994,7 +1132,6 @@ mod tests {
     use super::*;
     use yelang_ast::TokenKind;
     use yelang_interner::Interner;
-    use yelang_lexer::ParseTokenStream;
 
     fn parse_program(src: &str) -> (Program, Interner) {
         let mut interner = Interner::new();
@@ -1011,7 +1148,7 @@ mod tests {
             }
         "#;
         let (program, interner) = parse_program(src);
-        let result = crate::expand_program(&program, &interner);
+        let result = expand_program(&program, &interner);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
         // assert!(true) should expand to `if !true { panic!(...) }`
         let fn_item = &result.program.items[0];
