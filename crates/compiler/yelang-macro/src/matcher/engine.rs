@@ -20,8 +20,17 @@ pub fn try_match_rule(
     args: &TokenStream,
     interner: &Interner,
 ) -> Result<Bindings, MatcherError> {
+    try_match_matcher(&rule.matcher, args, interner)
+}
+
+/// Try to match an arbitrary matcher sequence against a token stream.
+pub fn try_match_matcher(
+    matcher: &[MatcherOp],
+    args: &TokenStream,
+    interner: &Interner,
+) -> Result<Bindings, MatcherError> {
     let mut cursor = TokenCursor::new(args.clone());
-    let bindings = match_ops(&rule.matcher, &mut cursor, interner)?;
+    let bindings = match_ops(matcher, &mut cursor, interner)?;
     if !cursor.is_eof() {
         return Err(MatcherError::InvalidMatcher(format!(
             "unexpected trailing tokens: {}",
@@ -179,6 +188,7 @@ fn trees_equal(a: &TokenTree, b: &TokenTree) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::MacroKind;
     use super::*;
     use yelang_interner::Interner;
     use yelang_macro_core::token_tree::{Group, Ident, Punct, Spacing, Span, TokenTree};
@@ -189,6 +199,8 @@ mod tests {
 
     fn paren_rule_with_single_ident(interner: &Interner) -> MacroRule {
         MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![MatcherOp::Metavar {
@@ -220,6 +232,8 @@ mod tests {
     fn match_expr_fragment() {
         let interner = Interner::new();
         let rule = MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![MatcherOp::Metavar {
@@ -248,6 +262,8 @@ mod tests {
     fn match_repetition_star_with_separator() {
         let interner = Interner::new();
         let rule = MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![MatcherOp::Repeat {
@@ -289,6 +305,8 @@ mod tests {
     fn match_optional_repetition_present() {
         let interner = Interner::new();
         let rule = MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![
@@ -339,6 +357,8 @@ mod tests {
     fn match_optional_repetition_absent() {
         let interner = Interner::new();
         let rule = MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![
@@ -377,6 +397,8 @@ mod tests {
     fn match_terminal_literal() {
         let interner = Interner::new();
         let rule = MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![MatcherOp::Terminal(TokenTree::Literal(
@@ -406,6 +428,8 @@ mod tests {
     fn match_terminal_mismatch_fails() {
         let interner = Interner::new();
         let rule = MacroRule {
+            kind: MacroKind::FunctionLike,
+            attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
                 ops: vec![MatcherOp::Terminal(TokenTree::Literal(

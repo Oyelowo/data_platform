@@ -8,6 +8,10 @@ impl Codegen for Item {
     fn codegen(&self, f: &mut dyn Write, interner: &Interner) -> fmt::Result {
         for attr in &self.attributes {
             attr.codegen(f, interner)?;
+            // `@`-style attributes need a trailing separator so that a bare
+            // attribute like `@attr` does not merge with the following keyword
+            // (e.g. `@attrfn` instead of `@attr fn`).
+            write!(f, " ")?;
         }
         if !self.visibility.is_private() {
             self.visibility.codegen(f, interner)?;

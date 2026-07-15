@@ -3,7 +3,7 @@ use yelang_macro_core::token_tree::TokenTree;
 
 use super::cursor::TokenCursor;
 use super::types::{
-    FragmentKind, MacroRule, MatcherError, MatcherOp, RepetitionKind, TranscriberOp,
+    FragmentKind, MacroKind, MacroRule, MatcherError, MatcherOp, RepetitionKind, TranscriberOp,
 };
 
 /// Parse all rules from the body of a `macro name { ... }` definition.
@@ -21,11 +21,54 @@ pub fn parse_rules(
             continue;
         }
 
-        let matcher_group = match cursor.advance() {
-            Some(TokenTree::Group(g)) => g,
+        let (kind, attr_args, matcher) = match cursor.peek() {
+            Some(TokenTree::Ident(ident)) => {
+                let name = interner.resolve(&ident.sym);
+                match name {
+                    "attr" | "derive" => {
+                        let kind = if name == "attr" {
+                            MacroKind::Attribute
+                        } else {
+                            MacroKind::Derive
+                        };
+                        cursor.advance(); // consume `attr`/`derive`
+
+                        let attr_args_group = expect_group(&mut cursor, interner)?;
+                        let item_matcher_group = expect_group(&mut cursor, interner)?;
+
+                        let attr_args = parse_matcher_seq(
+                            &mut TokenCursor::new(attr_args_group.stream),
+                            interner,
+                        )?;
+                        let matcher = parse_matcher_seq(
+                            &mut TokenCursor::new(item_matcher_group.stream),
+                            interner,
+                        )?;
+                        (kind, attr_args, matcher)
+                    }
+                    _ => {
+                        // Function-like rule whose matcher happens to start
+                        // with an identifier is impossible: matchers are
+                        // delimited groups. Treat as an error.
+                        return Err(MatcherError::InvalidMatcher(format!(
+                            "expected macro rule to start with `attr`, `derive`, or a delimited group, found identifier `{}`",
+                            name
+                        )));
+                    }
+                }
+            }
+            Some(TokenTree::Group(_)) => {
+                let matcher_group = match cursor.advance() {
+                    Some(TokenTree::Group(g)) => g,
+                    _ => unreachable!(),
+                };
+                let matcher =
+                    parse_matcher_seq(&mut TokenCursor::new(matcher_group.stream), interner)?;
+                (MacroKind::FunctionLike, Vec::new(), matcher)
+            }
             Some(other) => {
                 return Err(MatcherError::InvalidMatcher(format!(
-                    "expected matcher group, found {}",
+                    "expected macro rule to start with `attr`, `derive`, or a delimited group, found {}",
                     other.render(interner)
                 )));
             }
@@ -45,11 +88,12 @@ pub fn parse_rules(
             None => return Err(MatcherError::UnexpectedEof),
         };
 
-        let matcher = parse_matcher_seq(&mut TokenCursor::new(matcher_group.stream), interner)?;
         let transcriber =
             parse_transcriber_seq(&mut TokenCursor::new(transcriber_group.stream), interner)?;
 
         rules.push(MacroRule {
+            kind,
+            attr_args,
             matcher,
             transcriber,
         });
@@ -61,6 +105,20 @@ pub fn parse_rules(
     }
 
     Ok(rules)
+}
+
+fn expect_group(
+    cursor: &mut TokenCursor,
+    interner: &Interner,
+) -> Result<yelang_macro_core::token_tree::Group, MatcherError> {
+    match cursor.advance() {
+        Some(TokenTree::Group(g)) => Ok(g),
+        Some(other) => Err(MatcherError::InvalidMatcher(format!(
+            "expected group, found {}",
+            other.render(interner)
+        ))),
+        None => Err(MatcherError::UnexpectedEof),
+    }
 }
 
 fn parse_matcher_seq(
@@ -305,5 +363,55 @@ mod tests {
         let body = tokenize_macro_body("($x:expr $(, $y:expr)?) => { $x }", &mut interner);
         let rules = parse_rules(&body, &interner).unwrap();
         assert_eq!(rules.len(), 1);
+    }
+
+    #[test]
+    fn parse_attribute_rule() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body("attr()($item:item) => { $item }", &mut interner);
+        let rules = parse_rules(&body, &interner).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].kind, MacroKind::Attribute);
+        assert!(rules[0].attr_args.is_empty());
+        assert!(!rules[0].matcher.is_empty());
+    }
+
+    #[test]
+    fn parse_attribute_rule_with_args() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body(
+            "attr(name = $name:literal)($item:item) => { $item }",
+            &mut interner,
+        );
+        let rules = parse_rules(&body, &interner).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].kind, MacroKind::Attribute);
+        assert!(!rules[0].attr_args.is_empty());
+    }
+
+    #[test]
+    fn parse_derive_rule() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body(
+            "derive()(struct $name:ident $_:tt) => { impl Foo for $name {} }",
+            &mut interner,
+        );
+        let rules = parse_rules(&body, &interner).unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].kind, MacroKind::Derive);
+        assert!(rules[0].attr_args.is_empty());
+    }
+
+    #[test]
+    fn parse_mixed_rule_kinds() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body(
+            "($x:expr) => { $x }; attr()($item:item) => { $item };",
+            &mut interner,
+        );
+        let rules = parse_rules(&body, &interner).unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].kind, MacroKind::FunctionLike);
+        assert_eq!(rules[1].kind, MacroKind::Attribute);
     }
 }

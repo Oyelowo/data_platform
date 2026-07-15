@@ -6,6 +6,6 @@ pub mod parser;
 pub mod types;
 
 pub use bindings::{Binding, Bindings};
-pub use engine::try_match_rule;
+pub use engine::{try_match_matcher, try_match_rule};
 pub use parser::parse_rules;
-pub use types::{DeclarativeMacro, MatcherError};
+pub use types::{DeclarativeMacro, MacroKind, MatcherError};

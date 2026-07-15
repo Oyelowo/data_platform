@@ -240,7 +240,79 @@ fn derive_for_enum(
     }
 }
 
-fn generate_clone_impl(
+/// Generate a single built-in derive impl item, if `trait_name` is supported.
+pub fn generate_derive_impl(trait_name: &str, item: &Item, interner: &Interner) -> Option<Item> {
+    let span = item.span;
+    match &item.kind {
+        ItemKind::Struct(s) => {
+            let self_ty = Type {
+                kind: TypeKind::Named(path_from_ident(&s.name)),
+                span,
+            };
+            match trait_name {
+                "Clone" => Some(generate_clone_impl(
+                    self_ty,
+                    &s.fields,
+                    &s.generics,
+                    span,
+                    interner,
+                )),
+                "Copy" => Some(generate_copy_impl(self_ty, &s.generics, span, interner)),
+                "Debug" => Some(generate_debug_impl(
+                    self_ty,
+                    &s.fields,
+                    &s.name,
+                    &s.generics,
+                    span,
+                    interner,
+                )),
+                "PartialEq" => Some(generate_partial_eq_impl(
+                    self_ty,
+                    &s.fields,
+                    &s.generics,
+                    span,
+                    interner,
+                )),
+                _ => None,
+            }
+        }
+        ItemKind::Enum(e) => {
+            let self_ty = Type {
+                kind: TypeKind::Named(path_from_ident(&e.name)),
+                span,
+            };
+            match trait_name {
+                "Clone" => Some(generate_clone_impl(
+                    self_ty,
+                    &StructFields::Unit,
+                    &e.generics,
+                    span,
+                    interner,
+                )),
+                "Copy" => Some(generate_copy_impl(self_ty, &e.generics, span, interner)),
+                "Debug" => Some(generate_debug_impl(
+                    self_ty,
+                    &StructFields::Unit,
+                    &e.name,
+                    &e.generics,
+                    span,
+                    interner,
+                )),
+                "PartialEq" => Some(generate_partial_eq_impl(
+                    self_ty,
+                    &StructFields::Unit,
+                    &e.generics,
+                    span,
+                    interner,
+                )),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn generate_clone_impl(
     self_ty: Type,
     fields: &StructFields,
     generics: &yelang_ast::Generics,
@@ -330,7 +402,7 @@ fn generate_clone_impl(
     )
 }
 
-fn generate_copy_impl(
+pub fn generate_copy_impl(
     self_ty: Type,
     generics: &yelang_ast::Generics,
     span: Span,
@@ -345,7 +417,7 @@ fn generate_copy_impl(
     )
 }
 
-fn generate_debug_impl(
+pub fn generate_debug_impl(
     self_ty: Type,
     _fields: &StructFields,
     struct_name: &Ident,
@@ -384,7 +456,7 @@ fn generate_debug_impl(
     )
 }
 
-fn generate_partial_eq_impl(
+pub fn generate_partial_eq_impl(
     self_ty: Type,
     fields: &StructFields,
     generics: &yelang_ast::Generics,
@@ -565,7 +637,7 @@ fn path_from_str(name: &str, span: Span, interner: &Interner) -> Path {
     }
 }
 
-fn path_from_ident(ident: &Ident) -> Path {
+pub fn path_from_ident(ident: &Ident) -> Path {
     Path {
         qself: None,
         segments: vec![PathSegment {
@@ -657,7 +729,7 @@ fn apply_lang(attr: &Attribute, item: &Item, interner: &Interner) -> DecoratorRe
 
 // --- Helpers ---
 
-fn collect_trait_names(args: &AttributeArgs, interner: &Interner) -> Vec<String> {
+pub fn collect_trait_names(args: &AttributeArgs, interner: &Interner) -> Vec<String> {
     match args {
         AttributeArgs::Positional(exprs) => exprs
             .iter()

@@ -96,9 +96,27 @@ impl RepetitionKind {
     }
 }
 
-/// A parsed macro rule: `(matcher) => { transcriber }`.
+/// The kind of a declarative macro rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacroKind {
+    /// Function-like macro: `name!(...)`.
+    FunctionLike,
+    /// Attribute macro: `@name(...)` or `#[name(...)]` on an item.
+    Attribute,
+    /// Derive macro: `@derive(Name)` or `#[derive(Name)]`.
+    Derive,
+}
+
+/// A parsed macro rule.
+///
+/// Function-like rules have `attr_args` empty and `matcher` matches the
+/// invocation's delimited arguments. Attribute and derive rules have
+/// `attr_args` matching the attribute arguments and `matcher` matching the
+/// annotated item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MacroRule {
+    pub kind: MacroKind,
+    pub attr_args: Vec<MatcherOp>,
     pub matcher: Vec<MatcherOp>,
     pub transcriber: Vec<TranscriberOp>,
 }
