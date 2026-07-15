@@ -1,5 +1,8 @@
 use yelang_interner::Symbol;
-use yelang_macro_core::token_tree::{Delimiter, TokenTree};
+use yelang_macro_core::{
+    CrateId, MacroDefId,
+    token_tree::{Delimiter, TokenTree},
+};
 
 /// A single matcher atom inside a macro rule.
 #[derive(Debug, Clone, PartialEq)]
@@ -143,6 +146,8 @@ pub struct MacroRule {
 pub struct DeclarativeMacro {
     pub name: String,
     pub rules: Vec<MacroRule>,
+    pub def_id: MacroDefId,
+    pub defining_crate: CrateId,
 }
 
 /// Errors produced while parsing macro rules or matching invocations.

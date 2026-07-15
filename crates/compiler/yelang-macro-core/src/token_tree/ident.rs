@@ -1,6 +1,20 @@
 use std::fmt;
 
 use super::{Span, TokenId};
+use crate::id::CrateId;
+
+/// Origin of an identifier token. Used for hygiene special forms such as
+/// `$crate` and `$package` inside macro transcribers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum IdentOrigin {
+    /// Ordinary identifier.
+    #[default]
+    Plain,
+    /// `$crate` — resolves to the macro's defining crate root.
+    Crate,
+    /// `$package` — resolves to the package root.
+    Package,
+}
 
 /// An identifier token.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -9,6 +23,9 @@ pub struct Ident {
     pub sym: yelang_interner::Symbol,
     pub span: Span,
     pub is_raw: bool,
+    pub origin: IdentOrigin,
+    /// For `Crate` / `Package` origins, the crate/package they refer to.
+    pub crate_ref: Option<CrateId>,
 }
 
 impl Ident {
@@ -18,6 +35,8 @@ impl Ident {
             sym,
             span,
             is_raw: false,
+            origin: IdentOrigin::Plain,
+            crate_ref: None,
         }
     }
 
@@ -27,6 +46,30 @@ impl Ident {
             sym,
             span,
             is_raw: true,
+            origin: IdentOrigin::Plain,
+            crate_ref: None,
+        }
+    }
+
+    pub fn new_crate(sym: yelang_interner::Symbol, span: Span, crate_id: CrateId) -> Self {
+        Self {
+            id: TokenId::fresh(),
+            sym,
+            span,
+            is_raw: false,
+            origin: IdentOrigin::Crate,
+            crate_ref: Some(crate_id),
+        }
+    }
+
+    pub fn new_package(sym: yelang_interner::Symbol, span: Span) -> Self {
+        Self {
+            id: TokenId::fresh(),
+            sym,
+            span,
+            is_raw: false,
+            origin: IdentOrigin::Package,
+            crate_ref: None,
         }
     }
 

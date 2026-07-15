@@ -11,7 +11,8 @@ pub mod token_tree;
 
 pub use hygiene::HygieneData;
 pub use id::{
-    ExpnArena, ExpnData, ExpnId, ExpnKind, MacroDefArena, MacroDefData, MacroDefId, MacroKind,
-    SyntaxContextArena, SyntaxContextData, SyntaxContextId, TagToken, TokenId, Transparency,
+    CrateId, ExpnArena, ExpnData, ExpnId, ExpnKind, MacroDefArena, MacroDefData, MacroDefId,
+    MacroKind, SyntaxContextArena, SyntaxContextData, SyntaxContextId, TagToken, TokenId,
+    Transparency,
 };
 pub use token_tree::*;

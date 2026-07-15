@@ -1,5 +1,7 @@
 use yelang_arena::{Arena, ArenaKey, Id};
 
+pub use yelang_arena::CrateId;
+
 /// A unique identifier for a single macro expansion invocation.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExpnId(ArenaKey);
@@ -98,6 +100,7 @@ pub struct MacroDefData {
     pub name: yelang_interner::Symbol,
     pub span: yelang_lexer::Span,
     pub kind: MacroKind,
+    pub defining_crate: CrateId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

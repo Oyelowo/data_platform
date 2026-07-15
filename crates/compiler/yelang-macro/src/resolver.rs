@@ -1,20 +1,37 @@
 use yelang_ast::{Item, ItemKind, MacroDef, ModKind};
 use yelang_interner::Interner;
+use yelang_macro_core::{
+    CrateId, MacroDefArena, MacroDefData, MacroDefId, MacroKind as CoreMacroKind,
+};
 
 use crate::error::ExpandError;
-use crate::matcher::{DeclarativeMacro, MatcherError, parse_rules};
+use crate::matcher::{DeclarativeMacro, MacroKind, MatcherError, parse_rules};
 use std::collections::HashMap;
 
 /// Collection of declarative macros visible during expansion.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct MacroResolver {
     macros: HashMap<String, DeclarativeMacro>,
+    def_arena: MacroDefArena,
+    /// Crate id to assign to locally-defined macros. In multi-crate builds this
+    /// is supplied by the driver; until then all macros are treated as local.
+    local_crate: CrateId,
 }
 
 impl MacroResolver {
     pub fn new() -> Self {
         Self {
             macros: HashMap::new(),
+            def_arena: MacroDefArena::new(),
+            local_crate: CrateId::new(1),
+        }
+    }
+
+    pub fn with_local_crate(local_crate: CrateId) -> Self {
+        Self {
+            macros: HashMap::new(),
+            def_arena: MacroDefArena::new(),
+            local_crate,
         }
     }
 
@@ -42,11 +59,11 @@ impl MacroResolver {
             match item.kind {
                 ItemKind::MacroDef(def) => {
                     if let Err(e) = self.register_def(&def, interner) {
-                        errors.push(ExpandError::MacroDefError {
-                            name: interner.resolve(&def.name.symbol).to_string(),
-                            reason: e.to_string(),
-                            span: def.span,
-                        });
+                        errors.push(ExpandError::macro_def_error(
+                            interner.resolve(&def.name.symbol).to_string(),
+                            e.to_string(),
+                            def.span,
+                        ));
                     }
                 }
                 ItemKind::Module(mut m) => {
@@ -68,11 +85,26 @@ impl MacroResolver {
     fn register_def(&mut self, def: &MacroDef, interner: &Interner) -> Result<(), MatcherError> {
         let name = interner.resolve(&def.name.symbol).to_string();
         let rules = parse_rules(&def.body, interner)?;
+        let kind = if rules.iter().any(|r| r.kind == MacroKind::Attribute) {
+            CoreMacroKind::Attribute
+        } else if rules.iter().any(|r| r.kind == MacroKind::Derive) {
+            CoreMacroKind::Derive
+        } else {
+            CoreMacroKind::Declarative
+        };
+        let def_id = MacroDefId::from_arena_key(self.def_arena.insert(MacroDefData {
+            name: def.name.symbol,
+            span: def.span,
+            kind,
+            defining_crate: self.local_crate,
+        }));
         self.macros.insert(
-            name,
+            name.clone(),
             DeclarativeMacro {
-                name: interner.resolve(&def.name.symbol).to_string(),
+                name,
                 rules,
+                def_id,
+                defining_crate: self.local_crate,
             },
         );
         Ok(())
@@ -80,6 +112,10 @@ impl MacroResolver {
 
     pub fn resolve(&self, name: &str) -> Option<&DeclarativeMacro> {
         self.macros.get(name)
+    }
+
+    pub fn macro_def_data(&self, def_id: MacroDefId) -> Option<&MacroDefData> {
+        self.def_arena.get(def_id.as_arena_key())
     }
 }
 

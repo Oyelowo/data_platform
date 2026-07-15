@@ -173,6 +173,7 @@ fn parse_pattern_binding_name(
     Ok(Ident {
         symbol: stream.interner().get_or_intern(name),
         span: stream.span(),
+        origin: crate::tokenizer::IdentOrigin::Plain,
     })
 }
 

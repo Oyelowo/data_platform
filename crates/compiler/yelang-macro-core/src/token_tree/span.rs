@@ -47,3 +47,20 @@ impl From<yelang_lexer::Span> for Span {
         Self::new(start, end, span.file_id(), SyntaxContextId::default())
     }
 }
+
+impl From<Span> for yelang_lexer::Span {
+    fn from(span: Span) -> Self {
+        use yelang_lexer::chars::cursor::Position;
+        let start = Position {
+            line: 1,
+            column: 1,
+            absolute: span.lo as usize,
+        };
+        let end = Position {
+            line: 1,
+            column: 1,
+            absolute: span.hi as usize,
+        };
+        yelang_lexer::Span::new_with_file_id(start, end, span.file)
+    }
+}

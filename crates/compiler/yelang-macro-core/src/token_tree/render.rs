@@ -16,11 +16,13 @@ pub fn render_group(group: &Group, interner: &Interner) -> String {
 
 /// Render an identifier to a source string.
 pub fn render_ident(ident: &Ident, interner: &Interner) -> String {
+    use super::IdentOrigin;
     let name = interner.resolve(&ident.sym);
-    if ident.is_raw {
-        format!("r#{}", name)
-    } else {
-        name.to_string()
+    match ident.origin {
+        IdentOrigin::Crate => format!("$crate"),
+        IdentOrigin::Package => format!("$package"),
+        IdentOrigin::Plain if ident.is_raw => format!("r#{}", name),
+        IdentOrigin::Plain => name.to_string(),
     }
 }
 

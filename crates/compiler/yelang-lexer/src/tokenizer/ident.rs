@@ -8,15 +8,42 @@ use super::TokenKind;
 use crate::{Interner, Symbol};
 use crate::{ParseTokenStream, Span, TokenResult, TokenStream, consume_token};
 
+/// Origin of an identifier token. Used for hygiene special forms such as
+/// `$crate` and `$package` inside macro transcribers.
+#[derive(Debug, Default, Eq, Clone, Copy, PartialEq, Hash)]
+pub enum IdentOrigin {
+    /// Ordinary identifier.
+    #[default]
+    Plain,
+    /// `$crate` — resolves to the macro's defining crate root.
+    Crate,
+    /// `$package` — resolves to the package root.
+    Package,
+}
+
 #[derive(Debug, Eq, Clone, Copy)]
 pub struct Ident {
     pub symbol: Symbol,
     pub span: Span,
+    /// Hygiene origin for identifiers produced by macro expansion.
+    pub origin: IdentOrigin,
 }
 
 impl Ident {
     pub fn new(symbol: Symbol, span: Span) -> Self {
-        Self { symbol, span }
+        Self {
+            symbol,
+            span,
+            origin: IdentOrigin::Plain,
+        }
+    }
+
+    pub fn new_with_origin(symbol: Symbol, span: Span, origin: IdentOrigin) -> Self {
+        Self {
+            symbol,
+            span,
+            origin,
+        }
     }
 
     pub fn symbol(&self) -> Symbol {
@@ -48,14 +75,59 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Ident {
                 stream.advance();
                 let span = stream.span();
                 let symbol = stream.interner().get_or_intern(keyword_ident);
-                return Ok(Ident { symbol, span });
+                return Ok(Ident {
+                    symbol,
+                    span,
+                    origin: IdentOrigin::Plain,
+                });
             }
+        }
+
+        // `$crate` / `$package` hygiene special forms inside paths.
+        if let Some(dollar_crate) = parse_dollar_crate(stream) {
+            return Ok(dollar_crate);
         }
 
         // Otherwise, parse as a regular identifier
         let ident = consume_token!(stream, TokenKind::Ident(ident) => ident);
         Ok(*ident)
     }
+}
+
+fn parse_dollar_crate(stream: &mut TokenStream<TokenKind>) -> Option<Ident> {
+    // Inspect the next two tokens without mutably borrowing `stream`, then
+    // advance once we know this is really `$crate` / `$package`.
+    let (first_span, second_span, origin, symbol_text) = {
+        let first = stream.peek()?;
+        if !matches!(first.kind(), TokenKind::Dollar) {
+            return None;
+        }
+        let second = stream.peek_ahead(1)?;
+        let (origin, symbol_text) = match second.kind() {
+            TokenKind::Crate => (IdentOrigin::Crate, "crate"),
+            TokenKind::Pkg => (IdentOrigin::Package, "pkg"),
+            TokenKind::Ident(ident) => {
+                let text = stream.interner().resolve(&ident.symbol);
+                match text {
+                    "crate" => (IdentOrigin::Crate, "crate"),
+                    "package" => (IdentOrigin::Package, "package"),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        (first.span(), second.span(), origin, symbol_text)
+    };
+
+    stream.advance();
+    stream.advance();
+    let span = first_span.merge(second_span);
+    let symbol = stream.interner().get_or_intern(symbol_text);
+    Some(Ident {
+        symbol,
+        span,
+        origin,
+    })
 }
 
 fn contextual_keyword_ident(token_kind: &TokenKind) -> Option<&'static str> {

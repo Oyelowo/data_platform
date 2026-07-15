@@ -8,7 +8,7 @@ pub mod stream;
 pub mod token_id;
 pub mod tree;
 
-pub use ident::Ident;
+pub use ident::{Ident, IdentOrigin};
 pub use literal::{LitKind, Literal, StrKind};
 pub use punct::{Punct, Spacing};
 pub use span::Span;

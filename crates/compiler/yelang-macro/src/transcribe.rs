@@ -1,6 +1,8 @@
 use yelang_interner::Interner;
-use yelang_macro_core::SyntaxContextId;
-use yelang_macro_core::token_tree::{Group, Literal, Punct, Spacing, TokenStream, TokenTree};
+use yelang_macro_core::{
+    CrateId, SyntaxContextId,
+    token_tree::{Group, Ident, IdentOrigin, Literal, Punct, Spacing, TokenStream, TokenTree},
+};
 
 use crate::matcher::types::{MetavarExpr, RepetitionKind, TranscriberOp};
 use crate::matcher::{Binding, Bindings};
@@ -10,16 +12,27 @@ use crate::matcher::{Binding, Bindings};
 /// `generated_ctx` is applied to every token that originates from the macro
 /// definition body (terminals and implicit punctuation). Captured argument
 /// tokens keep their original hygiene context.
+///
+/// `defining_crate` is the crate in which the macro being expanded was defined;
+/// it is used to resolve `$crate` tokens in the transcriber.
 pub fn transcribe(
     ops: &[TranscriberOp],
     bindings: &Bindings,
     interner: &Interner,
     generated_ctx: SyntaxContextId,
+    defining_crate: CrateId,
 ) -> Result<TokenStream, String> {
     let mut env = Vec::new();
     env.push(bindings.clone());
     let mut repeat_stack = Vec::new();
-    transcribe_ops(ops, &mut env, &mut repeat_stack, interner, generated_ctx)
+    transcribe_ops(
+        ops,
+        &mut env,
+        &mut repeat_stack,
+        interner,
+        generated_ctx,
+        defining_crate,
+    )
 }
 
 struct RepeatFrame {
@@ -33,6 +46,7 @@ fn transcribe_ops(
     repeat_stack: &mut Vec<RepeatFrame>,
     interner: &Interner,
     generated_ctx: SyntaxContextId,
+    defining_crate: CrateId,
 ) -> Result<TokenStream, String> {
     let mut out = TokenStream::new();
     for op in ops {
@@ -42,6 +56,7 @@ fn transcribe_ops(
             repeat_stack,
             interner,
             generated_ctx,
+            defining_crate,
         )?);
     }
     Ok(out)
@@ -53,15 +68,26 @@ fn transcribe_op(
     repeat_stack: &mut Vec<RepeatFrame>,
     interner: &Interner,
     generated_ctx: SyntaxContextId,
+    defining_crate: CrateId,
 ) -> Result<TokenStream, String> {
     match op {
         TranscriberOp::Terminal(tree) => {
             let mut tree = tree.clone();
             apply_ctx_to_tree(&mut tree, generated_ctx);
+            if let TokenTree::Ident(ident) = &mut tree {
+                resolve_crate_origin(ident, defining_crate);
+            }
             Ok(TokenStream::from_vec(vec![tree]))
         }
         TranscriberOp::Group { delimiter, ops } => {
-            let inner = transcribe_ops(ops, env, repeat_stack, interner, generated_ctx)?;
+            let inner = transcribe_ops(
+                ops,
+                env,
+                repeat_stack,
+                interner,
+                generated_ctx,
+                defining_crate,
+            )?;
             let mut group = TokenTree::Group(Group::new(*delimiter, inner, Default::default()));
             apply_ctx_to_tree(&mut group, generated_ctx);
             Ok(TokenStream::from_vec(vec![group]))
@@ -73,9 +99,14 @@ fn transcribe_op(
             let stream = binding.expect_single(&resolve_name(interner, *name))?;
             Ok(stream)
         }
-        TranscriberOp::MetavarExpr(expr) => {
-            evaluate_metavar_expr(expr, repeat_stack, env, interner, generated_ctx)
-        }
+        TranscriberOp::MetavarExpr(expr) => evaluate_metavar_expr(
+            expr,
+            repeat_stack,
+            env,
+            interner,
+            generated_ctx,
+            defining_crate,
+        ),
         TranscriberOp::DollarDollar => Ok(TokenStream::from_vec(vec![TokenTree::Punct(
             Punct::new('$', Spacing::Alone, Default::default()),
         )])),
@@ -103,7 +134,14 @@ fn transcribe_op(
                     index: i,
                     len: count,
                 });
-                let part = transcribe_ops(ops, env, repeat_stack, interner, generated_ctx)?;
+                let part = transcribe_ops(
+                    ops,
+                    env,
+                    repeat_stack,
+                    interner,
+                    generated_ctx,
+                    defining_crate,
+                )?;
                 repeat_stack.pop();
                 env.pop();
                 out.extend(part);
@@ -121,12 +159,24 @@ fn transcribe_op(
     }
 }
 
+/// For `$crate` / `$package` identifiers, fill in the defining crate reference
+/// so name resolution can route the path correctly.
+fn resolve_crate_origin(ident: &mut Ident, defining_crate: CrateId) {
+    match ident.origin {
+        IdentOrigin::Crate if ident.crate_ref.is_none() => {
+            ident.crate_ref = Some(defining_crate);
+        }
+        _ => {}
+    }
+}
+
 fn evaluate_metavar_expr(
     expr: &MetavarExpr,
     repeat_stack: &[RepeatFrame],
     env: &[Bindings],
     interner: &Interner,
     generated_ctx: SyntaxContextId,
+    _defining_crate: CrateId,
 ) -> Result<TokenStream, String> {
     match expr {
         MetavarExpr::Count { name, depth } => {
@@ -356,7 +406,14 @@ mod tests {
             single_ident_binding("x", "foo", &interner),
         );
         let ops = vec![TranscriberOp::Subst(interner.get_or_intern("x"))];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert_eq!(out.render(&interner), "foo");
     }
 
@@ -365,7 +422,16 @@ mod tests {
         let interner = Interner::new();
         let bindings = Bindings::new();
         let ops = vec![TranscriberOp::Subst(interner.get_or_intern("x"))];
-        assert!(transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).is_err());
+        assert!(
+            transcribe(
+                &ops,
+                &bindings,
+                &interner,
+                SyntaxContextId::default(),
+                CrateId::new(1)
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -373,7 +439,14 @@ mod tests {
         let interner = Interner::new();
         let bindings = Bindings::new();
         let ops = vec![TranscriberOp::DollarDollar];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         let trees: Vec<_> = out.into_iter().collect();
         assert_eq!(trees.len(), 1);
         assert!(matches!(
@@ -398,7 +471,14 @@ mod tests {
             delimiter: yelang_macro_core::token_tree::Delimiter::Parenthesis,
             ops: vec![TranscriberOp::Subst(interner.get_or_intern("x"))],
         }];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert_eq!(out.render(&interner), "(42)");
     }
 
@@ -416,7 +496,14 @@ mod tests {
             sep: Some(TokenTree::Punct(Punct::new('+', Spacing::Alone, Span::default())).clone()),
             ops: vec![TranscriberOp::Subst(interner.get_or_intern("x"))],
         }];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert_eq!(out.render(&interner), "1+2");
     }
 
@@ -433,7 +520,14 @@ mod tests {
             sep: None,
             ops: vec![TranscriberOp::Subst(interner.get_or_intern("y"))],
         }];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert_eq!(out.render(&interner), "2");
     }
 
@@ -446,7 +540,14 @@ mod tests {
             sep: None,
             ops: vec![TranscriberOp::Subst(interner.get_or_intern("y"))],
         }];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert!(out.is_empty());
     }
 
@@ -464,7 +565,14 @@ mod tests {
             name: interner.get_or_intern("x"),
             depth: None,
         })];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert_eq!(out.render(&interner), "3");
     }
 
@@ -488,7 +596,14 @@ mod tests {
                 TranscriberOp::Subst(interner.get_or_intern("x")),
             ],
         }];
-        let out = transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).unwrap();
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::default(),
+            CrateId::new(1),
+        )
+        .unwrap();
         assert_eq!(out.render(&interner), "(42, 42)");
     }
 
@@ -501,6 +616,15 @@ mod tests {
             sep: None,
             ops: vec![TranscriberOp::Subst(interner.get_or_intern("x"))],
         }];
-        assert!(transcribe(&ops, &bindings, &interner, SyntaxContextId::default()).is_err());
+        assert!(
+            transcribe(
+                &ops,
+                &bindings,
+                &interner,
+                SyntaxContextId::default(),
+                CrateId::new(1)
+            )
+            .is_err()
+        );
     }
 }

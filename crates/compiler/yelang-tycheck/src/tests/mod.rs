@@ -650,6 +650,7 @@ fn field_tuple_access() {
             field: yelang_ast::Ident {
                 symbol: symbol(0),
                 span: dummy_span(),
+                origin: yelang_ast::IdentOrigin::Plain,
             },
         },
         2,
@@ -675,6 +676,7 @@ fn field_tuple_out_of_bounds_is_error() {
             field: yelang_ast::Ident {
                 symbol: symbol(5),
                 span: dummy_span(),
+                origin: yelang_ast::IdentOrigin::Plain,
             },
         },
         2,
@@ -1278,6 +1280,7 @@ fn struct_literal_returns_struct_ty() {
         ident: yelang_ast::Ident {
             symbol: symbol(1),
             span: dummy_span(),
+            origin: yelang_ast::IdentOrigin::Plain,
         },
         expr: expr(
             ExprKind::Lit {

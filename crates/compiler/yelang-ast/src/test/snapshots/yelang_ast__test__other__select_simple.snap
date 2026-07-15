@@ -1,6 +1,5 @@
 ---
-source: crates/lang/yelang-ast/src/test/other.rs
-assertion_line: 80
+source: yelang-ast/src/test/other.rs
 expression: ast
 ---
 Stmt {
@@ -31,6 +30,7 @@ Stmt {
                                                             absolute: 11,
                                                         },
                                                     },
+                                                    origin: Plain,
                                                 },
                                                 args: None,
                                             },
@@ -82,6 +82,7 @@ Stmt {
                                                     absolute: 21,
                                                 },
                                             },
+                                            origin: Plain,
                                         },
                                     ),
                                     bind: None,

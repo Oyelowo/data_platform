@@ -14,6 +14,11 @@ pub fn from_lexer_tokens(tokens: &[Token<AstTokenKind>], interner: &Interner) ->
     let mut stream = TokenStream::new();
     let mut i = 0;
     while i < tokens.len() {
+        if let Some(tree) = convert_dollar_crate(tokens, i, interner) {
+            stream.push(tree);
+            i += 2;
+            continue;
+        }
         if let Some((trees, consumed)) = convert_token(tokens, i, interner) {
             for tree in trees {
                 stream.push(tree);
@@ -25,6 +30,43 @@ pub fn from_lexer_tokens(tokens: &[Token<AstTokenKind>], interner: &Interner) ->
         }
     }
     stream
+}
+
+/// Convert `$crate` / `$package` inside macro bodies to special-origin identifiers.
+fn convert_dollar_crate(
+    tokens: &[Token<AstTokenKind>],
+    start: usize,
+    interner: &Interner,
+) -> Option<TokenTree> {
+    let first = tokens.get(start)?;
+    if !matches!(first.kind(), AstTokenKind::Dollar) {
+        return None;
+    }
+    let second = tokens.get(start + 1)?;
+    let span: Span = first.span().merge(second.span()).into();
+    match second.kind() {
+        AstTokenKind::Crate => {
+            let sym = interner.get_or_intern("crate");
+            Some(TokenTree::Ident(Ident::new_crate(
+                sym,
+                span,
+                Default::default(),
+            )))
+        }
+        AstTokenKind::Pkg => {
+            let sym = interner.get_or_intern("pkg");
+            Some(TokenTree::Ident(Ident::new_crate(
+                sym,
+                span,
+                Default::default(),
+            )))
+        }
+        AstTokenKind::Ident(ident) if interner.resolve(&ident.symbol) == "package" => {
+            let sym = interner.get_or_intern("package");
+            Some(TokenTree::Ident(Ident::new_package(sym, span)))
+        }
+        _ => None,
+    }
 }
 
 fn convert_token(

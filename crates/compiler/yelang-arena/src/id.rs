@@ -80,7 +80,14 @@ pub mod tags {
     /// Tag for `Id<TagLocal>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagLocal;
+
+    /// Tag for `Id<TagCrate>`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct TagCrate;
 }
+
+/// Type-safe crate ID.
+pub type CrateId = Id<tags::TagCrate>;
 
 /// Type-safe definition ID.
 pub type DefId = Id<tags::TagDef>;

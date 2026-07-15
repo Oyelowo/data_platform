@@ -1,6 +1,5 @@
 ---
-source: crates/lang/yelang-ast/src/test/other.rs
-assertion_line: 80
+source: yelang-ast/src/test/other.rs
 expression: ast
 ---
 Stmt {
@@ -40,6 +39,7 @@ Stmt {
                                                                                                 absolute: 21,
                                                                                             },
                                                                                         },
+                                                                                        origin: Plain,
                                                                                     },
                                                                                     args: None,
                                                                                 },
@@ -88,6 +88,7 @@ Stmt {
                                                                             absolute: 23,
                                                                         },
                                                                     },
+                                                                    origin: Plain,
                                                                 },
                                                             },
                                                         ),
@@ -142,6 +143,7 @@ Stmt {
                                                                     absolute: 45,
                                                                 },
                                                             },
+                                                            origin: Plain,
                                                         },
                                                     },
                                                 ),
@@ -163,6 +165,7 @@ Stmt {
                                                                     absolute: 65,
                                                                 },
                                                             },
+                                                            origin: Plain,
                                                         },
                                                         value: Expr {
                                                             kind: Call(
@@ -188,6 +191,7 @@ Stmt {
                                                                                                     absolute: 71,
                                                                                                 },
                                                                                             },
+                                                                                            origin: Plain,
                                                                                         },
                                                                                         args: None,
                                                                                     },
@@ -208,6 +212,7 @@ Stmt {
                                                                                                     absolute: 78,
                                                                                                 },
                                                                                             },
+                                                                                            origin: Plain,
                                                                                         },
                                                                                         args: None,
                                                                                     },
@@ -266,6 +271,7 @@ Stmt {
                                                                                                                         absolute: 80,
                                                                                                                     },
                                                                                                                 },
+                                                                                                                origin: Plain,
                                                                                                             },
                                                                                                             args: None,
                                                                                                         },
@@ -314,6 +320,7 @@ Stmt {
                                                                                                     absolute: 86,
                                                                                                 },
                                                                                             },
+                                                                                            origin: Plain,
                                                                                         },
                                                                                     },
                                                                                 ),
@@ -397,6 +404,7 @@ Stmt {
                                                     absolute: 116,
                                                 },
                                             },
+                                            origin: Plain,
                                         },
                                     ),
                                     bind: Some(
@@ -416,6 +424,7 @@ Stmt {
                                                     absolute: 118,
                                                 },
                                             },
+                                            origin: Plain,
                                         },
                                     ),
                                     ty: Some(
@@ -440,6 +449,7 @@ Stmt {
                                                                         absolute: 123,
                                                                     },
                                                                 },
+                                                                origin: Plain,
                                                             },
                                                             args: None,
                                                         },
@@ -512,6 +522,7 @@ Stmt {
                                                                                         absolute: 140,
                                                                                     },
                                                                                 },
+                                                                                origin: Plain,
                                                                             },
                                                                             args: None,
                                                                         },
@@ -560,6 +571,7 @@ Stmt {
                                                                     absolute: 144,
                                                                 },
                                                             },
+                                                            origin: Plain,
                                                         },
                                                     },
                                                 ),
@@ -644,6 +656,7 @@ Stmt {
                                                                                     absolute: 169,
                                                                                 },
                                                                             },
+                                                                            origin: Plain,
                                                                         },
                                                                         args: None,
                                                                     },
@@ -692,6 +705,7 @@ Stmt {
                                                                 absolute: 174,
                                                             },
                                                         },
+                                                        origin: Plain,
                                                     },
                                                 },
                                             ),

@@ -8,13 +8,21 @@ use yelang_ast::{
 
 use yelang_interner::Interner;
 
+use std::path::Path;
+
 use crate::builtin_decorators::{BuiltinDecorator, apply_decorator};
 use crate::builtin_macros::expand_builtin_macro;
+use crate::eager::{
+    CfgOptions, EagerBuiltin, EagerContext, EnvProvider, FileLoader, StdEnvProvider, StdFileLoader,
+    expand_eager_macros_in_stream,
+};
 use crate::error::ExpandError;
 use crate::matcher::{MacroKind, try_match_matcher, try_match_rule};
 use crate::resolver::MacroResolver;
 use crate::transcribe::transcribe;
-use yelang_macro_core::{ExpnData, ExpnKind, HygieneData, TokenStream, Transparency};
+use yelang_macro_core::{
+    CrateId, ExpnData, ExpnKind, HygieneData, MacroDefId, TokenStream, Transparency,
+};
 
 const MAX_EXPANSIONS: usize = 1000;
 
@@ -22,6 +30,15 @@ const MAX_EXPANSIONS: usize = 1000;
 pub struct ExpandResult {
     pub program: Program,
     pub errors: Vec<ExpandError>,
+}
+
+/// A frame on the macro expansion stack, used for cycle detection and
+/// diagnostic backtraces.
+#[derive(Debug, Clone)]
+struct ExpansionFrame {
+    name: String,
+    span: yelang_lexer::Span,
+    def_id: MacroDefId,
 }
 
 /// The main macro expansion engine.
@@ -37,9 +54,17 @@ pub struct MacroExpander<'a> {
     /// Hygiene context allocation.
     hygiene: HygieneData,
     /// Stack of macro invocations currently being expanded (loop detection).
-    expansion_stack: Vec<(String, yelang_lexer::Span)>,
+    expansion_stack: Vec<ExpansionFrame>,
     /// Total number of macro expansions performed.
     expansion_count: usize,
+    /// File-system abstraction for `include!` and friends.
+    file_loader: &'a dyn FileLoader,
+    /// Environment-variable abstraction for `env!` and `option_env!`.
+    env_provider: &'a dyn EnvProvider,
+    /// Active `cfg` options for `cfg!`.
+    cfg_options: CfgOptions,
+    /// Path of the source file being expanded, if known.
+    current_file: Option<&'a Path>,
 }
 
 impl<'a> MacroExpander<'a> {
@@ -51,6 +76,55 @@ impl<'a> MacroExpander<'a> {
             hygiene: HygieneData::new(),
             expansion_stack: vec![],
             expansion_count: 0,
+            file_loader: &StdFileLoader,
+            env_provider: &StdEnvProvider,
+            cfg_options: CfgOptions::new(),
+            current_file: None,
+        }
+    }
+
+    pub fn with_local_crate(interner: &'a Interner, local_crate: CrateId) -> Self {
+        Self {
+            interner,
+            errors: vec![],
+            resolver: MacroResolver::with_local_crate(local_crate),
+            hygiene: HygieneData::new(),
+            expansion_stack: vec![],
+            expansion_count: 0,
+            file_loader: &StdFileLoader,
+            env_provider: &StdEnvProvider,
+            cfg_options: CfgOptions::new(),
+            current_file: None,
+        }
+    }
+
+    pub fn with_file_loader(mut self, loader: &'a dyn FileLoader) -> Self {
+        self.file_loader = loader;
+        self
+    }
+
+    pub fn with_env_provider(mut self, provider: &'a dyn EnvProvider) -> Self {
+        self.env_provider = provider;
+        self
+    }
+
+    pub fn with_cfg_options(mut self, cfg: CfgOptions) -> Self {
+        self.cfg_options = cfg;
+        self
+    }
+
+    pub fn with_current_file(mut self, path: &'a Path) -> Self {
+        self.current_file = Some(path);
+        self
+    }
+
+    fn eager_context(&self) -> EagerContext<'a> {
+        EagerContext {
+            interner: self.interner,
+            file_loader: self.file_loader,
+            env_provider: self.env_provider,
+            current_file: self.current_file,
+            cfg_options: self.cfg_options.clone(),
         }
     }
 
@@ -70,10 +144,13 @@ impl<'a> MacroExpander<'a> {
         loop {
             iterations += 1;
             if iterations > MAX_ITERATIONS {
-                self.errors.push(ExpandError::ExpansionLoop {
-                    path: "(expansion loop)".to_string(),
-                    span: yelang_lexer::Span::default(),
-                });
+                self.errors.push(
+                    ExpandError::expansion_loop(
+                        "(expansion loop)".to_string(),
+                        yelang_lexer::Span::default(),
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
                 break;
             }
 
@@ -157,10 +234,10 @@ impl<'a> MacroExpander<'a> {
                 let result = apply_decorator(decorator, &attr, &item, self.interner);
                 if result.items.is_empty() && !result.errors.is_empty() {
                     for err in &result.errors {
-                        decorator_errors.push(ExpandError::DecoratorError {
-                            reason: err.clone(),
-                            span: attr.span,
-                        });
+                        decorator_errors.push(
+                            ExpandError::decorator_error(err.clone(), attr.span)
+                                .with_backtrace(self.backtrace()),
+                        );
                     }
                     vec![item.clone()]
                 } else {
@@ -189,16 +266,31 @@ impl<'a> MacroExpander<'a> {
         // Item-position macro invocation: expand to items.
         if let ItemKind::MacroInvocation(inv) = &item.kind {
             match self.expand_macro_invocation(inv) {
-                Ok(stream) => match parse_items_from_token_stream(&stream, self.interner) {
-                    Ok(items) => return (items, true),
+                Ok(stream) => match parse_items_from_token_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                ) {
+                    Ok(items) => {
+                        let mut expanded = vec![];
+                        let mut changed = false;
+                        for it in items {
+                            let (es, c) = self.expand_item_deep(it);
+                            expanded.extend(es);
+                            changed |= c;
+                        }
+                        self.after_expand();
+                        return (expanded, true || changed);
+                    }
                     Err(reason) => {
-                        self.errors.push(ExpandError::MalformedMacroArgs {
-                            reason: format!(
-                                "macro expansion did not produce valid items: {}",
-                                reason
-                            ),
-                            span: inv.span,
-                        });
+                        self.after_expand();
+                        self.errors.push(
+                            ExpandError::malformed_macro_args(
+                                format!("macro expansion did not produce valid items: {}", reason),
+                                inv.span,
+                            )
+                            .with_backtrace(self.backtrace()),
+                        );
                     }
                 },
                 Err(e) => self.errors.push(e),
@@ -416,19 +508,28 @@ impl<'a> MacroExpander<'a> {
         match &ty.kind {
             TypeKind::MacroInvocation(inv) => {
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_type_from_token_stream(&stream, self.interner) {
+                    Ok(stream) => match parse_type_from_token_stream(
+                        &stream,
+                        self.interner,
+                        &self.eager_context(),
+                    ) {
                         Ok(expanded) => {
                             let (recursed, recursed_changed) = self.expand_type(&expanded);
+                            self.after_expand();
                             return (recursed, true || recursed_changed);
                         }
                         Err(reason) => {
-                            self.errors.push(ExpandError::MalformedMacroArgs {
-                                reason: format!(
-                                    "macro expansion did not produce a valid type: {}",
-                                    reason
-                                ),
-                                span: inv.span,
-                            });
+                            self.errors.push(
+                                ExpandError::malformed_macro_args(
+                                    format!(
+                                        "macro expansion did not produce a valid type: {}",
+                                        reason
+                                    ),
+                                    inv.span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            self.after_expand();
                         }
                     },
                     Err(e) => self.errors.push(e),
@@ -729,19 +830,28 @@ impl<'a> MacroExpander<'a> {
         match &pat.pattern {
             PatternKind::MacroInvocation(inv) => {
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_pattern_from_token_stream(&stream, self.interner) {
+                    Ok(stream) => match parse_pattern_from_token_stream(
+                        &stream,
+                        self.interner,
+                        &self.eager_context(),
+                    ) {
                         Ok(expanded) => {
                             let (recursed, recursed_changed) = self.expand_pattern(&expanded);
+                            self.after_expand();
                             return (recursed, true || recursed_changed);
                         }
                         Err(reason) => {
-                            self.errors.push(ExpandError::MalformedMacroArgs {
-                                reason: format!(
-                                    "macro expansion did not produce a valid pattern: {}",
-                                    reason
-                                ),
-                                span: inv.span,
-                            });
+                            self.errors.push(
+                                ExpandError::malformed_macro_args(
+                                    format!(
+                                        "macro expansion did not produce a valid pattern: {}",
+                                        reason
+                                    ),
+                                    inv.span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            self.after_expand();
                         }
                     },
                     Err(e) => self.errors.push(e),
@@ -928,17 +1038,22 @@ impl<'a> MacroExpander<'a> {
                 // Built-in macros expand to expressions; place them back into
                 // statement position as a discarded expression statement.
                 if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
+                    let (recursed, recursed_changed) = self.expand_expr(&expanded);
                     return (
                         vec![Stmt {
-                            kind: StmtKind::TermExpr(Box::new(expanded)),
+                            kind: StmtKind::TermExpr(Box::new(recursed)),
                             span: stmt.span,
                         }],
-                        true,
+                        true || recursed_changed,
                     );
                 }
 
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_stmts_from_token_stream(&stream, self.interner) {
+                    Ok(stream) => match parse_stmts_from_token_stream(
+                        &stream,
+                        self.interner,
+                        &self.eager_context(),
+                    ) {
                         Ok(stmts) => {
                             let mut expanded = vec![];
                             let mut changed = false;
@@ -947,16 +1062,21 @@ impl<'a> MacroExpander<'a> {
                                 expanded.extend(es);
                                 changed |= c;
                             }
+                            self.after_expand();
                             return (expanded, true || changed);
                         }
                         Err(reason) => {
-                            self.errors.push(ExpandError::MalformedMacroArgs {
-                                reason: format!(
-                                    "macro expansion did not produce valid statements: {}",
-                                    reason
-                                ),
-                                span: inv.span,
-                            });
+                            self.errors.push(
+                                ExpandError::malformed_macro_args(
+                                    format!(
+                                        "macro expansion did not produce valid statements: {}",
+                                        reason
+                                    ),
+                                    inv.span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            self.after_expand();
                         }
                     },
                     Err(e) => self.errors.push(e),
@@ -1018,11 +1138,14 @@ impl<'a> MacroExpander<'a> {
                             // Decorators that generate side-items are not supported
                             // inside statement position.  Emit an error and keep only
                             // the primary item.
-                            self.errors.push(ExpandError::DecoratorError {
-                                reason: "decorator produced multiple items in statement position"
-                                    .to_string(),
-                                span: stmt.span,
-                            });
+                            self.errors.push(
+                                ExpandError::decorator_error(
+                                    "decorator produced multiple items in statement position"
+                                        .to_string(),
+                                    stmt.span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
                         }
                         let primary = expanded.into_iter().next().unwrap_or_else(|| *item.clone());
                         (
@@ -1049,19 +1172,32 @@ impl<'a> MacroExpander<'a> {
         match &expr.kind {
             ExprKind::MacroInvocation(inv) => {
                 if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
-                    return (expanded, true);
+                    let (recursed, recursed_changed) = self.expand_expr(&expanded);
+                    return (recursed, true || recursed_changed);
                 }
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_expr_from_token_stream(&stream, self.interner) {
-                        Ok(expanded) => return (expanded, true),
+                    Ok(stream) => match parse_expr_from_token_stream(
+                        &stream,
+                        self.interner,
+                        &self.eager_context(),
+                    ) {
+                        Ok(expanded) => {
+                            let (recursed, recursed_changed) = self.expand_expr(&expanded);
+                            self.after_expand();
+                            return (recursed, true || recursed_changed);
+                        }
                         Err(reason) => {
-                            self.errors.push(ExpandError::MalformedMacroArgs {
-                                reason: format!(
-                                    "macro expansion did not produce a valid expression: {}",
-                                    reason
-                                ),
-                                span: inv.span,
-                            });
+                            self.errors.push(
+                                ExpandError::malformed_macro_args(
+                                    format!(
+                                        "macro expansion did not produce a valid expression: {}",
+                                        reason
+                                    ),
+                                    inv.span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            self.after_expand();
                         }
                     },
                     Err(e) => self.errors.push(e),
@@ -1748,9 +1884,9 @@ impl<'a> MacroExpander<'a> {
         let attr_args_stream = attribute_args_to_token_stream(&attr.args, self.interner)?;
         let item_stream = item_to_token_stream(item, self.interner)?;
 
-        if !self.before_expand(&name_str, span) {
+        let Some(def_id) = self.before_expand(&name_str, span) else {
             return Some(vec![item.clone()]);
-        }
+        };
 
         let mut matches = Vec::new();
         for rule in rules {
@@ -1769,26 +1905,29 @@ impl<'a> MacroExpander<'a> {
 
         let (rule, bindings) = match matches.len() {
             0 => {
-                self.errors.push(ExpandError::MacroMatchError {
-                    name: name_str.clone(),
-                    reason: "no attribute rule matched the invocation".to_string(),
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::macro_match_error(
+                        name_str.clone(),
+                        "no attribute rule matched the invocation".to_string(),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
                 self.after_expand();
                 return Some(vec![item.clone()]);
             }
             1 => (&matches[0].0, &matches[0].1),
             _ => {
-                self.errors.push(ExpandError::AmbiguousMacro {
-                    name: name_str.clone(),
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::ambiguous_macro(name_str.clone(), span)
+                        .with_backtrace(self.backtrace()),
+                );
                 self.after_expand();
                 return Some(vec![item.clone()]);
             }
         };
 
-        let expanded_stream = match self.transcribe_rule(rule, bindings, &name_str, span) {
+        let expanded_stream = match self.transcribe_rule(rule, bindings, &name_str, span, def_id) {
             Some(stream) => stream,
             None => {
                 self.after_expand();
@@ -1797,16 +1936,20 @@ impl<'a> MacroExpander<'a> {
         };
 
         self.after_expand();
-        match parse_items_from_token_stream(&expanded_stream, self.interner) {
+        match parse_items_from_token_stream(&expanded_stream, self.interner, &self.eager_context())
+        {
             Ok(items) => Some(items),
             Err(reason) => {
-                self.errors.push(ExpandError::MalformedMacroArgs {
-                    reason: format!(
-                        "attribute macro `{}` expansion did not produce valid items: {}",
-                        name_str, reason
-                    ),
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::malformed_macro_args(
+                        format!(
+                            "attribute macro `{}` expansion did not produce valid items: {}",
+                            name_str, reason
+                        ),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
                 Some(vec![item.clone()])
             }
         }
@@ -1834,10 +1977,13 @@ impl<'a> MacroExpander<'a> {
             ) {
                 Some(impl_item) => result.push(impl_item),
                 None => {
-                    self.errors.push(ExpandError::DecoratorError {
-                        reason: format!("@derive does not support trait `{}`", trait_name),
-                        span,
-                    });
+                    self.errors.push(
+                        ExpandError::decorator_error(
+                            format!("@derive does not support trait `{}`", trait_name),
+                            span,
+                        )
+                        .with_backtrace(self.backtrace()),
+                    );
                 }
             }
         }
@@ -1864,9 +2010,9 @@ impl<'a> MacroExpander<'a> {
 
         let item_stream = item_to_token_stream(item, self.interner)?;
 
-        if !self.before_expand(trait_name, span) {
+        let Some(def_id) = self.before_expand(trait_name, span) else {
             return Some(vec![]);
-        }
+        };
 
         let mut matches = Vec::new();
         for rule in rules {
@@ -1885,26 +2031,29 @@ impl<'a> MacroExpander<'a> {
 
         let (rule, bindings) = match matches.len() {
             0 => {
-                self.errors.push(ExpandError::MacroMatchError {
-                    name: trait_name.to_string(),
-                    reason: "no derive rule matched the item".to_string(),
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::macro_match_error(
+                        trait_name.to_string(),
+                        "no derive rule matched the item".to_string(),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
                 self.after_expand();
                 return Some(vec![]);
             }
             1 => (&matches[0].0, &matches[0].1),
             _ => {
-                self.errors.push(ExpandError::AmbiguousMacro {
-                    name: trait_name.to_string(),
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::ambiguous_macro(trait_name.to_string(), span)
+                        .with_backtrace(self.backtrace()),
+                );
                 self.after_expand();
                 return Some(vec![]);
             }
         };
 
-        let expanded_stream = match self.transcribe_rule(rule, bindings, trait_name, span) {
+        let expanded_stream = match self.transcribe_rule(rule, bindings, trait_name, span, def_id) {
             Some(stream) => stream,
             None => {
                 self.after_expand();
@@ -1913,38 +2062,74 @@ impl<'a> MacroExpander<'a> {
         };
 
         self.after_expand();
-        match parse_items_from_token_stream(&expanded_stream, self.interner) {
+        match parse_items_from_token_stream(&expanded_stream, self.interner, &self.eager_context())
+        {
             Ok(items) => Some(items),
             Err(reason) => {
-                self.errors.push(ExpandError::MalformedMacroArgs {
-                    reason: format!(
-                        "derive macro `{}` expansion did not produce valid items: {}",
-                        trait_name, reason
-                    ),
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::malformed_macro_args(
+                        format!(
+                            "derive macro `{}` expansion did not produce valid items: {}",
+                            trait_name, reason
+                        ),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
                 Some(vec![])
             }
         }
     }
 
     /// Book-keeping before expanding a macro.
-    fn before_expand(&mut self, name: &str, span: yelang_lexer::Span) -> bool {
+    ///
+    /// Returns the `MacroDefId` of the macro being expanded, or `None` if the
+    /// macro is unknown or a cycle was detected.
+    fn before_expand(&mut self, name: &str, span: yelang_lexer::Span) -> Option<MacroDefId> {
         self.expansion_count += 1;
         if self.expansion_count > MAX_EXPANSIONS {
-            self.errors.push(ExpandError::ExpansionLoop {
-                path: name.to_string(),
-                span,
-            });
-            return false;
+            self.errors.push(
+                ExpandError::expansion_loop(name.to_string(), span)
+                    .with_backtrace(self.backtrace()),
+            );
+            return None;
         }
-        self.expansion_stack.push((name.to_string(), span));
-        true
+
+        let mac = self.resolver.resolve(name)?;
+        let def_id = mac.def_id;
+
+        // Indirect recursion detection: if this macro is already on the stack,
+        // we have a cycle (a → b → a).
+        if self.expansion_stack.iter().any(|f| f.def_id == def_id) {
+            self.errors.push(
+                ExpandError::expansion_loop(name.to_string(), span)
+                    .with_backtrace(self.backtrace()),
+            );
+            return None;
+        }
+
+        self.expansion_stack.push(ExpansionFrame {
+            name: name.to_string(),
+            span,
+            def_id,
+        });
+        Some(def_id)
     }
 
     /// Book-keeping after expanding a macro.
     fn after_expand(&mut self) {
         self.expansion_stack.pop();
+    }
+
+    /// Snapshot of the current expansion stack for diagnostic backtraces.
+    fn backtrace(&self) -> Vec<crate::error::BacktraceFrame> {
+        self.expansion_stack
+            .iter()
+            .map(|f| crate::error::BacktraceFrame {
+                name: f.name.clone(),
+                span: f.span,
+            })
+            .collect()
     }
 
     /// Transcribe a matched rule, applying hygiene.
@@ -1954,6 +2139,7 @@ impl<'a> MacroExpander<'a> {
         bindings: &crate::matcher::bindings::Bindings,
         name: &str,
         span: yelang_lexer::Span,
+        def_id: MacroDefId,
     ) -> Option<TokenStream> {
         let expn_id = self.hygiene.fresh_expn(ExpnData {
             parent: self.hygiene.root_expn(),
@@ -1968,14 +2154,25 @@ impl<'a> MacroExpander<'a> {
             Transparency::Opaque,
         );
 
-        match transcribe(&rule.transcriber, bindings, self.interner, generated_ctx) {
+        let defining_crate = self
+            .resolver
+            .macro_def_data(def_id)
+            .map(|d| d.defining_crate)
+            .unwrap_or_else(|| CrateId::new(1));
+
+        match transcribe(
+            &rule.transcriber,
+            bindings,
+            self.interner,
+            generated_ctx,
+            defining_crate,
+        ) {
             Ok(stream) => Some(stream),
             Err(reason) => {
-                self.errors.push(ExpandError::MacroTranscribeError {
-                    name: name.to_string(),
-                    reason,
-                    span,
-                });
+                self.errors.push(
+                    ExpandError::macro_transcribe_error(name.to_string(), reason, span)
+                        .with_backtrace(self.backtrace()),
+                );
                 None
             }
         }
@@ -1993,14 +2190,24 @@ impl<'a> MacroExpander<'a> {
             .unwrap_or_else(|| "(qualified)".to_string());
         let span = inv.span;
 
+        // Eager built-in macros expand before ordinary macro resolution.
+        if let Some(builtin) = EagerBuiltin::from_name(&name) {
+            let ctx = self.eager_context();
+            let expanded_args = expand_eager_macros_in_stream(&inv.args, &ctx)?;
+            // Macro invocation arguments are stored wrapped in their delimiter
+            // group; eager builtins expect the contents of that group.
+            let expanded_args = unwrap_macro_args(&expanded_args);
+            return expand_eager_builtin_to_stream(builtin, &expanded_args, &ctx, span);
+        }
+
         let Some(mac) = self.resolver.resolve(&name) else {
-            return Err(ExpandError::UnknownMacro { path: name, span });
+            return Err(ExpandError::unknown_macro(name, span).with_backtrace(self.backtrace()));
         };
         let mac = mac.clone();
 
-        if !self.before_expand(&name, span) {
-            return Err(ExpandError::ExpansionLoop { path: name, span });
-        }
+        let Some(def_id) = self.before_expand(&name, span) else {
+            return Err(ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace()));
+        };
 
         // The invocation's `args` field preserves the delimiter group from the
         // source (`id!(...)`).  Macro rules are written to match the tokens
@@ -2020,45 +2227,41 @@ impl<'a> MacroExpander<'a> {
 
         let (rule, bindings) = match matches.len() {
             0 => {
-                self.errors.push(ExpandError::MacroMatchError {
-                    name: name.clone(),
-                    reason: "no rule matched the invocation".to_string(),
+                let err = ExpandError::macro_match_error(
+                    name.clone(),
+                    "no rule matched the invocation".to_string(),
                     span,
-                });
+                )
+                .with_backtrace(self.backtrace());
+                self.errors.push(err.clone());
                 self.after_expand();
-                return Err(ExpandError::MacroMatchError {
-                    name: name.clone(),
-                    reason: "no rule matched the invocation".to_string(),
-                    span,
-                });
+                return Err(err);
             }
             1 => (&matches[0].0, &matches[0].1),
             _ => {
-                self.errors.push(ExpandError::AmbiguousMacro {
-                    name: name.clone(),
-                    span,
-                });
+                let err = ExpandError::ambiguous_macro(name.clone(), span)
+                    .with_backtrace(self.backtrace());
+                self.errors.push(err.clone());
                 self.after_expand();
-                return Err(ExpandError::AmbiguousMacro {
-                    name: name.clone(),
-                    span,
-                });
+                return Err(err);
             }
         };
 
-        let expanded_stream = match self.transcribe_rule(rule, &bindings, &name, span) {
+        let expanded_stream = match self.transcribe_rule(rule, &bindings, &name, span, def_id) {
             Some(stream) => stream,
             None => {
                 self.after_expand();
-                return Err(ExpandError::MacroTranscribeError {
-                    name: name.clone(),
-                    reason: "transcription failed".to_string(),
+                return Err(ExpandError::macro_transcribe_error(
+                    name.clone(),
+                    "transcription failed".to_string(),
                     span,
-                });
+                )
+                .with_backtrace(self.backtrace()));
             }
         };
 
-        self.after_expand();
+        // The stack frame stays active so that recursive expansion of the
+        // output can detect expansion cycles (a → b → a).
         Ok(expanded_stream)
     }
 }
@@ -2067,10 +2270,22 @@ fn item_differs(expanded: &[Item], original: &Item) -> bool {
     expanded.len() != 1 || expanded[0] != *original
 }
 
+/// Execute an eager built-in macro and return its output as a token stream.
+fn expand_eager_builtin_to_stream(
+    builtin: EagerBuiltin,
+    args: &yelang_macro_core::token_tree::TokenStream,
+    ctx: &EagerContext<'_>,
+    span: yelang_lexer::Span,
+) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+    crate::eager::expand_eager_builtin(builtin, args, ctx, span)
+}
+
 fn parse_expr_from_token_stream(
     stream: &yelang_macro_core::token_tree::TokenStream,
     interner: &Interner,
+    ctx: &EagerContext<'_>,
 ) -> Result<Expr, String> {
+    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
     let mut local_interner = interner.clone();
     let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
@@ -2091,7 +2306,9 @@ fn parse_expr_from_token_stream(
 fn parse_items_from_token_stream(
     stream: &yelang_macro_core::token_tree::TokenStream,
     interner: &Interner,
+    ctx: &EagerContext<'_>,
 ) -> Result<Vec<Item>, String> {
+    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
     let mut local_interner = interner.clone();
     let mut lex = TokenKind::tokenize(&rendered, &mut local_interner)
@@ -2108,7 +2325,9 @@ fn parse_items_from_token_stream(
 fn parse_stmts_from_token_stream(
     stream: &yelang_macro_core::token_tree::TokenStream,
     interner: &Interner,
+    ctx: &EagerContext<'_>,
 ) -> Result<Vec<Stmt>, String> {
+    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
     let mut local_interner = interner.clone();
     let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
@@ -2126,7 +2345,9 @@ fn parse_stmts_from_token_stream(
 fn parse_type_from_token_stream(
     stream: &yelang_macro_core::token_tree::TokenStream,
     interner: &Interner,
+    ctx: &EagerContext<'_>,
 ) -> Result<Type, String> {
+    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
     let mut local_interner = interner.clone();
     let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
@@ -2143,7 +2364,9 @@ fn parse_type_from_token_stream(
 fn parse_pattern_from_token_stream(
     stream: &yelang_macro_core::token_tree::TokenStream,
     interner: &Interner,
+    ctx: &EagerContext<'_>,
 ) -> Result<Pattern, String> {
+    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
     let mut local_interner = interner.clone();
     let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
