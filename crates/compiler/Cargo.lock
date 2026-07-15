@@ -905,9 +905,11 @@ version = "0.1.0"
 dependencies = [
  "rstest",
  "rustc-hash",
+ "yelang-ast",
  "yelang-hir",
  "yelang-infer",
  "yelang-interner",
+ "yelang-lexer",
  "yelang-resolve",
  "yelang-trait-solver",
  "yelang-ty",

@@ -29,6 +29,7 @@ impl<'tcx> TypeSuperVisitable<'tcx> for Ty<'tcx> {
         match self.kind() {
             TyKind::Bool
             | TyKind::Char
+            | TyKind::Str
             | TyKind::Int(_)
             | TyKind::Uint(_)
             | TyKind::Float(_)

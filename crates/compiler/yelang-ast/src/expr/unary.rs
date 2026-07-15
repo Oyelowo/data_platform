@@ -11,10 +11,16 @@ use super::{Associativity, Expr, Precedence, PrecedenceExt};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum UnaryOp {
-    /// !flag
-    Bang,
-    /// Unary minus (alias for Negate)
-    Minus,
+    /// !expr
+    Not,
+    /// -expr
+    Neg,
+    /// *expr
+    Deref,
+    /// &expr
+    Ref,
+    /// &mut expr
+    RefMut,
 }
 
 impl PrecedenceExt for UnaryOp {
@@ -33,8 +39,10 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for UnaryOp {
     ) -> yelang_lexer::TokenResult<Self> {
         match_map!(
             stream,
-            T![!] => |_| Self::Bang,
-            T![-] => |_| Self::Minus,
+            T![!] => |_| Self::Not,
+            T![-] => |_| Self::Neg,
+            T![*] => |_| Self::Deref,
+            T![&] => |_| Self::Ref,
         )
     }
 }

@@ -79,7 +79,7 @@ pub fn expand_assert(inv: &MacroInvocation, interner: &Interner) -> Expr {
     // Build: `if !cond { panic!(msg) }`
     let negated_cond = Expr {
         kind: ExprKind::Unary(UnaryExpr {
-            op: yelang_ast::UnaryOp::Bang,
+            op: yelang_ast::UnaryOp::Not,
             expr: Box::new(cond),
         }),
         span,

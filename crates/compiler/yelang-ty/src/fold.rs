@@ -43,6 +43,7 @@ impl<'tcx> TypeSuperFoldable<'tcx> for Ty<'tcx> {
         let _kind = match *self.kind() {
             TyKind::Bool => TyKind::Bool,
             TyKind::Char => TyKind::Char,
+            TyKind::Str => TyKind::Str,
             TyKind::Int(it) => TyKind::Int(it),
             TyKind::Uint(ut) => TyKind::Uint(ut),
             TyKind::Float(ft) => TyKind::Float(ft),

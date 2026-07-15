@@ -22,8 +22,11 @@ impl Codegen for Literal {
 impl Codegen for UnaryExpr {
     fn codegen(&self, f: &mut dyn Write, interner: &Interner) -> fmt::Result {
         match self.op {
-            UnaryOp::Bang => write!(f, "!")?,
-            UnaryOp::Minus => write!(f, "-")?,
+            UnaryOp::Not => write!(f, "!")?,
+            UnaryOp::Neg => write!(f, "-")?,
+            UnaryOp::Deref => write!(f, "*")?,
+            UnaryOp::Ref => write!(f, "&")?,
+            UnaryOp::RefMut => write!(f, "&mut ")?,
         }
         self.expr.codegen(f, interner)
     }

@@ -16,6 +16,8 @@ yelang-hir = { path = "../yelang-hir" }
 yelang-resolve = { path = "../yelang-resolve" }
 yelang-util = { path = "../yelang-util" }
 yelang-interner = { path = "../yelang-interner" }
+yelang-ast = { path = "../yelang-ast" }
+yelang-lexer = { path = "../yelang-lexer" }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]

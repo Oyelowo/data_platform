@@ -55,6 +55,7 @@ impl<'tcx> Ty<'tcx> {
             self.ptr,
             TyKind::Bool
                 | TyKind::Char
+                | TyKind::Str
                 | TyKind::Int(_)
                 | TyKind::Uint(_)
                 | TyKind::Float(_)
@@ -111,6 +112,8 @@ pub enum TyKind<'tcx> {
     Bool,
     /// `char`
     Char,
+    /// `str` (string slice).
+    Str,
     /// `i8`, `i16`, `i32`, `i64`, `i128`, `isize`
     Int(IntTy),
     /// `u8`, `u16`, `u32`, `u64`, `u128`, `usize`
@@ -395,6 +398,7 @@ impl<'tcx> fmt::Debug for TyKind<'tcx> {
         match self {
             TyKind::Bool => write!(f, "bool"),
             TyKind::Char => write!(f, "char"),
+            TyKind::Str => write!(f, "str"),
             TyKind::Int(it) => write!(f, "{}", it.name_str()),
             TyKind::Uint(ut) => write!(f, "{}", ut.name_str()),
             TyKind::Float(ft) => write!(f, "{}", ft.name_str()),

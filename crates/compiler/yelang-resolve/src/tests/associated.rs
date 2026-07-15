@@ -119,6 +119,7 @@ fn multiple_inherent_impls_same_name() {
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
+    // FIX: This should be a duplicate error:
     // For now, just verify it resolves without crashing
     // (full ambiguity checking is future work)
 }
@@ -141,6 +142,7 @@ fn cross_module_inherent_assoc_fn() {
 
 #[test]
 fn primitive_impl_assoc_fn() {
+    // FIXME: Shouldnt this be an error and should be using an extension trait instead?
     let src = r#"
         impl i32 {
             fn foo() {}
@@ -175,6 +177,7 @@ fn qualified_inherent_type() {
         }
         fn main() { let x: <Foo>::MyType = 1; }
     "#;
+    // FIXME: shouldn't `<Foo>::MyType` be ambiguous since no trait specified?
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
     assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
@@ -395,6 +398,7 @@ fn cross_module_trait_impl() {
     // Both modules must be pub for cross-module visibility.
     // Trait impl items need explicit pub for external access (until implicit
     // trait-impl visibility is implemented).
+    // TODO:
     let src = r#"
         pub mod a {
             pub trait Show {

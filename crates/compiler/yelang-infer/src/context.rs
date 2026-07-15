@@ -5,6 +5,7 @@
  */
 
 use yelang_ty::generic::GenericArg;
+use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{
@@ -34,13 +35,55 @@ impl<'tcx> InferCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     /// Create a new general type variable.
-    pub fn new_ty_var(&mut self) -> Ty<'tcx> {
-        let _vid = self.tables.ty_vars.new_var(TypeVarValue::Unknown);
-        // We need an Interner to construct TyKind::Infer. This is a design
-        // issue: InferCtxt doesn't currently have an Interner.
-        // FIXME: Integrate with Interner or TyCtxt.
-        // For now, we can't construct a Ty without an Interner.
-        panic!("InferCtxt needs an Interner to construct inference variable types")
+    pub fn new_ty_var(&mut self, interner: &Interner<'tcx>) -> Ty<'tcx> {
+        let vid = self.tables.ty_vars.new_var(TypeVarValue::Unknown);
+        interner.mk_ty(TyKind::Infer(InferTy::TyVar(vid)))
+    }
+
+    /// Create a new integral type variable.
+    pub fn new_int_var(&mut self, interner: &Interner<'tcx>) -> Ty<'tcx> {
+        let vid = self.tables.int_vars.new_var(IntVarValue::Unknown);
+        interner.mk_ty(TyKind::Infer(InferTy::IntVar(vid)))
+    }
+
+    /// Create a new floating-point type variable.
+    pub fn new_float_var(&mut self, interner: &Interner<'tcx>) -> Ty<'tcx> {
+        let vid = self.tables.float_vars.new_var(FloatVarValue::Unknown);
+        interner.mk_ty(TyKind::Infer(InferTy::FloatVar(vid)))
+    }
+
+    // -----------------------------------------------------------------------
+    // Variable resolution
+    // -----------------------------------------------------------------------
+
+    /// Find the root of a general type variable.
+    pub fn find_ty_var(&mut self, vid: TyVid) -> TyVid {
+        self.tables.ty_vars.find(vid)
+    }
+
+    /// Probe the value of a general type variable (with path compression).
+    pub fn probe_ty_var(&mut self, vid: TyVid) -> &TypeVarValue<'tcx> {
+        self.tables.ty_vars.probe_value(vid)
+    }
+
+    /// Find the root of an integral type variable.
+    pub fn find_int_var(&mut self, vid: IntVid) -> IntVid {
+        self.tables.int_vars.find(vid)
+    }
+
+    /// Probe the value of an integral type variable.
+    pub fn probe_int_var(&mut self, vid: IntVid) -> &IntVarValue {
+        self.tables.int_vars.probe_value(vid)
+    }
+
+    /// Find the root of a floating-point type variable.
+    pub fn find_float_var(&mut self, vid: FloatVid) -> FloatVid {
+        self.tables.float_vars.find(vid)
+    }
+
+    /// Probe the value of a floating-point type variable.
+    pub fn probe_float_var(&mut self, vid: FloatVid) -> &FloatVarValue {
+        self.tables.float_vars.probe_value(vid)
     }
 
     // -----------------------------------------------------------------------

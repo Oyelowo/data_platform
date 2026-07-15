@@ -14,6 +14,7 @@ pub fn is_sized(ty_kind: &TyKind<'_>) -> bool {
         | TyKind::Int(_)
         | TyKind::Uint(_)
         | TyKind::Float(_)
+        | TyKind::Str
         | TyKind::Param(_)
         | TyKind::Infer(_)
         | TyKind::FnPtr(_)
