@@ -397,8 +397,8 @@ impl<'a> MacroExpander<'a> {
         let mut changed = false;
 
         for stmt in &block.statements {
-            let (new_stmt, stmt_changed) = self.expand_stmt(stmt);
-            new_stmts.push(new_stmt);
+            let (mut stmts, stmt_changed) = self.expand_stmt(stmt);
+            new_stmts.append(&mut stmts);
             changed |= stmt_changed;
         }
 
@@ -919,25 +919,67 @@ impl<'a> MacroExpander<'a> {
     }
 
     /// Expand all macros in a statement.
-    fn expand_stmt(&mut self, stmt: &Stmt) -> (Stmt, bool) {
+    ///
+    /// Returns a vector because a statement-position macro invocation may expand
+    /// to zero, one, or many statements.
+    fn expand_stmt(&mut self, stmt: &Stmt) -> (Vec<Stmt>, bool) {
         match &stmt.kind {
+            StmtKind::MacroInvocation(inv) => {
+                // Built-in macros expand to expressions; place them back into
+                // statement position as a discarded expression statement.
+                if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
+                    return (
+                        vec![Stmt {
+                            kind: StmtKind::TermExpr(Box::new(expanded)),
+                            span: stmt.span,
+                        }],
+                        true,
+                    );
+                }
+
+                match self.expand_macro_invocation(inv) {
+                    Ok(stream) => match parse_stmts_from_token_stream(&stream, self.interner) {
+                        Ok(stmts) => {
+                            let mut expanded = vec![];
+                            let mut changed = false;
+                            for s in stmts {
+                                let (es, c) = self.expand_stmt(&s);
+                                expanded.extend(es);
+                                changed |= c;
+                            }
+                            return (expanded, true || changed);
+                        }
+                        Err(reason) => {
+                            self.errors.push(ExpandError::MalformedMacroArgs {
+                                reason: format!(
+                                    "macro expansion did not produce valid statements: {}",
+                                    reason
+                                ),
+                                span: inv.span,
+                            });
+                        }
+                    },
+                    Err(e) => self.errors.push(e),
+                }
+                (vec![stmt.clone()], false)
+            }
             StmtKind::Expr(expr) => {
                 let (new_expr, changed) = self.expand_expr(expr);
                 (
-                    Stmt {
+                    vec![Stmt {
                         kind: StmtKind::Expr(Box::new(new_expr)),
                         span: stmt.span,
-                    },
+                    }],
                     changed,
                 )
             }
             StmtKind::TermExpr(expr) => {
                 let (new_expr, changed) = self.expand_expr(expr);
                 (
-                    Stmt {
+                    vec![Stmt {
                         kind: StmtKind::TermExpr(Box::new(new_expr)),
                         span: stmt.span,
-                    },
+                    }],
                     changed,
                 )
             }
@@ -956,7 +998,7 @@ impl<'a> MacroExpander<'a> {
                     (None, false)
                 };
                 (
-                    Stmt {
+                    vec![Stmt {
                         kind: StmtKind::Let(Box::new(yelang_ast::LetStmt {
                             pattern: Box::new(new_pattern),
                             ty: new_ty.map(Box::new),
@@ -965,7 +1007,7 @@ impl<'a> MacroExpander<'a> {
                             attrs: let_stmt.attrs.clone(),
                         })),
                         span: stmt.span,
-                    },
+                    }],
                     pattern_changed || ty_changed || init_changed,
                 )
             }
@@ -984,20 +1026,20 @@ impl<'a> MacroExpander<'a> {
                         }
                         let primary = expanded.into_iter().next().unwrap_or_else(|| *item.clone());
                         (
-                            Stmt {
+                            vec![Stmt {
                                 kind: StmtKind::Item(Box::new(primary)),
                                 span: stmt.span,
-                            },
+                            }],
                             true,
                         )
                     }
                     Err(e) => {
                         self.errors.push(e);
-                        (stmt.clone(), false)
+                        (vec![stmt.clone()], false)
                     }
                 }
             }
-            StmtKind::Empty => (stmt.clone(), false),
+            StmtKind::Empty => (vec![stmt.clone()], false),
         }
     }
 
@@ -2060,6 +2102,24 @@ fn parse_items_from_token_stream(
     }
     let _ = local_interner;
     Ok(program.items)
+}
+
+/// Parse a token stream produced by a macro transcriber into a sequence of statements.
+fn parse_stmts_from_token_stream(
+    stream: &yelang_macro_core::token_tree::TokenStream,
+    interner: &Interner,
+) -> Result<Vec<Stmt>, String> {
+    let rendered = stream.render(interner);
+    let mut local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+        .map_err(|e| format!("tokenize: {}", e))?;
+    let mut stmts = vec![];
+    while !lex.is_eof() {
+        let stmt = lex.parse::<Stmt>().map_err(|e| e.to_string())?;
+        stmts.push(stmt);
+    }
+    let _ = local_interner;
+    Ok(stmts)
 }
 
 /// Parse a token stream produced by a macro transcriber into a single type.

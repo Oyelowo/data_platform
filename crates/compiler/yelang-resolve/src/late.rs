@@ -593,6 +593,10 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_item(item);
             }
             StmtKind::Empty => {}
+            StmtKind::MacroInvocation(_) => {
+                // Unexpanded macro invocations in statement position do not
+                // need name resolution; they are reported by the macro expander.
+            }
         }
     }
 

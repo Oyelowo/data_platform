@@ -579,6 +579,21 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                 },
             }),
         },
+        yelang_ast::StmtKind::MacroInvocation(_) => {
+            // Residual unexpanded statement macros produce no HIR. They are
+            // reported as errors by the macro expansion phase.
+            StmtKind::Expr {
+                expr: Box::new(Expr {
+                    hir_id: ctx.next_hir_id(),
+                    kind: ExprKind::Tuple { exprs: vec![] },
+                    span,
+                    ty: Ty {
+                        kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
+                        span,
+                    },
+                }),
+            }
+        }
     };
 
     Stmt { kind, span }

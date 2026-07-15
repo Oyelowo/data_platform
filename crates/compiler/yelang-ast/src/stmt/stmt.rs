@@ -69,6 +69,12 @@ pub enum StmtKind {
 
     /// Just a trailing semi-colon.
     Empty,
+
+    /// Macro invocation in statement position: `foo! { ... }`.
+    ///
+    /// Unlike `Expr(MacroInvocation(...))`, this can expand to statements,
+    /// items, or multiple statements.
+    MacroInvocation(crate::expr::MacroInvocation),
 }
 
 impl Stmt {
@@ -134,6 +140,28 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Stmt {
                 span,
             });
         }
+
+        // Statement-position macro invocation with `{}`: `foo! { ... }`.
+        // Parentheses and square brackets are always parsed as expressions
+        // (per RFC 378), so only curly braces get the statement-macro node.
+        let macro_checkpoint = stream.checkpoint();
+        if let Ok(path) = stream.parse::<Path>() {
+            if stream.peek().map(|t| t.kind()) == Some(&TokenKind::Bang) {
+                if stream
+                    .peek_ahead(1)
+                    .is_some_and(|t| matches!(t.kind(), TokenKind::OpenBrace))
+                {
+                    stream.advance(); // consume `!`
+                    let args = crate::expr::parse_macro_args(stream)?;
+                    let span = stream.span_since(checkpoint);
+                    return Ok(Stmt {
+                        kind: StmtKind::MacroInvocation(MacroInvocation { path, args, span }),
+                        span,
+                    });
+                }
+            }
+        }
+        stream.restore(macro_checkpoint);
 
         // Parse as expression (queries are expressions, so they'll be parsed here)
         let expr = stream.parse::<Expr>()?;

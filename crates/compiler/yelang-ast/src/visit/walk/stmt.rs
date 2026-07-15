@@ -15,6 +15,10 @@ pub fn walk_stmt<V: Visitor>(v: &mut V, stmt: &Stmt) -> ControlFlow<()> {
         StmtKind::Let(l) => v.visit_let_stmt(l),
         StmtKind::Item(i) => v.visit_item(i),
         StmtKind::Empty => ControlFlow::Continue(()),
+        StmtKind::MacroInvocation(i) => v.visit_expr(&crate::Expr {
+            kind: crate::expr::ExprKind::MacroInvocation(i.clone()),
+            span: i.span,
+        }),
     }
 }
 
