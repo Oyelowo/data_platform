@@ -25,4 +25,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
+yelang-ast = { path = "../yelang-ast" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-macro = { path = "../yelang-macro" }
 yelang-proc-macro-test-fixture = { path = "tests/fixtures/test_macro" }

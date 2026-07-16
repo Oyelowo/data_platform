@@ -8,6 +8,8 @@
 //! (mirroring how rustc reads `proc_macro_data` from crate metadata and only
 //! `dlopen`s at first expansion).
 
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -63,24 +65,41 @@ impl ProcMacroCrateManifest {
     /// Read and structurally validate a manifest.
     ///
     /// Structural validation covers everything that does not depend on the
-    /// environment: schema version, non-empty fields, non-empty macro list.
+    /// environment: schema version, non-empty fields, non-empty macro list,
+    /// and no duplicate `(name, kind)` within the manifest.
     /// Environment checks (dylib presence, fingerprint, triple, protocol) are
     /// performed by [`Self::validate_environment`].
     pub fn read(path: &Path) -> Result<Self, DiscoveryError> {
         let metadata = std::fs::metadata(path).map_err(|e| DiscoveryError::Io {
+            op: "stat manifest",
             path: path.to_path_buf(),
             message: e.to_string(),
         })?;
-        if metadata.len() > MAX_MANIFEST_BYTES {
+
+        // Read up to MAX_MANIFEST_BYTES + 1 bytes so a file that grew between
+        // the stat and the read is still bounded, rather than parsed.
+        let file = File::open(path).map_err(|e| DiscoveryError::Io {
+            op: "open manifest",
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+        let mut text = String::with_capacity(MAX_MANIFEST_BYTES.min(metadata.len()) as usize);
+        let mut limited = file.take(MAX_MANIFEST_BYTES + 1);
+        limited
+            .read_to_string(&mut text)
+            .map_err(|e| DiscoveryError::Io {
+                op: "read manifest",
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            })?;
+
+        if text.len() as u64 > MAX_MANIFEST_BYTES {
             return Err(DiscoveryError::ManifestTooLarge {
                 path: path.to_path_buf(),
-                size: metadata.len(),
+                size: text.len() as u64,
             });
         }
-        let text = std::fs::read_to_string(path).map_err(|e| DiscoveryError::Io {
-            path: path.to_path_buf(),
-            message: e.to_string(),
-        })?;
+
         let manifest: Self =
             serde_json::from_str(&text).map_err(|e| DiscoveryError::ManifestParse {
                 path: path.to_path_buf(),
@@ -91,13 +110,32 @@ impl ProcMacroCrateManifest {
     }
 
     /// Serialize as pretty JSON (build systems and tests emit manifests).
+    /// Writes atomically: temp file in the target directory, then `rename`,
+    /// so concurrent readers never see a partially written manifest.
     pub fn write(&self, path: &Path) -> Result<(), DiscoveryError> {
         let text =
             serde_json::to_string_pretty(self).map_err(|e| DiscoveryError::InvalidManifest {
                 path: path.to_path_buf(),
                 reason: format!("failed to serialize manifest: {e}"),
             })?;
-        std::fs::write(path, text).map_err(|e| DiscoveryError::Io {
+
+        let temp = path.with_extension("ypm.json.tmp");
+        let mut file = File::create(&temp).map_err(|e| DiscoveryError::Io {
+            op: "create temp manifest",
+            path: temp.clone(),
+            message: e.to_string(),
+        })?;
+        file.write_all(text.as_bytes()).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            DiscoveryError::Io {
+                op: "write temp manifest",
+                path: temp.clone(),
+                message: e.to_string(),
+            }
+        })?;
+        drop(file);
+        std::fs::rename(&temp, path).map_err(|e| DiscoveryError::Io {
+            op: "rename manifest",
             path: path.to_path_buf(),
             message: e.to_string(),
         })
@@ -132,6 +170,20 @@ impl ProcMacroCrateManifest {
                 path: path.to_path_buf(),
                 reason: "macro name must not be empty".to_string(),
             });
+        }
+        let mut seen = Vec::new();
+        for m in &self.macros {
+            if seen.iter().any(|(n, k)| n == &m.name && *k == m.kind) {
+                return Err(DiscoveryError::InvalidManifest {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "duplicate {kind:?} macro `{name}` within the same manifest",
+                        kind = m.kind,
+                        name = m.name
+                    ),
+                });
+            }
+            seen.push((m.name.clone(), m.kind));
         }
         Ok(())
     }
@@ -183,6 +235,7 @@ impl ProcMacroCrateManifest {
         }
 
         std::fs::canonicalize(&dylib_path).map_err(|e| DiscoveryError::Io {
+            op: "canonicalize dylib",
             path: dylib_path,
             message: e.to_string(),
         })
@@ -192,13 +245,32 @@ impl ProcMacroCrateManifest {
 /// Compute the `("blake3:<hex>", size)` fingerprint of a dylib. Used by build
 /// systems (and tests) when emitting manifests, and by discovery when
 /// validating them.
+///
+/// Hashes the file incrementally; for large dylibs this avoids a one-shot
+/// allocation of the whole file.
 pub fn fingerprint_dylib(path: &Path) -> Result<(String, u64), DiscoveryError> {
-    let bytes = std::fs::read(path).map_err(|e| DiscoveryError::Io {
+    let mut file = File::open(path).map_err(|e| DiscoveryError::Io {
+        op: "open dylib",
         path: path.to_path_buf(),
         message: e.to_string(),
     })?;
-    let hash = blake3::hash(&bytes);
-    Ok((format!("blake3:{hash}"), bytes.len() as u64))
+    let mut hasher = blake3::Hasher::new();
+    let mut size = 0u64;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| DiscoveryError::Io {
+            op: "read dylib",
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })?;
+        if n == 0 {
+            break;
+        }
+        size += n as u64;
+        hasher.update(&buf[..n]);
+    }
+    let hash = hasher.finalize();
+    Ok((format!("blake3:{hash}"), size))
 }
 
 /// The sidecar manifest path probed for a dylib:
@@ -332,6 +404,22 @@ mod tests {
     }
 
     #[test]
+    fn manifest_rejects_intra_manifest_duplicate() {
+        let dir = temp_dir("dup");
+        let path = dir.join("dup.ypm.json");
+        let mut manifest = sample_manifest();
+        manifest.macros.push(ManifestMacro {
+            name: "make_answer".to_string(),
+            kind: ProcMacroKind::FunctionLike,
+        });
+        manifest.write(&path).unwrap();
+        assert!(matches!(
+            ProcMacroCrateManifest::read(&path),
+            Err(DiscoveryError::InvalidManifest { .. })
+        ));
+    }
+
+    #[test]
     fn manifest_rejects_too_large() {
         let dir = temp_dir("too-large");
         let path = dir.join("big.ypm.json");
@@ -461,7 +549,10 @@ mod tests {
         let read = ProcMacroCrateManifest::read(&manifest_path).unwrap();
         assert!(matches!(
             read.validate_environment(&manifest_path),
-            Err(DiscoveryError::Io { .. })
+            Err(DiscoveryError::Io {
+                op: "open dylib",
+                ..
+            })
         ));
     }
 }

@@ -1976,8 +1976,8 @@ impl<'a> MacroExpander<'a> {
         }
     }
 
-    /// True if `attr` names a user-defined attribute macro (declarative or
-    /// in-process procedural).
+    /// True if `attr` names a user-defined attribute macro (declarative,
+    /// in-process procedural, or out-of-process procedural).
     fn is_user_attribute_macro(&self, attr: &Attribute) -> bool {
         let Some(name) = attr.path.first() else {
             return false;
@@ -1995,6 +1995,15 @@ impl<'a> MacroExpander<'a> {
             if let Some(mac) = executor.find(name_str) {
                 return mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute;
             }
+        }
+        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
+            return runtime
+                .resolver()
+                .resolve(
+                    name_str,
+                    yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute,
+                )
+                .is_some();
         }
         false
     }

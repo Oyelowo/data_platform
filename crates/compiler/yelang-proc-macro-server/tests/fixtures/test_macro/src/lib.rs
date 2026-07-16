@@ -9,11 +9,11 @@
 //! - `answer` — derive, returns the token stream `42`.
 //! - `generate_const` — derive, returns a valid `const` item.
 //! - `emit_warning` — function-like, returns the input and emits a warning diagnostic.
-//! - `panic` — function-like, panics to test server-side panic recovery.
+//! - `explode` — function-like, panics to test server-side panic recovery.
 
 use yelang_proc_macro::{
     Diagnostic, Ident, Level, Literal, Punct, Spacing, Span, TokenStream, TokenTree,
-    bridge::{from_wire, result_into_wire},
+    bridge::{from_wire, result_into_wire, run_fn_like_macro},
 };
 use yelang_proc_macro_bridge::abi::{
     CURRENT_ABI_VERSION, YelangMacroDescriptor, YelangMacroInvoke, YelangProcMacroExports,
@@ -26,7 +26,7 @@ static TRACE_NAME: &[u8] = b"trace";
 static ANSWER_NAME: &[u8] = b"answer";
 static GENERATE_CONST_NAME: &[u8] = b"generate_const";
 static EMIT_WARNING_NAME: &[u8] = b"emit_warning";
-static PANIC_NAME: &[u8] = b"panic";
+static EXPLODE_NAME: &[u8] = b"explode";
 
 unsafe extern "C-unwind" fn null_fn_like(_: *const u8, _: usize, _: *mut *mut u8, _: *mut usize) {
     unreachable!("null fn-like invoke")
@@ -99,11 +99,11 @@ static MACROS: [YelangMacroDescriptor; 6] = [
         },
     },
     YelangMacroDescriptor {
-        name: PANIC_NAME.as_ptr(),
-        name_len: PANIC_NAME.len(),
+        name: EXPLODE_NAME.as_ptr(),
+        name_len: EXPLODE_NAME.len(),
         kind: YelangProcMacroKind::FunctionLike,
         invoke: YelangMacroInvoke {
-            fn_like: panic_macro,
+            fn_like: explode_macro,
             attr: null_attr,
             derive: null_derive,
         },
@@ -228,16 +228,17 @@ unsafe extern "C-unwind" fn emit_warning(
     serialize_output(result_into_wire(input, vec![diag]), output, output_len);
 }
 
-unsafe extern "C-unwind" fn panic_macro(
+fn explode_body(_input: TokenStream) -> TokenStream {
+    panic!("intentional fixture panic");
+}
+
+unsafe extern "C-unwind" fn explode_macro(
     input: *const u8,
     input_len: usize,
     output: *mut *mut u8,
     output_len: *mut usize,
 ) {
-    let _ = deserialize_input(input, input_len);
-    let _ = output;
-    let _ = output_len;
-    panic!("intentional fixture panic");
+    run_fn_like_macro(explode_body, input, input_len, output, output_len);
 }
 
 fn deserialize_input(

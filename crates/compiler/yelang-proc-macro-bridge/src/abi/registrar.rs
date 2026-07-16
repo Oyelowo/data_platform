@@ -18,8 +18,15 @@ pub const CURRENT_ABI_VERSION: u32 = 1;
 /// `output`/`output_len` receive an allocated postcard-serialized
 /// `WireExpansionResult` that the caller must free with `YelangFreeFn`.
 ///
-/// The `C-unwind` ABI is used so that panics inside the macro are propagated
-/// safely across the dylib boundary and can be caught by the server.
+/// Function-like macro signature.
+///
+/// `input`/`input_len` is a postcard-serialized `WireTokenStream`.
+/// `output`/`output_len` receive an allocated postcard-serialized
+/// `WireExpansionResult` that the caller must free with `YelangFreeFn`.
+///
+/// The `C-unwind` ABI lets the server install a last-resort catch for any
+/// unwinding that escapes the generated dylib wrapper. The normal path is for
+/// panics to be caught inside the dylib and converted into error diagnostics.
 pub type YelangFnLikeMacro = unsafe extern "C-unwind" fn(
     input: *const u8,
     input_len: usize,

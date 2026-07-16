@@ -7,7 +7,7 @@ description.workspace = true
 
 [lib]
 name = "test_macro"
-crate-type = ["cdylib"]
+crate-type = ["dylib"]
 
 [dependencies]
 yelang-proc-macro = { path = "../../../../yelang-proc-macro" }

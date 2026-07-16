@@ -37,6 +37,9 @@ impl ProcMacroRegistry {
         Self { macros: Vec::new() }
     }
 
+    /// Register a new macro. The `library_path` is canonicalized if the file
+    /// exists, with a fallback to the raw path; callers should prefer passing
+    /// a canonical path to avoid cache-key mismatches.
     pub fn register(
         &mut self,
         name: String,
@@ -45,13 +48,16 @@ impl ProcMacroRegistry {
         library_path: String,
         crate_name: String,
     ) -> ProcMacroId {
+        let canonical_path = std::fs::canonicalize(&library_path)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or(library_path);
         let id = ProcMacroId(self.macros.len());
         self.macros.push(ProcMacroDef {
             id,
             name,
             kind,
             macro_index,
-            library_path,
+            library_path: canonical_path,
             crate_name,
         });
         id

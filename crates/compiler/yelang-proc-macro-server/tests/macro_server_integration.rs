@@ -1,33 +1,30 @@
 //! End-to-end tests for out-of-process procedural macro expansion, driven by
 //! manifest-based discovery (the same path a driver uses).
 
-mod proc_macro_fixture;
+mod macro_fixture;
 
-use proc_macro_fixture::{parse_program, server_path, write_fixture_manifest};
+use macro_fixture::{parse_program, server_path, write_fixture_manifest};
 use yelang_ast::ItemKind;
-use yelang_interner::Interner;
 use yelang_macro::MacroExpander;
 use yelang_macro::proc_macro::{
     ProcMacroClient, ProcMacroKind, ProcMacroRegistry, ProcMacroResolver, ProcMacroRuntime,
     ProcMacroSource,
 };
 
-fn runtime() -> Option<ProcMacroRuntime> {
-    let server = server_path()?;
-    let manifest = write_fixture_manifest("test_macro")?;
-
-    let client = ProcMacroClient::spawn(&server).ok()?;
+fn runtime() -> ProcMacroRuntime {
+    let manifest = write_fixture_manifest("test_macro");
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
     runtime
         .discover(&ProcMacroSource::Manifest(manifest))
         .expect("discover fixture manifest");
-    Some(runtime)
+    runtime
 }
 
 #[test]
 fn expand_fn_like_macro_through_server() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     let (program, interner) = parse_program(
         r#"
         fn main() {
@@ -49,7 +46,7 @@ fn expand_fn_like_macro_through_server() {
 
 #[test]
 fn expand_attribute_macro_through_server() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     let (program, interner) = parse_program(
         r#"
         @trace
@@ -70,7 +67,7 @@ fn expand_attribute_macro_through_server() {
 
 #[test]
 fn expand_derive_macro_through_server() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     let (program, interner) = parse_program(
         r#"
         struct Foo;
@@ -89,7 +86,7 @@ fn expand_derive_macro_through_server() {
 
 #[test]
 fn expand_derive_macro_through_server_reports_invalid_item() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     let (program, interner) = parse_program(
         r#"
         struct Foo;
@@ -113,7 +110,7 @@ fn expand_derive_macro_through_server_reports_invalid_item() {
 
 #[test]
 fn server_diagnostic_is_reported_as_expansion_error() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     let (program, interner) = parse_program(
         r#"
         fn main() {
@@ -136,11 +133,11 @@ fn server_diagnostic_is_reported_as_expansion_error() {
 
 #[test]
 fn server_panic_is_reported_as_expansion_error() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     let (program, interner) = parse_program(
         r#"
         fn main() {
-            let x = panic!();
+            let x = explode!();
         }
     "#,
     );
@@ -159,8 +156,7 @@ fn server_panic_is_reported_as_expansion_error() {
 
 #[test]
 fn missing_library_path_is_reported_as_expansion_error() {
-    let Some(server) = server_path() else { return };
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut registry = ProcMacroRegistry::new();
     registry.register(
         "missing".to_string(),
@@ -192,7 +188,7 @@ fn missing_library_path_is_reported_as_expansion_error() {
 
 #[test]
 fn runtime_caches_loaded_libraries() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
 
     let first = runtime
         .resolve("make_answer", ProcMacroKind::FunctionLike)
@@ -211,7 +207,7 @@ fn runtime_caches_loaded_libraries() {
 
 #[test]
 fn resolution_is_kind_aware() {
-    let Some(runtime) = runtime() else { return };
+    let runtime = runtime();
     // `make_answer` exists as a function-like macro; there is no derive with
     // that name.
     assert!(
@@ -225,4 +221,19 @@ fn resolution_is_kind_aware() {
             .is_none()
     );
     assert!(runtime.resolve("answer", ProcMacroKind::Derive).is_some());
+}
+
+#[test]
+fn unsafe_server_attribute_is_recognized() {
+    let runtime = runtime();
+    let (program, interner) = parse_program(
+        r#"
+        @unsafe(trace)
+        fn main() {}
+    "#,
+    );
+
+    let mut expander = MacroExpander::new(&interner).with_proc_macro_runtime(runtime);
+    let result = expander.expand(&program);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 }

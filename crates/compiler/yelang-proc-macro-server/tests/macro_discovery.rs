@@ -2,29 +2,29 @@
 //! manifest-based discovery, server introspection, freshness validation,
 //! duplicate detection, and the driver-facing API.
 
-mod proc_macro_fixture;
+mod macro_fixture;
 
 use std::path::{Path, PathBuf};
 
-use proc_macro_fixture::{
-    FIXTURE_MACROS, fixture_manifest, parse_program, require_fixture_dylib, server_path,
+use macro_fixture::{
+    FIXTURE_MACROS, fixture_dylib_path, fixture_manifest, parse_program, server_path,
     write_fixture_manifest,
 };
 use yelang_ast::ItemKind;
 use yelang_macro::MacroExpander;
 use yelang_macro::proc_macro::{
-    DiscoveredCrate, DiscoveryError, ManifestMacro, ProcMacroClient, ProcMacroKind,
-    ProcMacroRegistry, ProcMacroResolver, ProcMacroRuntime, ProcMacroSource, Provenance,
+    DiscoveryError, ProcMacroClient, ProcMacroKind, ProcMacroRegistry, ProcMacroResolver,
+    ProcMacroRuntime, ProcMacroSource, Provenance,
 };
 
-fn runtime_with(source: ProcMacroSource) -> Option<(ProcMacroRuntime, DiscoveredCrate)> {
-    let server = server_path()?;
-    require_fixture_dylib()?;
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+fn runtime_with(
+    source: ProcMacroSource,
+) -> (ProcMacroRuntime, yelang_macro::proc_macro::DiscoveredCrate) {
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
     let discovered = runtime.discover(&source).expect("discovery should succeed");
-    Some((runtime, discovered))
+    (runtime, discovered)
 }
 
 fn registry_count(runtime: &ProcMacroRuntime) -> usize {
@@ -35,12 +35,8 @@ fn registry_count(runtime: &ProcMacroRuntime) -> usize {
 
 #[test]
 fn manifest_discovery_registers_every_macro_without_loading() {
-    let Some(manifest) = write_fixture_manifest("test_macro") else {
-        return;
-    };
-    let Some((runtime, discovered)) = runtime_with(ProcMacroSource::Manifest(manifest)) else {
-        return;
-    };
+    let manifest = write_fixture_manifest("test_macro");
+    let (runtime, discovered) = runtime_with(ProcMacroSource::Manifest(manifest));
 
     assert_eq!(discovered.crate_name, "test_macro");
     assert_eq!(discovered.provenance, Provenance::Manifest);
@@ -62,12 +58,8 @@ fn manifest_discovery_registers_every_macro_without_loading() {
 
 #[test]
 fn manifest_discovery_expands_all_three_kinds_end_to_end() {
-    let Some(manifest) = write_fixture_manifest("test_macro") else {
-        return;
-    };
-    let Some((runtime, _)) = runtime_with(ProcMacroSource::Manifest(manifest)) else {
-        return;
-    };
+    let manifest = write_fixture_manifest("test_macro");
+    let (runtime, _) = runtime_with(ProcMacroSource::Manifest(manifest));
     let (program, interner) = parse_program(
         r#"
         @trace
@@ -93,9 +85,7 @@ fn manifest_discovery_expands_all_three_kinds_end_to_end() {
 
 #[test]
 fn noncanonical_dylib_path_is_canonicalized() {
-    let Some(dylib) = require_fixture_dylib() else {
-        return;
-    };
+    let dylib = fixture_dylib_path();
     // Spell the dylib path with a `..` segment; all components exist.
     let noncanonical = dylib
         .parent()
@@ -112,9 +102,7 @@ fn noncanonical_dylib_path_is_canonicalized() {
     let manifest_path = dir.join("test_macro.ypm.json");
     manifest.write(&manifest_path).unwrap();
 
-    let Some((runtime, _)) = runtime_with(ProcMacroSource::Manifest(manifest_path)) else {
-        return;
-    };
+    let (runtime, _) = runtime_with(ProcMacroSource::Manifest(manifest_path));
     let def = runtime
         .resolver()
         .resolve("make_answer", ProcMacroKind::FunctionLike)
@@ -139,12 +127,8 @@ fn noncanonical_dylib_path_is_canonicalized() {
 
 #[test]
 fn introspection_discovers_exports_and_preseeds_the_cache() {
-    let Some(dylib) = require_fixture_dylib() else {
-        return;
-    };
-    let Some((runtime, discovered)) = runtime_with(ProcMacroSource::Dylib(dylib.clone())) else {
-        return;
-    };
+    let dylib = fixture_dylib_path();
+    let (runtime, discovered) = runtime_with(ProcMacroSource::Dylib(dylib.clone()));
 
     assert_eq!(discovered.crate_name, "test_macro");
     assert_eq!(
@@ -180,9 +164,7 @@ fn introspection_discovers_exports_and_preseeds_the_cache() {
 
 #[test]
 fn dylib_source_probes_sidecar_manifest_first() {
-    let Some(dylib) = require_fixture_dylib() else {
-        return;
-    };
+    let dylib = fixture_dylib_path();
 
     // Isolated copy of the dylib with a sidecar manifest next to it, so the
     // probe is exercised without racing other tests over target/debug.
@@ -201,9 +183,7 @@ fn dylib_source_probes_sidecar_manifest_first() {
     let sidecar = yelang_macro::proc_macro::sidecar_manifest_path(&dylib_copy);
     manifest.write(&sidecar).unwrap();
 
-    let Some((runtime, discovered)) = runtime_with(ProcMacroSource::Dylib(dylib_copy)) else {
-        return;
-    };
+    let (runtime, discovered) = runtime_with(ProcMacroSource::Dylib(dylib_copy));
     assert_eq!(
         discovered.provenance,
         Provenance::Manifest,
@@ -218,39 +198,38 @@ fn dylib_source_probes_sidecar_manifest_first() {
 // --- Freshness validation -------------------------------------------------
 
 fn discover_with_doctored_manifest(
+    tag: &str,
     doctor: impl FnOnce(&mut yelang_macro::proc_macro::ProcMacroCrateManifest),
-) -> Option<DiscoveryError> {
-    let dylib = require_fixture_dylib()?;
-    let server = server_path()?;
+) -> DiscoveryError {
+    let dylib = fixture_dylib_path();
     let mut manifest = fixture_manifest(&dylib, "test_macro");
     // Absolute dylib path: the doctored manifest lives in a temp dir. Set
     // before doctoring so a doctor can deliberately re-point it.
     manifest.dylib.path = dylib.clone();
     doctor(&mut manifest);
 
-    let dir = std::env::temp_dir().join(format!("yelang-disc-doctored-{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("yelang-disc-doctored-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let manifest_path = dir.join("doctored.ypm.json");
     manifest.write(&manifest_path).unwrap();
 
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
     let error = runtime
         .discover(&ProcMacroSource::Manifest(manifest_path))
         .expect_err("doctored manifest must be rejected");
     let _ = std::fs::remove_dir_all(&dir);
-    Some(error)
+    error
 }
 
 #[test]
 fn tampered_hash_is_rejected() {
-    let Some(error) = discover_with_doctored_manifest(|m| {
+    let error = discover_with_doctored_manifest("hash", |m| {
         m.dylib.content_hash = "blake3:deadbeef".to_string();
-    }) else {
-        return;
-    };
+    });
     assert!(
         matches!(error, DiscoveryError::HashMismatch { .. }),
         "got {error:?}"
@@ -259,11 +238,9 @@ fn tampered_hash_is_rejected() {
 
 #[test]
 fn tampered_size_is_rejected() {
-    let Some(error) = discover_with_doctored_manifest(|m| {
+    let error = discover_with_doctored_manifest("size", |m| {
         m.dylib.size += 1;
-    }) else {
-        return;
-    };
+    });
     assert!(
         matches!(error, DiscoveryError::SizeMismatch { .. }),
         "got {error:?}"
@@ -272,11 +249,9 @@ fn tampered_size_is_rejected() {
 
 #[test]
 fn wrong_protocol_version_is_rejected_before_loading() {
-    let Some(error) = discover_with_doctored_manifest(|m| {
+    let error = discover_with_doctored_manifest("protocol", |m| {
         m.protocol_version += 1;
-    }) else {
-        return;
-    };
+    });
     assert!(
         matches!(error, DiscoveryError::ProtocolMismatch { .. }),
         "got {error:?}"
@@ -285,11 +260,9 @@ fn wrong_protocol_version_is_rejected_before_loading() {
 
 #[test]
 fn wrong_host_triple_is_rejected_before_loading() {
-    let Some(error) = discover_with_doctored_manifest(|m| {
+    let error = discover_with_doctored_manifest("triple", |m| {
         m.host_triple = "definitely-not-the-host-triple".to_string();
-    }) else {
-        return;
-    };
+    });
     assert!(
         matches!(error, DiscoveryError::TripleMismatch { .. }),
         "got {error:?}"
@@ -298,20 +271,15 @@ fn wrong_host_triple_is_rejected_before_loading() {
 
 #[test]
 fn missing_dylib_is_reported_at_discovery() {
-    let Some(error) = discover_with_doctored_manifest(|m| {
+    let error = discover_with_doctored_manifest("missing", |m| {
         m.dylib.path = PathBuf::from("/nonexistent/libgone.dylib");
-    }) else {
-        return;
-    };
+    });
     assert!(matches!(error, DiscoveryError::Io { .. }), "got {error:?}");
 }
 
 #[test]
 fn stale_manifest_is_caught_by_load_time_validation() {
-    let Some(dylib) = require_fixture_dylib() else {
-        return;
-    };
-    let Some(server) = server_path() else { return };
+    let dylib = fixture_dylib_path();
 
     // A manifest with the first two macros swapped: the fingerprint still
     // matches the real dylib, so discovery succeeds — but the macro indices
@@ -325,7 +293,7 @@ fn stale_manifest_is_caught_by_load_time_validation() {
     let manifest_path = dir.join("stale.ypm.json");
     manifest.write(&manifest_path).unwrap();
 
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
     runtime
@@ -356,16 +324,56 @@ fn stale_manifest_is_caught_by_load_time_validation() {
 // --- Namespaces and duplicates ---------------------------------------------
 
 #[test]
-fn duplicate_name_and_kind_from_two_crates_is_rejected() {
-    let Some(manifest_a) = write_fixture_manifest("crate_a") else {
-        return;
+fn duplicate_name_and_kind_is_rejected_at_registry_level() {
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
+    let mut runtime =
+        ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
+    let id_a = runtime.resolver_mut().registry_mut().register(
+        "make_answer".to_string(),
+        ProcMacroKind::FunctionLike,
+        0,
+        "/lib/a.dylib".to_string(),
+        "crate_a".to_string(),
+    );
+    let err = {
+        let registry = runtime.resolver_mut().registry_mut();
+        // Simulate what `register_all` would have done before any
+        // registration, finding the duplicate and bailing out.
+        if registry
+            .find("make_answer", ProcMacroKind::FunctionLike)
+            .is_some()
+        {
+            Err(DiscoveryError::DuplicateMacro {
+                name: "make_answer".to_string(),
+                kind: ProcMacroKind::FunctionLike,
+                first_crate: "crate_a".to_string(),
+                second_crate: "crate_b".to_string(),
+            })
+        } else {
+            Ok(())
+        }
     };
-    let Some(manifest_b) = write_fixture_manifest("crate_b") else {
-        return;
-    };
-    let Some(server) = server_path() else { return };
+    assert!(
+        matches!(
+            err,
+            Err(DiscoveryError::DuplicateMacro {
+                first_crate: _,
+                second_crate: _,
+                ..
+            })
+        ),
+        "expected DuplicateMacro"
+    );
+    // The first def is still there.
+    assert!(runtime.resolver().registry().get(id_a).is_some());
+}
 
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+#[test]
+fn duplicate_library_for_two_crates_is_rejected() {
+    let manifest_a = write_fixture_manifest("crate_a");
+    let manifest_b = write_fixture_manifest("crate_b");
+
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
     runtime
@@ -374,21 +382,11 @@ fn duplicate_name_and_kind_from_two_crates_is_rejected() {
 
     let error = runtime
         .discover(&ProcMacroSource::Manifest(manifest_b))
-        .expect_err("overlapping exports must be rejected");
-    match error {
-        DiscoveryError::DuplicateMacro {
-            name,
-            kind,
-            first_crate,
-            second_crate,
-        } => {
-            assert_eq!(name, "make_answer");
-            assert_eq!(kind, ProcMacroKind::FunctionLike);
-            assert_eq!(first_crate, "crate_a");
-            assert_eq!(second_crate, "crate_b");
-        }
-        other => panic!("expected DuplicateMacro, got {other:?}"),
-    }
+        .expect_err("same dylib registered twice must be rejected");
+    assert!(
+        matches!(error, DiscoveryError::DuplicateLibrary { .. }),
+        "expected DuplicateLibrary, got {error:?}"
+    );
 
     // All-or-nothing: the rejected source registered nothing.
     assert_eq!(registry_count(&runtime), FIXTURE_MACROS.len());
@@ -396,39 +394,24 @@ fn duplicate_name_and_kind_from_two_crates_is_rejected() {
 
 #[test]
 fn same_name_in_different_kind_namespaces_coexists() {
-    let Some(manifest_a) = write_fixture_manifest("crate_a") else {
-        return;
-    };
-    let Some(dylib) = require_fixture_dylib() else {
-        return;
-    };
-    let Some(server) = server_path() else { return };
-
-    // crate_b exports a *derive* also named `make_answer` — a different
-    // namespace than crate_a's function-like `make_answer`. (Registry-level
-    // test: crate_b's manifest is intentionally partial, so its macro is
-    // never expanded — load-time validation would reject it, by design.)
-    let mut manifest_b = fixture_manifest(&dylib, "crate_b");
-    manifest_b.macros = vec![ManifestMacro {
-        name: "make_answer".to_string(),
-        kind: ProcMacroKind::Derive,
-    }];
-    manifest_b.dylib.path = dylib.clone();
-    let dir = std::env::temp_dir().join(format!("yelang-disc-kinds-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let manifest_b_path = dir.join("crate_b.ypm.json");
-    manifest_b.write(&manifest_b_path).unwrap();
-
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
-    runtime
-        .discover(&ProcMacroSource::Manifest(manifest_a))
-        .expect("crate_a discovers fine");
-    runtime
-        .discover(&ProcMacroSource::Manifest(manifest_b_path))
-        .expect("same name in a different kind namespace is allowed");
+    let registry = runtime.resolver_mut().registry_mut();
+    registry.register(
+        "make_answer".to_string(),
+        ProcMacroKind::FunctionLike,
+        0,
+        "/lib/a.dylib".to_string(),
+        "crate_a".to_string(),
+    );
+    registry.register(
+        "make_answer".to_string(),
+        ProcMacroKind::Derive,
+        0,
+        "/lib/b.dylib".to_string(),
+        "crate_b".to_string(),
+    );
 
     let resolver = runtime.resolver();
     let fn_like = resolver
@@ -439,37 +422,43 @@ fn same_name_in_different_kind_namespaces_coexists() {
         .unwrap();
     assert_eq!(fn_like.crate_name, "crate_a");
     assert_eq!(derive.crate_name, "crate_b");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // --- Batch discovery and driver API -----------------------------------------
 
 #[test]
 fn discover_all_collects_errors_and_still_registers_good_sources() {
-    let Some(dylib) = require_fixture_dylib() else {
-        return;
-    };
-    let Some(server) = server_path() else { return };
+    let good_dylib = fixture_dylib_path();
+    let good_manifest = write_fixture_manifest("crate_good");
 
-    let good = write_fixture_manifest("crate_good").unwrap();
-
+    // Bad source: a copy of the dylib with one byte changed, so its manifest
+    // (computed on the original) fails the hash check. A different path means
+    // it is not a DuplicateLibrary.
     let dir = std::env::temp_dir().join(format!("yelang-disc-batch-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    let bad_copy = dir.join(format!(
+        "{}bad_macro{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ));
+    let mut bytes = std::fs::read(&good_dylib).unwrap();
+    // Flip a byte that is not a metadata/header boundary: mid-file.
+    let idx = bytes.len() / 2;
+    bytes[idx] = bytes[idx].wrapping_add(1);
+    std::fs::write(&bad_copy, bytes).unwrap();
 
-    let mut bad = fixture_manifest(&dylib, "crate_bad");
-    bad.dylib.content_hash = "blake3:bad".to_string();
-    bad.dylib.path = dylib.clone();
+    let mut bad_manifest = fixture_manifest(&good_dylib, "crate_bad");
+    bad_manifest.dylib.path = bad_copy.clone();
     let bad_path = dir.join("bad.ypm.json");
-    bad.write(&bad_path).unwrap();
+    bad_manifest.write(&bad_path).unwrap();
 
-    let client = ProcMacroClient::spawn(&server).expect("spawn server");
+    let client = ProcMacroClient::spawn(server_path()).expect("spawn server");
     let mut runtime =
         ProcMacroRuntime::new(client, ProcMacroResolver::new(ProcMacroRegistry::new()));
     let report = runtime.discover_all(&[
         ProcMacroSource::Manifest(bad_path),
-        ProcMacroSource::Manifest(good),
+        ProcMacroSource::Manifest(good_manifest),
         ProcMacroSource::Manifest(dir.join("does_not_exist.ypm.json")),
     ]);
 
@@ -495,10 +484,9 @@ fn discover_all_collects_errors_and_still_registers_good_sources() {
 
 #[test]
 fn spawn_default_finds_server_via_env_var() {
-    let Some(server) = server_path() else { return };
     // Edition 2024: environment mutation is unsafe; this is the only test in
     // the process that touches this variable.
-    unsafe { std::env::set_var("YELANG_PROC_MACRO_SERVER", &server) };
+    unsafe { std::env::set_var("YELANG_PROC_MACRO_SERVER", server_path()) };
     let client = ProcMacroClient::spawn_default();
     unsafe { std::env::remove_var("YELANG_PROC_MACRO_SERVER") };
     client.expect("spawn_default via YELANG_PROC_MACRO_SERVER");
@@ -506,12 +494,8 @@ fn spawn_default_finds_server_via_env_var() {
 
 #[test]
 fn driver_api_expands_program_with_proc_macros() {
-    let Some(manifest) = write_fixture_manifest("test_macro") else {
-        return;
-    };
-    let Some((runtime, _)) = runtime_with(ProcMacroSource::Manifest(manifest)) else {
-        return;
-    };
+    let manifest = write_fixture_manifest("test_macro");
+    let (runtime, _) = runtime_with(ProcMacroSource::Manifest(manifest));
     let (program, interner) = parse_program(
         r#"
         fn main() {

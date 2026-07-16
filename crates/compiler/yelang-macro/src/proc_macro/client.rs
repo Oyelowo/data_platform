@@ -84,7 +84,9 @@ impl ProcMacroClient {
     ///    current executable.
     pub fn spawn_default() -> Result<Self, ProcMacroClientError> {
         if let Ok(path) = std::env::var("YELANG_PROC_MACRO_SERVER") {
-            return Self::spawn(&path);
+            if !path.trim().is_empty() {
+                return Self::spawn(&path);
+            }
         }
         let sibling = std::env::current_exe()
             .ok()

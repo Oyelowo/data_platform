@@ -1059,7 +1059,6 @@ dependencies = [
  "yelang-macro-core",
  "yelang-proc-macro",
  "yelang-proc-macro-bridge",
- "yelang-proc-macro-server",
 ]
 
 [[package]]
@@ -1110,8 +1109,10 @@ dependencies = [
  "slotmap",
  "thiserror 1.0.69",
  "yelang-arena",
+ "yelang-ast",
  "yelang-interner",
  "yelang-lexer",
+ "yelang-macro",
  "yelang-macro-core",
  "yelang-proc-macro",
  "yelang-proc-macro-bridge",

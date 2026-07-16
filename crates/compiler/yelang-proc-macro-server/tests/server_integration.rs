@@ -3,18 +3,19 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+use yelang_macro::proc_macro::HOST_TRIPLE;
 use yelang_proc_macro_bridge::protocol::{
     CURRENT_PROTOCOL_VERSION, ErrorCode, LibraryHandle, MacroDescriptor, ProcMacroKind, Request,
     Response, WireTokenStream,
     serialize::{read_response, write_request},
-    token::WireTokenTree,
+    token::{WireDiagnostic, WireLevel, WireTokenTree},
 };
 
 fn server_path() -> &'static str {
     env!("CARGO_BIN_EXE_yelang-proc-macro-server")
 }
 
-/// Return the path to the compiled `test_macro` cdylib fixture.
+/// Return the path to the compiled `test_macro` dylib fixture.
 fn fixture_dylib_path() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let target_dir = std::env::var_os("CARGO_TARGET_DIR")
@@ -25,7 +26,15 @@ fn fixture_dylib_path() -> PathBuf {
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     );
-    target_dir.join("debug").join(file_name)
+    // Cargo may place host artifacts directly under `debug` or under a
+    // configured target triple directory; accept either.
+    [
+        target_dir.join("debug").join(&file_name),
+        target_dir.join(HOST_TRIPLE).join("debug").join(&file_name),
+    ]
+    .into_iter()
+    .find(|p| p.exists())
+    .unwrap_or_else(|| target_dir.join("debug").join(file_name))
 }
 
 struct ServerHandle {
@@ -74,11 +83,6 @@ impl ServerHandle {
             other => panic!("expected LibraryLoaded, got {:?}", other),
         }
     }
-
-    fn shutdown(mut self) {
-        let _ = write_request(self.stdin(), &Request::Shutdown);
-        let _ = self.child.wait();
-    }
 }
 
 impl Drop for ServerHandle {
@@ -100,8 +104,10 @@ fn single_int_literal(value: &str) -> WireTokenStream {
             span: yelang_proc_macro_bridge::protocol::token::WireSpan {
                 lo: 0,
                 hi: 0,
-                file: 0,
-                syntax_context: 0,
+                // File and syntax-context IDs are 1-based in this codebase;
+                // 0 would panic during deserialization inside the proc macro.
+                file: 1,
+                syntax_context: 1,
             },
         }],
     }
@@ -181,7 +187,7 @@ fn load_fixture_library_returns_descriptors() {
     assert!(
         macros
             .iter()
-            .any(|m| m.name == "panic" && m.kind == ProcMacroKind::FunctionLike)
+            .any(|m| m.name == "explode" && m.kind == ProcMacroKind::FunctionLike)
     );
 }
 
@@ -304,7 +310,7 @@ fn expand_derive_macro() {
 }
 
 #[test]
-fn panic_in_macro_returns_panic_response() {
+fn panic_in_macro_returns_error_diagnostic() {
     let dylib = fixture_dylib_path();
     if !dylib.exists() {
         eprintln!("fixture dylib not found at {}; skipping", dylib.display());
@@ -328,14 +334,21 @@ fn panic_in_macro_returns_panic_response() {
 
     let response = read_response(server.stdout()).unwrap();
     match response {
-        Response::Panic { message } => {
+        Response::Diagnostic {
+            diagnostic:
+                WireDiagnostic {
+                    level: WireLevel::Error,
+                    message,
+                    ..
+                },
+        } => {
             assert!(
-                message.contains("intentional fixture panic"),
+                message.contains("macro panicked") && message.contains("intentional fixture panic"),
                 "got: {}",
                 message
             );
         }
-        other => panic!("expected Panic, got {:?}", other),
+        other => panic!("expected Error diagnostic, got {:?}", other),
     }
 }
 

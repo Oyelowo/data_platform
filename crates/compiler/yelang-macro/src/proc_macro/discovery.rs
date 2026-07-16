@@ -14,6 +14,11 @@
 //! In both paths the `macro_index` of a registered macro is its position in
 //! the dylib's export order — reported by the server for introspection, and
 //! cross-checked against the dylib at first load for manifests.
+//!
+//! Invariant: each canonical dylib path may be registered at most once. Two
+//! manifests for the same dylib (even with different crate names) are
+//! rejected, because the macro indices and descriptor cross-check are per
+//! dylib, not per crate name.
 
 use std::path::{Path, PathBuf};
 
@@ -39,8 +44,12 @@ pub enum ProcMacroSource {
 /// untouched (all-or-nothing per source).
 #[derive(Debug, Error)]
 pub enum DiscoveryError {
-    #[error("IO error at {path}: {message}")]
-    Io { path: PathBuf, message: String },
+    #[error("IO error while {op} at {path}: {message}")]
+    Io {
+        op: &'static str,
+        path: PathBuf,
+        message: String,
+    },
     #[error("manifest at {path} is {size} bytes (max {MAX} bytes)", MAX = super::manifest::MAX_MANIFEST_BYTES)]
     ManifestTooLarge { path: PathBuf, size: u64 },
     #[error("failed to parse manifest at {path}: {message}")]
@@ -88,6 +97,15 @@ pub enum DiscoveryError {
         first_crate: String,
         second_crate: String,
     },
+    #[error(
+        "dylib at {path} is already registered as proc-macro crate `{first_crate}`; \
+         cannot register it again as `{second_crate}`"
+    )]
+    DuplicateLibrary {
+        path: PathBuf,
+        first_crate: String,
+        second_crate: String,
+    },
     #[error("failed to introspect dylib: {0}")]
     Introspection(ProcMacroClientError),
 }
@@ -126,11 +144,13 @@ impl DiscoveryReport {
 /// Register every macro exported by `source` into `registry`.
 ///
 /// `load` performs a (caching) server load of a canonical dylib path; it is
-/// only invoked for the introspection fallback. Manifest discovery never
-/// loads code.
+/// only invoked for the introspection fallback. The second argument is
+/// `pre_validated`: if true, the cached entry is marked already validated
+/// (used for introspection, where the macro indices come directly from the
+/// descriptors). Manifest discovery never loads code.
 pub(crate) fn discover_source(
     registry: &mut ProcMacroRegistry,
-    load: &mut dyn FnMut(&Path) -> Result<LoadedLibrary, ProcMacroClientError>,
+    load: &mut dyn FnMut(&Path, bool) -> Result<LoadedLibrary, ProcMacroClientError>,
     source: &ProcMacroSource,
 ) -> Result<DiscoveredCrate, DiscoveryError> {
     match source {
@@ -168,14 +188,15 @@ fn discover_manifest(
 
 fn discover_introspected(
     registry: &mut ProcMacroRegistry,
-    load: &mut dyn FnMut(&Path) -> Result<LoadedLibrary, ProcMacroClientError>,
+    load: &mut dyn FnMut(&Path, bool) -> Result<LoadedLibrary, ProcMacroClientError>,
     path: &Path,
 ) -> Result<DiscoveredCrate, DiscoveryError> {
     let canonical = std::fs::canonicalize(path).map_err(|e| DiscoveryError::Io {
+        op: "canonicalize dylib",
         path: path.to_path_buf(),
         message: e.to_string(),
     })?;
-    let loaded = load(&canonical).map_err(DiscoveryError::Introspection)?;
+    let loaded = load(&canonical, true).map_err(DiscoveryError::Introspection)?;
     let crate_name = crate_name_from_dylib_path(path);
     if loaded.descriptors.is_empty() {
         return Err(DiscoveryError::EmptyLibrary { crate_name });
@@ -204,6 +225,17 @@ fn register_all(
     provenance: Provenance,
 ) -> Result<DiscoveredCrate, DiscoveryError> {
     let library_path = canonical_dylib.to_string_lossy().into_owned();
+
+    // Enforce the one-dylib-per-registration invariant.
+    if let Some(existing) = registry.iter().find(|m| m.library_path == library_path) {
+        if existing.crate_name != crate_name {
+            return Err(DiscoveryError::DuplicateLibrary {
+                path: canonical_dylib.to_path_buf(),
+                first_crate: existing.crate_name.clone(),
+                second_crate: crate_name.to_string(),
+            });
+        }
+    }
 
     for (name, kind) in &macros {
         if let Some(existing) = registry.find(name, *kind) {
