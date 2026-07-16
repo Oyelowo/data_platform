@@ -1,22 +1,26 @@
 [package]
-name = "yelang-macro"
+name = "yelang-proc-macro-server"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 description.workspace = true
 documentation.workspace = true
 
-[lib]
-doctest = false
+[[bin]]
+name = "yelang-proc-macro-server"
+path = "src/main.rs"
 
 [dependencies]
-yelang-ast = { path = "../yelang-ast" }
-yelang-interner = { path = "../yelang-interner" }
-yelang-lexer = { path = "../yelang-lexer" }
 yelang-arena = { path = "../yelang-arena" }
 yelang-macro-core = { path = "../yelang-macro-core" }
 yelang-proc-macro = { path = "../yelang-proc-macro" }
 yelang-proc-macro-bridge = { path = "../yelang-proc-macro-bridge" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-lexer = { path = "../yelang-lexer" }
+libloading = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
+slotmap = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -1,5 +1,5 @@
 [package]
-name = "yelang-macro"
+name = "yelang-proc-macro"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,13 +10,9 @@ documentation.workspace = true
 doctest = false
 
 [dependencies]
-yelang-ast = { path = "../yelang-ast" }
+yelang-macro-core = { path = "../yelang-macro-core" }
 yelang-interner = { path = "../yelang-interner" }
 yelang-lexer = { path = "../yelang-lexer" }
-yelang-arena = { path = "../yelang-arena" }
-yelang-macro-core = { path = "../yelang-macro-core" }
-yelang-proc-macro = { path = "../yelang-proc-macro" }
-yelang-proc-macro-bridge = { path = "../yelang-proc-macro-bridge" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

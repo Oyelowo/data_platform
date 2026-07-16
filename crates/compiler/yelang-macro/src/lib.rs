@@ -23,6 +23,7 @@ mod error;
 mod expander;
 mod matcher;
 mod paste;
+mod proc_macro;
 mod quote;
 mod resolver;
 mod transcribe;
@@ -39,6 +40,10 @@ pub use eager::{
 pub use error::ExpandError;
 pub use expander::{ExpandResult, MacroExpander, expand_item, expand_program};
 pub use paste::{paste, paste_idents};
+pub use proc_macro::{
+    InProcessExecutor, InProcessProcMacro, ProcMacroClient, ProcMacroDef, ProcMacroDiscovery,
+    ProcMacroId, ProcMacroRegistry, ProcMacroResolver, expand_proc_macro,
+};
 pub use quote::{
     binary, block, call, concat, ident, if_expr, int_lit, let_stmt, paren, path, punct,
     punct_joint, str_lit, unary,

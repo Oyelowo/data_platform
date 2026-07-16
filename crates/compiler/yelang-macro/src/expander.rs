@@ -18,11 +18,13 @@ use crate::eager::{
 };
 use crate::error::ExpandError;
 use crate::matcher::{MacroKind, try_match_matcher, try_match_rule};
+use crate::proc_macro::{InProcessExecutor, InProcessProcMacro};
 use crate::resolver::MacroResolver;
 use crate::transcribe::transcribe;
 use yelang_macro_core::{
     CrateId, ExpnData, ExpnKind, HygieneData, MacroDefId, TokenStream, Transparency,
 };
+use yelang_proc_macro::Diagnostic;
 
 const MAX_EXPANSIONS: usize = 1000;
 
@@ -32,13 +34,21 @@ pub struct ExpandResult {
     pub errors: Vec<ExpandError>,
 }
 
+/// An identifier for a macro on the expansion stack. Declarative macros are
+/// identified by their arena key; procedural macros are identified by name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MacroFrameId {
+    Declarative(MacroDefId),
+    ProcMacro(String),
+}
+
 /// A frame on the macro expansion stack, used for cycle detection and
 /// diagnostic backtraces.
 #[derive(Debug, Clone)]
 struct ExpansionFrame {
     name: String,
     span: yelang_lexer::Span,
-    def_id: MacroDefId,
+    frame_id: MacroFrameId,
 }
 
 /// Result of matching a set of attribute/derive rules against an invocation.
@@ -98,6 +108,8 @@ pub struct MacroExpander<'a> {
     cfg_options: CfgOptions,
     /// Path of the source file being expanded, if known.
     current_file: Option<&'a Path>,
+    /// In-process procedural macro executor for testing and bootstrapping.
+    in_process_executor: Option<std::sync::Arc<InProcessExecutor>>,
 }
 
 impl<'a> MacroExpander<'a> {
@@ -113,6 +125,7 @@ impl<'a> MacroExpander<'a> {
             env_provider: &StdEnvProvider,
             cfg_options: CfgOptions::new(),
             current_file: None,
+            in_process_executor: None,
         }
     }
 
@@ -128,6 +141,7 @@ impl<'a> MacroExpander<'a> {
             env_provider: &StdEnvProvider,
             cfg_options: CfgOptions::new(),
             current_file: None,
+            in_process_executor: None,
         }
     }
 
@@ -148,6 +162,11 @@ impl<'a> MacroExpander<'a> {
 
     pub fn with_current_file(mut self, path: &'a Path) -> Self {
         self.current_file = Some(path);
+        self
+    }
+
+    pub fn with_in_process_proc_macros(mut self, executor: InProcessExecutor) -> Self {
+        self.in_process_executor = Some(std::sync::Arc::new(executor));
         self
     }
 
@@ -1915,16 +1934,27 @@ impl<'a> MacroExpander<'a> {
         }
     }
 
-    /// True if `attr` names a user-defined attribute macro.
+    /// True if `attr` names a user-defined attribute macro (declarative or
+    /// in-process procedural).
     fn is_user_attribute_macro(&self, attr: &Attribute) -> bool {
         let Some(name) = attr.path.first() else {
             return false;
         };
         let name_str = self.interner.resolve(&name.symbol);
-        self.resolver
+        if self
+            .resolver
             .resolve(name_str)
             .map(|mac| mac.rules.iter().any(|r| r.kind == MacroKind::Attribute))
             .unwrap_or(false)
+        {
+            return true;
+        }
+        if let Some(executor) = self.in_process_executor.clone() {
+            if let Some(mac) = executor.find(name_str) {
+                return mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute;
+            }
+        }
+        false
     }
 
     /// Expand a user-defined attribute macro.
@@ -1942,6 +1972,60 @@ impl<'a> MacroExpander<'a> {
     ) -> Option<Vec<Item>> {
         let name = attr.path.first()?;
         let name_str = self.interner.resolve(&name.symbol).to_string();
+        let span = attr.span;
+
+        // In-process procedural attribute macros take priority over declarative rules.
+        if let Some(executor) = self.in_process_executor.clone() {
+            if let Some(mac) = executor.find(&name_str) {
+                if mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute {
+                    let Some(_) = self.before_expand(
+                        &name_str,
+                        span,
+                        MacroFrameId::ProcMacro(name_str.clone()),
+                    ) else {
+                        return Some(vec![item.clone()]);
+                    };
+                    let attr_args_stream =
+                        attribute_args_to_token_stream(&attr.args, self.interner)?;
+                    let item_stream = item_to_token_stream(item, self.interner)?;
+                    let proc_args = yelang_proc_macro::TokenStream::from_core_stream(
+                        &attr_args_stream,
+                        self.interner,
+                    );
+                    let proc_item = yelang_proc_macro::TokenStream::from_core_stream(
+                        &item_stream,
+                        self.interner,
+                    );
+                    let result = self.expand_in_process_attr(mac, proc_args, proc_item, span);
+                    self.after_expand();
+                    return Some(match result {
+                        Ok(stream) => parse_items_from_token_stream(
+                            &stream,
+                            self.interner,
+                            &self.eager_context(),
+                        )
+                        .unwrap_or_else(|reason| {
+                            self.errors.push(
+                                ExpandError::malformed_macro_args(
+                                    format!(
+                                        "attribute macro `{}` expansion did not produce valid items: {}",
+                                        name_str, reason
+                                    ),
+                                    span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            vec![item.clone()]
+                        }),
+                        Err(e) => {
+                            self.errors.push(e);
+                            vec![item.clone()]
+                        }
+                    });
+                }
+            }
+        }
+
         let mac = self.resolver.resolve(&name_str)?.clone();
 
         let rules: Vec<&crate::matcher::types::MacroRule> = mac
@@ -1953,11 +2037,12 @@ impl<'a> MacroExpander<'a> {
             return None;
         }
 
-        let span = attr.span;
         let attr_args_stream = attribute_args_to_token_stream(&attr.args, self.interner)?;
         let item_stream = item_to_token_stream(item, self.interner)?;
 
-        let Some(def_id) = self.before_expand(&name_str, span) else {
+        let Some(MacroFrameId::Declarative(def_id)) =
+            self.before_expand(&name_str, span, MacroFrameId::Declarative(mac.def_id))
+        else {
             return Some(vec![item.clone()]);
         };
 
@@ -2137,6 +2222,52 @@ impl<'a> MacroExpander<'a> {
         span: yelang_lexer::Span,
         require_unsafe: bool,
     ) -> Option<Vec<Item>> {
+        // In-process procedural derive macros take priority over declarative rules.
+        if let Some(executor) = self.in_process_executor.clone() {
+            if let Some(mac) = executor.find(trait_name) {
+                if mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Derive {
+                    let Some(_) = self.before_expand(
+                        trait_name,
+                        span,
+                        MacroFrameId::ProcMacro(trait_name.to_string()),
+                    ) else {
+                        return Some(vec![]);
+                    };
+                    let item_stream = item_to_token_stream(item, self.interner)?;
+                    let proc_item = yelang_proc_macro::TokenStream::from_core_stream(
+                        &item_stream,
+                        self.interner,
+                    );
+                    let result = self.expand_in_process_derive(mac, proc_item, span);
+                    self.after_expand();
+                    return Some(match result {
+                        Ok(stream) => parse_items_from_token_stream(
+                            &stream,
+                            self.interner,
+                            &self.eager_context(),
+                        )
+                        .unwrap_or_else(|reason| {
+                            self.errors.push(
+                                ExpandError::malformed_macro_args(
+                                    format!(
+                                        "derive macro `{}` expansion did not produce valid items: {}",
+                                        trait_name, reason
+                                    ),
+                                    span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            vec![]
+                        }),
+                        Err(e) => {
+                            self.errors.push(e);
+                            vec![]
+                        }
+                    });
+                }
+            }
+        }
+
         let mac = self.resolver.resolve(trait_name)?.clone();
         let rules: Vec<&crate::matcher::types::MacroRule> = mac
             .rules
@@ -2149,7 +2280,9 @@ impl<'a> MacroExpander<'a> {
 
         let item_stream = item_to_token_stream(item, self.interner)?;
 
-        let Some(def_id) = self.before_expand(trait_name, span) else {
+        let Some(MacroFrameId::Declarative(def_id)) =
+            self.before_expand(trait_name, span, MacroFrameId::Declarative(mac.def_id))
+        else {
             return Some(vec![]);
         };
 
@@ -2279,9 +2412,14 @@ impl<'a> MacroExpander<'a> {
 
     /// Book-keeping before expanding a macro.
     ///
-    /// Returns the `MacroDefId` of the macro being expanded, or `None` if the
-    /// macro is unknown or a cycle was detected.
-    fn before_expand(&mut self, name: &str, span: yelang_lexer::Span) -> Option<MacroDefId> {
+    /// Returns the frame identifier of the macro being expanded, or `None` if
+    /// an expansion loop was detected or the maximum expansion count was reached.
+    fn before_expand(
+        &mut self,
+        name: &str,
+        span: yelang_lexer::Span,
+        frame_id: MacroFrameId,
+    ) -> Option<MacroFrameId> {
         self.expansion_count += 1;
         if self.expansion_count > MAX_EXPANSIONS {
             self.errors.push(
@@ -2291,12 +2429,9 @@ impl<'a> MacroExpander<'a> {
             return None;
         }
 
-        let mac = self.resolver.resolve(name)?;
-        let def_id = mac.def_id;
-
         // Indirect recursion detection: if this macro is already on the stack,
         // we have a cycle (a → b → a).
-        if self.expansion_stack.iter().any(|f| f.def_id == def_id) {
+        if self.expansion_stack.iter().any(|f| f.frame_id == frame_id) {
             self.errors.push(
                 ExpandError::expansion_loop(name.to_string(), span)
                     .with_backtrace(self.backtrace()),
@@ -2307,9 +2442,9 @@ impl<'a> MacroExpander<'a> {
         self.expansion_stack.push(ExpansionFrame {
             name: name.to_string(),
             span,
-            def_id,
+            frame_id: frame_id.clone(),
         });
-        Some(def_id)
+        Some(frame_id)
     }
 
     /// Book-keeping after expanding a macro.
@@ -2374,6 +2509,85 @@ impl<'a> MacroExpander<'a> {
         }
     }
 
+    /// Convert diagnostics emitted by an in-process proc macro into expansion
+    /// errors and push them onto the expander's error list.
+    fn push_proc_macro_diagnostics(
+        &mut self,
+        diagnostics: Vec<Diagnostic>,
+        macro_name: &str,
+        span: yelang_lexer::Span,
+    ) {
+        for diag in diagnostics {
+            self.errors.push(
+                ExpandError::malformed_macro_args(
+                    format!(
+                        "proc macro `{}` emitted a diagnostic [{:?}]: {}",
+                        macro_name, diag.level, diag.message
+                    ),
+                    span,
+                )
+                .with_backtrace(self.backtrace()),
+            );
+        }
+    }
+
+    /// Invoke an in-process function-like procedural macro.
+    fn expand_in_process_fn_like(
+        &mut self,
+        mac: &dyn InProcessProcMacro,
+        args: &yelang_macro_core::token_tree::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let proc_input = yelang_proc_macro::TokenStream::from_core_stream(args, self.interner);
+        let (proc_output, diagnostics) = mac.expand_fn_like(proc_input);
+        self.push_proc_macro_diagnostics(diagnostics, mac.name(), span);
+        self.proc_macro_output_to_core_stream(proc_output, span)
+    }
+
+    /// Invoke an in-process attribute procedural macro.
+    fn expand_in_process_attr(
+        &mut self,
+        mac: &dyn InProcessProcMacro,
+        args: yelang_proc_macro::TokenStream,
+        item: yelang_proc_macro::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let (proc_output, diagnostics) = mac.expand_attr(args, item);
+        self.push_proc_macro_diagnostics(diagnostics, mac.name(), span);
+        self.proc_macro_output_to_core_stream(proc_output, span)
+    }
+
+    /// Invoke an in-process derive procedural macro.
+    fn expand_in_process_derive(
+        &mut self,
+        mac: &dyn InProcessProcMacro,
+        item: yelang_proc_macro::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let (proc_output, diagnostics) = mac.expand_derive(item);
+        self.push_proc_macro_diagnostics(diagnostics, mac.name(), span);
+        self.proc_macro_output_to_core_stream(proc_output, span)
+    }
+
+    /// Convert a procedural macro output stream back into a compiler-internal
+    /// token stream, re-tokenizing through the expander's interner so symbols
+    /// remain valid in the current compilation context.
+    fn proc_macro_output_to_core_stream(
+        &self,
+        output: yelang_proc_macro::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let rendered = output.render_source(self.interner);
+        let mut local_interner = self.interner.clone();
+        let lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+            .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))?;
+        let tokens: Vec<_> = lex.tokens.iter().cloned().collect();
+        Ok(yelang_ast::expr::convert::from_lexer_tokens(
+            &tokens,
+            &local_interner,
+        ))
+    }
+
     /// Try to expand a user-defined macro invocation and return the raw expanded
     /// token stream. The caller parses the stream according to the expected
     /// syntactic category (expression, type, pattern, item, or statement).
@@ -2396,12 +2610,31 @@ impl<'a> MacroExpander<'a> {
             return expand_eager_builtin_to_stream(builtin, &expanded_args, &ctx, span);
         }
 
+        // In-process procedural macros take priority over declarative macros.
+        if let Some(executor) = self.in_process_executor.clone() {
+            if let Some(mac) = executor.find(&name) {
+                let Some(_) =
+                    self.before_expand(&name, span, MacroFrameId::ProcMacro(name.clone()))
+                else {
+                    return Err(
+                        ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace())
+                    );
+                };
+                let macro_args = unwrap_macro_args(&inv.args);
+                let result = self.expand_in_process_fn_like(mac, &macro_args, span);
+                self.after_expand();
+                return result;
+            }
+        }
+
         let Some(mac) = self.resolver.resolve(&name) else {
             return Err(ExpandError::unknown_macro(name, span).with_backtrace(self.backtrace()));
         };
         let mac = mac.clone();
 
-        let Some(def_id) = self.before_expand(&name, span) else {
+        let Some(MacroFrameId::Declarative(def_id)) =
+            self.before_expand(&name, span, MacroFrameId::Declarative(mac.def_id))
+        else {
             return Err(ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace()));
         };
 

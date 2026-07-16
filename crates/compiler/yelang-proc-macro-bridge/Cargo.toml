@@ -1,0 +1,20 @@
+[package]
+name = "yelang-proc-macro-bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-macro-core = { path = "../yelang-macro-core" }
+postcard = { workspace = true }
+serde = { workspace = true }
+slotmap = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
