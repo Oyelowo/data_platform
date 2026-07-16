@@ -17,7 +17,11 @@ yelang-arena = { path = "../yelang-arena" }
 yelang-macro-core = { path = "../yelang-macro-core" }
 yelang-proc-macro = { path = "../yelang-proc-macro" }
 yelang-proc-macro-bridge = { path = "../yelang-proc-macro-bridge" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
+yelang-proc-macro-server = { path = "../yelang-proc-macro-server" }

@@ -152,7 +152,7 @@ fn load_fixture_library_returns_descriptors() {
     server.handshake();
 
     let (_handle, macros) = server.load_library(dylib.to_string_lossy().to_string());
-    assert_eq!(macros.len(), 4);
+    assert_eq!(macros.len(), 6);
     assert!(
         macros
             .iter()
@@ -167,6 +167,16 @@ fn load_fixture_library_returns_descriptors() {
         macros
             .iter()
             .any(|m| m.name == "answer" && m.kind == ProcMacroKind::Derive)
+    );
+    assert!(
+        macros
+            .iter()
+            .any(|m| m.name == "generate_const" && m.kind == ProcMacroKind::Derive)
+    );
+    assert!(
+        macros
+            .iter()
+            .any(|m| m.name == "emit_warning" && m.kind == ProcMacroKind::FunctionLike)
     );
     assert!(
         macros
@@ -310,7 +320,7 @@ fn panic_in_macro_returns_panic_response() {
         server.stdin(),
         &Request::ExpandFnLike {
             library: handle,
-            macro_index: 3,
+            macro_index: 5,
             input: empty_stream(),
         },
     )
@@ -402,6 +412,76 @@ fn wrong_macro_kind_returns_error() {
         "expected MacroNotFound, got {:?}",
         response
     );
+}
+
+#[test]
+fn expand_generate_const_derive_macro() {
+    let dylib = fixture_dylib_path();
+    if !dylib.exists() {
+        eprintln!("fixture dylib not found at {}; skipping", dylib.display());
+        return;
+    }
+
+    let mut server = ServerHandle::spawn();
+    server.handshake();
+
+    let (handle, _macros) = server.load_library(dylib.to_string_lossy().to_string());
+
+    write_request(
+        server.stdin(),
+        &Request::ExpandDerive {
+            library: handle,
+            macro_index: 3,
+            item: empty_stream(),
+        },
+    )
+    .unwrap();
+
+    let response = read_response(server.stdout()).unwrap();
+    match response {
+        Response::Expanded { output } => {
+            assert!(!output.trees.is_empty());
+        }
+        other => panic!("expected Expanded, got {:?}", other),
+    }
+}
+
+#[test]
+fn expand_emit_warning_macro_returns_diagnostic() {
+    let dylib = fixture_dylib_path();
+    if !dylib.exists() {
+        eprintln!("fixture dylib not found at {}; skipping", dylib.display());
+        return;
+    }
+
+    let mut server = ServerHandle::spawn();
+    server.handshake();
+
+    let (handle, _macros) = server.load_library(dylib.to_string_lossy().to_string());
+
+    write_request(
+        server.stdin(),
+        &Request::ExpandFnLike {
+            library: handle,
+            macro_index: 4,
+            input: empty_stream(),
+        },
+    )
+    .unwrap();
+
+    let mut got_diagnostic = false;
+    loop {
+        let response = read_response(server.stdout()).unwrap();
+        match response {
+            Response::Expanded { .. } => break,
+            Response::Diagnostic { diagnostic } => {
+                assert_eq!(diagnostic.message, "intentional fixture warning");
+                got_diagnostic = true;
+            }
+            other => panic!("expected Diagnostic or Expanded, got {:?}", other),
+        }
+    }
+    assert!(got_diagnostic);
 }
 
 #[test]

@@ -23,7 +23,7 @@ mod error;
 mod expander;
 mod matcher;
 mod paste;
-mod proc_macro;
+pub mod proc_macro;
 mod quote;
 mod resolver;
 mod transcribe;
@@ -38,11 +38,17 @@ pub use eager::{
     expand_eager_macros_in_stream,
 };
 pub use error::ExpandError;
-pub use expander::{ExpandResult, MacroExpander, expand_item, expand_program};
+pub use expander::{
+    ExpandResult, MacroExpander, expand_item, expand_program, expand_program_with_proc_macros,
+};
 pub use paste::{paste, paste_idents};
 pub use proc_macro::{
-    InProcessExecutor, InProcessProcMacro, ProcMacroClient, ProcMacroDef, ProcMacroDiscovery,
-    ProcMacroId, ProcMacroRegistry, ProcMacroResolver, expand_proc_macro,
+    DiscoveredCrate, DiscoveryError, DiscoveryReport, DylibSection, HOST_TRIPLE, InProcessExecutor,
+    InProcessProcMacro, LoadedLibrary, MANIFEST_EXTENSION, MANIFEST_FORMAT_VERSION, ManifestMacro,
+    ProcMacroClient, ProcMacroClientError, ProcMacroCrateManifest, ProcMacroDef, ProcMacroId,
+    ProcMacroKind, ProcMacroRegistry, ProcMacroResolver, ProcMacroRuntime, ProcMacroSource,
+    Provenance, ResolvedProcMacro, core_to_wire, expand_proc_macro, fingerprint_dylib,
+    sidecar_manifest_path, wire_diagnostics_to_errors, wire_to_core,
 };
 pub use quote::{
     binary, block, call, concat, ident, if_expr, int_lit, let_stmt, paren, path, punct,

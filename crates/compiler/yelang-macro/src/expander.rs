@@ -18,7 +18,10 @@ use crate::eager::{
 };
 use crate::error::ExpandError;
 use crate::matcher::{MacroKind, try_match_matcher, try_match_rule};
-use crate::proc_macro::{InProcessExecutor, InProcessProcMacro};
+use crate::proc_macro::{
+    InProcessExecutor, InProcessProcMacro, ProcMacroRuntime, core_to_wire,
+    wire_diagnostics_to_errors, wire_to_core,
+};
 use crate::resolver::MacroResolver;
 use crate::transcribe::transcribe;
 use yelang_macro_core::{
@@ -110,6 +113,8 @@ pub struct MacroExpander<'a> {
     current_file: Option<&'a Path>,
     /// In-process procedural macro executor for testing and bootstrapping.
     in_process_executor: Option<std::sync::Arc<InProcessExecutor>>,
+    /// Out-of-process procedural macro runtime (server connection + resolver).
+    proc_macro_runtime: Option<ProcMacroRuntime>,
 }
 
 impl<'a> MacroExpander<'a> {
@@ -126,6 +131,7 @@ impl<'a> MacroExpander<'a> {
             cfg_options: CfgOptions::new(),
             current_file: None,
             in_process_executor: None,
+            proc_macro_runtime: None,
         }
     }
 
@@ -142,6 +148,7 @@ impl<'a> MacroExpander<'a> {
             cfg_options: CfgOptions::new(),
             current_file: None,
             in_process_executor: None,
+            proc_macro_runtime: None,
         }
     }
 
@@ -167,6 +174,11 @@ impl<'a> MacroExpander<'a> {
 
     pub fn with_in_process_proc_macros(mut self, executor: InProcessExecutor) -> Self {
         self.in_process_executor = Some(std::sync::Arc::new(executor));
+        self
+    }
+
+    pub fn with_proc_macro_runtime(mut self, runtime: ProcMacroRuntime) -> Self {
+        self.proc_macro_runtime = Some(runtime);
         self
     }
 
@@ -2056,6 +2068,61 @@ impl<'a> MacroExpander<'a> {
             }
         }
 
+        // Out-of-process procedural attribute macros take priority over declarative rules.
+        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
+            if let Some(result) = runtime.resolve(
+                &name_str,
+                yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute,
+            ) {
+                let mac = match result {
+                    Ok(mac) => mac,
+                    Err(e) => {
+                        self.errors.push(
+                            ExpandError::malformed_macro_args(
+                                format!("failed to load proc macro `{}`: {}", name_str, e),
+                                span,
+                            )
+                            .with_backtrace(self.backtrace()),
+                        );
+                        return Some(vec![item.clone()]);
+                    }
+                };
+                let Some(_) =
+                    self.before_expand(&name_str, span, MacroFrameId::ProcMacro(name_str.clone()))
+                else {
+                    return Some(vec![item.clone()]);
+                };
+                let attr_args_stream = attribute_args_to_token_stream(&attr.args, self.interner)?;
+                let item_stream = item_to_token_stream(item, self.interner)?;
+                let result = self.expand_server_attr(&mac, attr_args_stream, item_stream, span);
+                self.after_expand();
+                return Some(match result {
+                    Ok(stream) => parse_items_from_token_stream(
+                        &stream,
+                        self.interner,
+                        &self.eager_context(),
+                    )
+                    .unwrap_or_else(|reason| {
+                        self.errors.push(
+                            ExpandError::malformed_macro_args(
+                                format!(
+                                    "attribute macro `{}` expansion did not produce valid items: {}",
+                                    name_str, reason
+                                ),
+                                span,
+                            )
+                            .with_backtrace(self.backtrace()),
+                        );
+                        vec![item.clone()]
+                    }),
+                    Err(e) => {
+                        self.errors.push(e);
+                        vec![item.clone()]
+                    }
+                });
+            }
+        }
+
         let mac = self.resolver.resolve(&name_str)?.clone();
 
         let rules: Vec<&crate::matcher::types::MacroRule> = mac
@@ -2295,6 +2362,60 @@ impl<'a> MacroExpander<'a> {
                         }
                     });
                 }
+            }
+        }
+
+        // Out-of-process procedural derive macros take priority over declarative rules.
+        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
+            if let Some(result) = runtime.resolve(
+                trait_name,
+                yelang_proc_macro_bridge::protocol::ProcMacroKind::Derive,
+            ) {
+                let mac = match result {
+                    Ok(mac) => mac,
+                    Err(e) => {
+                        self.errors.push(
+                            ExpandError::malformed_macro_args(
+                                format!("failed to load proc macro `{}`: {}", trait_name, e),
+                                span,
+                            )
+                            .with_backtrace(self.backtrace()),
+                        );
+                        return Some(vec![]);
+                    }
+                };
+                let Some(_) = self.before_expand(
+                    trait_name,
+                    span,
+                    MacroFrameId::ProcMacro(trait_name.to_string()),
+                ) else {
+                    return Some(vec![]);
+                };
+                let item_stream = item_to_token_stream(item, self.interner)?;
+                let result = self.expand_server_derive(&mac, item_stream, span);
+                self.after_expand();
+                return Some(match result {
+                    Ok(stream) => {
+                        parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
+                            .unwrap_or_else(|reason| {
+                                self.errors.push(
+                            ExpandError::malformed_macro_args(
+                                format!(
+                                    "derive macro `{}` expansion did not produce valid items: {}",
+                                    trait_name, reason
+                                ),
+                                span,
+                            )
+                            .with_backtrace(self.backtrace()),
+                        );
+                                vec![]
+                            })
+                    }
+                    Err(e) => {
+                        self.errors.push(e);
+                        vec![]
+                    }
+                });
             }
         }
 
@@ -2599,6 +2720,73 @@ impl<'a> MacroExpander<'a> {
         self.proc_macro_output_to_core_stream(proc_output, span)
     }
 
+    /// Invoke a server-based function-like procedural macro.
+    fn expand_server_fn_like(
+        &mut self,
+        mac: &crate::proc_macro::ResolvedProcMacro,
+        args: &yelang_macro_core::token_tree::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let runtime = self
+            .proc_macro_runtime
+            .as_ref()
+            .expect("server macro expansion requires a runtime");
+        let wire_input = core_to_wire(args, self.interner);
+        let (wire_output, diagnostics) =
+            runtime.expand_proc_macro(mac, Some(wire_input), None, span)?;
+        self.push_server_diagnostics(&diagnostics, &mac.name, span);
+        wire_to_core(wire_output, self.interner, span)
+    }
+
+    /// Invoke a server-based attribute procedural macro.
+    fn expand_server_attr(
+        &mut self,
+        mac: &crate::proc_macro::ResolvedProcMacro,
+        args: yelang_macro_core::token_tree::TokenStream,
+        item: yelang_macro_core::token_tree::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let runtime = self
+            .proc_macro_runtime
+            .as_ref()
+            .expect("server macro expansion requires a runtime");
+        let wire_args = core_to_wire(&args, self.interner);
+        let wire_item = core_to_wire(&item, self.interner);
+        let (wire_output, diagnostics) =
+            runtime.expand_proc_macro(mac, Some(wire_args), Some(wire_item), span)?;
+        self.push_server_diagnostics(&diagnostics, &mac.name, span);
+        wire_to_core(wire_output, self.interner, span)
+    }
+
+    /// Invoke a server-based derive procedural macro.
+    fn expand_server_derive(
+        &mut self,
+        mac: &crate::proc_macro::ResolvedProcMacro,
+        item: yelang_macro_core::token_tree::TokenStream,
+        span: yelang_lexer::Span,
+    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let runtime = self
+            .proc_macro_runtime
+            .as_ref()
+            .expect("server macro expansion requires a runtime");
+        let wire_item = core_to_wire(&item, self.interner);
+        let (wire_output, diagnostics) =
+            runtime.expand_proc_macro(mac, None, Some(wire_item), span)?;
+        self.push_server_diagnostics(&diagnostics, &mac.name, span);
+        wire_to_core(wire_output, self.interner, span)
+    }
+
+    /// Convert server diagnostics into expansion errors and push them.
+    fn push_server_diagnostics(
+        &mut self,
+        diagnostics: &[yelang_proc_macro_bridge::protocol::token::WireDiagnostic],
+        macro_name: &str,
+        span: yelang_lexer::Span,
+    ) {
+        let errors = wire_diagnostics_to_errors(diagnostics, macro_name, span, self.backtrace());
+        self.errors.extend(errors);
+    }
+
     /// Convert a procedural macro output stream back into a compiler-internal
     /// token stream, re-tokenizing through the expander's interner so symbols
     /// remain valid in the current compilation context.
@@ -2652,6 +2840,36 @@ impl<'a> MacroExpander<'a> {
                 };
                 let macro_args = unwrap_macro_args(&inv.args);
                 let result = self.expand_in_process_fn_like(mac, &macro_args, span);
+                self.after_expand();
+                return result;
+            }
+        }
+
+        // Out-of-process procedural macros take priority over declarative macros.
+        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
+            if let Some(result) = runtime.resolve(
+                &name,
+                yelang_proc_macro_bridge::protocol::ProcMacroKind::FunctionLike,
+            ) {
+                let mac = match result {
+                    Ok(mac) => mac,
+                    Err(e) => {
+                        return Err(ExpandError::malformed_macro_args(
+                            format!("failed to load proc macro `{}`: {}", name, e),
+                            span,
+                        )
+                        .with_backtrace(self.backtrace()));
+                    }
+                };
+                let Some(_) =
+                    self.before_expand(&name, span, MacroFrameId::ProcMacro(name.clone()))
+                else {
+                    return Err(
+                        ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace())
+                    );
+                };
+                let macro_args = unwrap_macro_args(&inv.args);
+                let result = self.expand_server_fn_like(&mac, &macro_args, span);
                 self.after_expand();
                 return result;
             }
@@ -3004,6 +3222,17 @@ fn unwrap_macro_args(
 /// It runs the expander iteratively until no more macro invocations remain.
 pub fn expand_program(program: &Program, interner: &Interner) -> ExpandResult {
     let mut expander = MacroExpander::new(interner);
+    expander.expand(program)
+}
+
+/// Expand all macros and decorators in a program with out-of-process procedural
+/// macros available.
+pub fn expand_program_with_proc_macros(
+    program: &Program,
+    interner: &Interner,
+    runtime: ProcMacroRuntime,
+) -> ExpandResult {
+    let mut expander = MacroExpander::new(interner).with_proc_macro_runtime(runtime);
     expander.expand(program)
 }
 

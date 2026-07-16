@@ -1,21 +1,69 @@
 //! Expand procedural macro invocations.
 
-use yelang_proc_macro_bridge::protocol::{
-    ProcMacroKind, WireTokenStream,
-    token::{WireDelimiter, WireSpan, WireTokenTree},
-};
+use yelang_interner::Interner;
+use yelang_proc_macro::bridge::{from_wire, into_wire};
+use yelang_proc_macro_bridge::protocol::WireTokenStream;
+use yelang_proc_macro_bridge::protocol::token::WireDiagnostic;
 
-use super::ProcMacroClient;
+use super::ResolvedProcMacro;
 use crate::error::ExpandError;
 
-/// Expand a procedural macro invocation.
+/// Convert a compiler-internal token stream to a wire token stream.
+///
+/// This uses the public `yelang_proc_macro::TokenStream` API as an intermediate
+/// step so that interned symbols are resolved to text, delimiters/spacing are
+/// mapped correctly, and literals are rendered consistently.
+pub fn core_to_wire(
+    stream: &yelang_macro_core::TokenStream,
+    interner: &Interner,
+) -> WireTokenStream {
+    let proc_stream = yelang_proc_macro::TokenStream::from_core_stream(stream, interner);
+    into_wire(proc_stream)
+}
+
+/// Convert a wire token stream back to a compiler-internal token stream.
+///
+/// The returned tokens are rendered to source and re-tokenized through the
+/// compiler's interner so that all symbols are valid in the current compilation
+/// context.
+pub fn wire_to_core(
+    stream: WireTokenStream,
+    interner: &Interner,
+    span: yelang_lexer::Span,
+) -> Result<yelang_macro_core::TokenStream, ExpandError> {
+    let proc_stream = from_wire(stream);
+    proc_macro_output_to_core_stream(proc_stream, interner, span)
+}
+
+/// Convert a procedural macro output stream back into a compiler-internal
+/// token stream, re-tokenizing through the interner so symbols remain valid in
+/// the current compilation context.
+fn proc_macro_output_to_core_stream(
+    output: yelang_proc_macro::TokenStream,
+    interner: &Interner,
+    span: yelang_lexer::Span,
+) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+    let rendered = output.render_source(interner);
+    let mut local_interner = interner.clone();
+    let lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+        .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))?;
+    let tokens: Vec<_> = lex.tokens.iter().cloned().collect();
+    Ok(yelang_ast::expr::convert::from_lexer_tokens(
+        &tokens,
+        &local_interner,
+    ))
+}
+
+/// Expand a procedural macro invocation through the server.
 pub fn expand_proc_macro(
-    client: &mut ProcMacroClient,
-    macro_def: &super::ProcMacroDef,
+    client: &mut super::ProcMacroClient,
+    macro_def: &ResolvedProcMacro,
     args: Option<WireTokenStream>,
     item: Option<WireTokenStream>,
     span: yelang_lexer::Span,
-) -> Result<WireTokenStream, ExpandError> {
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ExpandError> {
+    use yelang_proc_macro_bridge::protocol::ProcMacroKind;
+
     match macro_def.kind {
         ProcMacroKind::FunctionLike => {
             let input = args.ok_or_else(|| {
@@ -45,87 +93,30 @@ pub fn expand_proc_macro(
     }
 }
 
-/// Convert a Yelang AST token stream to a wire token stream.
-///
-/// Used by the expander when dispatching to the proc-macro server.
-#[allow(dead_code)]
-pub fn ast_to_wire(stream: &yelang_macro_core::TokenStream) -> WireTokenStream {
-    let mut trees = Vec::new();
-    for tree in stream.iter() {
-        if let Some(t) = ast_tree_to_wire(tree) {
-            trees.push(t);
-        }
-    }
-    WireTokenStream { trees }
-}
-
-#[allow(dead_code)]
-fn ast_tree_to_wire(tree: &yelang_macro_core::TokenTree) -> Option<WireTokenTree> {
-    Some(match tree {
-        yelang_macro_core::TokenTree::Group(g) => WireTokenTree::Group {
-            delimiter: match g.delimiter {
-                yelang_macro_core::Delimiter::Parenthesis => WireDelimiter::Parenthesis,
-                yelang_macro_core::Delimiter::Brace => WireDelimiter::Brace,
-                yelang_macro_core::Delimiter::Bracket => WireDelimiter::Bracket,
-                yelang_macro_core::Delimiter::None => WireDelimiter::None,
-            },
-            span: ast_span_to_wire(g.span),
-            trees: ast_to_wire(&g.stream).trees,
-        },
-        yelang_macro_core::TokenTree::Ident(i) => WireTokenTree::Ident {
-            // We cannot resolve the symbol here without an interner.
-            text: format!("<symbol:{}>", i.sym.as_usize()),
-            span: ast_span_to_wire(i.span),
-            is_raw: i.is_raw,
-        },
-        yelang_macro_core::TokenTree::Punct(p) => WireTokenTree::Punct {
-            ch: p.ch,
-            spacing: match p.spacing {
-                yelang_macro_core::Spacing::Alone => {
-                    yelang_proc_macro_bridge::protocol::token::WireSpacing::Alone
-                }
-                yelang_macro_core::Spacing::Joint => {
-                    yelang_proc_macro_bridge::protocol::token::WireSpacing::Joint
-                }
-            },
-            span: ast_span_to_wire(p.span),
-        },
-        yelang_macro_core::TokenTree::Literal(l) => WireTokenTree::Literal {
-            text: format!("{}", l),
-            kind: match &l.kind {
-                yelang_macro_core::LitKind::Int { .. } => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Int
-                }
-                yelang_macro_core::LitKind::Float { .. } => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Float
-                }
-                yelang_macro_core::LitKind::Str { .. } => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Str
-                }
-                yelang_macro_core::LitKind::Char(_) => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Char
-                }
-                yelang_macro_core::LitKind::Bool(_) => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Bool
-                }
-                yelang_macro_core::LitKind::ByteStr { .. } => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::ByteStr
-                }
-                yelang_macro_core::LitKind::Byte(_) => {
-                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Byte
-                }
-            },
-            span: ast_span_to_wire(l.span),
-        },
-    })
-}
-
-#[allow(dead_code)]
-fn ast_span_to_wire(span: yelang_macro_core::Span) -> WireSpan {
-    WireSpan {
-        lo: span.lo,
-        hi: span.hi,
-        file: span.file.raw(),
-        syntax_context: span.ctx.raw(),
-    }
+/// Convert server diagnostics into expansion errors.
+pub fn wire_diagnostics_to_errors(
+    diagnostics: &[WireDiagnostic],
+    macro_name: &str,
+    span: yelang_lexer::Span,
+    backtrace: Vec<crate::error::BacktraceFrame>,
+) -> Vec<ExpandError> {
+    diagnostics
+        .iter()
+        .map(|diag| {
+            let level = match diag.level {
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Error => "error",
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Warning => "warning",
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Note => "note",
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Help => "help",
+            };
+            ExpandError::malformed_macro_args(
+                format!(
+                    "proc macro `{}` emitted a diagnostic [{}]: {}",
+                    macro_name, level, diag.message
+                ),
+                span,
+            )
+            .with_backtrace(backtrace.clone())
+        })
+        .collect()
 }

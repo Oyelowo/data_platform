@@ -2,26 +2,30 @@
 //!
 //! This crate manually implements the stable C ABI that
 //! `#[yelang_proc_macro::macro_export]` will eventually generate automatically.
-//! It exports four macros:
+//! It exports six macros:
 //!
 //! - `make_answer` — function-like, returns the token stream `42`.
 //! - `trace` — attribute, returns the item unchanged.
 //! - `answer` — derive, returns the token stream `42`.
+//! - `generate_const` — derive, returns a valid `const` item.
+//! - `emit_warning` — function-like, returns the input and emits a warning diagnostic.
 //! - `panic` — function-like, panics to test server-side panic recovery.
 
 use yelang_proc_macro::{
-    Literal, Span, TokenStream, TokenTree,
+    Diagnostic, Ident, Level, Literal, Punct, Spacing, Span, TokenStream, TokenTree,
     bridge::{from_wire, result_into_wire},
 };
 use yelang_proc_macro_bridge::abi::{
-    CURRENT_ABI_VERSION, YelangAttrMacro, YelangDeriveMacro, YelangFnLikeMacro,
-    YelangMacroDescriptor, YelangMacroInvoke, YelangProcMacroExports, YelangProcMacroKind,
+    CURRENT_ABI_VERSION, YelangMacroDescriptor, YelangMacroInvoke, YelangProcMacroExports,
+    YelangProcMacroKind,
 };
 use yelang_proc_macro_bridge::protocol::token::WireExpansionResult;
 
 static MAKE_ANSWER_NAME: &[u8] = b"make_answer";
 static TRACE_NAME: &[u8] = b"trace";
 static ANSWER_NAME: &[u8] = b"answer";
+static GENERATE_CONST_NAME: &[u8] = b"generate_const";
+static EMIT_WARNING_NAME: &[u8] = b"emit_warning";
 static PANIC_NAME: &[u8] = b"panic";
 
 unsafe extern "C-unwind" fn null_fn_like(_: *const u8, _: usize, _: *mut *mut u8, _: *mut usize) {
@@ -43,7 +47,7 @@ unsafe extern "C-unwind" fn null_derive(_: *const u8, _: usize, _: *mut *mut u8,
     unreachable!("null derive invoke")
 }
 
-static MACROS: [YelangMacroDescriptor; 4] = [
+static MACROS: [YelangMacroDescriptor; 6] = [
     YelangMacroDescriptor {
         name: MAKE_ANSWER_NAME.as_ptr(),
         name_len: MAKE_ANSWER_NAME.len(),
@@ -72,6 +76,26 @@ static MACROS: [YelangMacroDescriptor; 4] = [
             fn_like: null_fn_like,
             attr: null_attr,
             derive: answer,
+        },
+    },
+    YelangMacroDescriptor {
+        name: GENERATE_CONST_NAME.as_ptr(),
+        name_len: GENERATE_CONST_NAME.len(),
+        kind: YelangProcMacroKind::Derive,
+        invoke: YelangMacroInvoke {
+            fn_like: null_fn_like,
+            attr: null_attr,
+            derive: generate_const,
+        },
+    },
+    YelangMacroDescriptor {
+        name: EMIT_WARNING_NAME.as_ptr(),
+        name_len: EMIT_WARNING_NAME.len(),
+        kind: YelangProcMacroKind::FunctionLike,
+        invoke: YelangMacroInvoke {
+            fn_like: emit_warning,
+            attr: null_attr,
+            derive: null_derive,
         },
     },
     YelangMacroDescriptor {
@@ -153,6 +177,55 @@ unsafe extern "C-unwind" fn answer(
         Span::call_site(),
     )));
     serialize_output(result_into_wire(ts, Vec::new()), output, output_len);
+}
+
+unsafe extern "C-unwind" fn generate_const(
+    item: *const u8,
+    item_len: usize,
+    output: *mut *mut u8,
+    output_len: *mut usize,
+) {
+    let _item = deserialize_input(item, item_len);
+    let mut ts = TokenStream::new();
+    ts.push(TokenTree::Ident(Ident::new("const", Span::call_site())));
+    ts.push(TokenTree::Ident(Ident::new(
+        "_DERIVE_OUTPUT",
+        Span::call_site(),
+    )));
+    ts.push(TokenTree::Punct(Punct::new(
+        ':',
+        Spacing::Alone,
+        Span::call_site(),
+    )));
+    ts.push(TokenTree::Ident(Ident::new("i32", Span::call_site())));
+    ts.push(TokenTree::Punct(Punct::new(
+        '=',
+        Spacing::Alone,
+        Span::call_site(),
+    )));
+    ts.push(TokenTree::Literal(Literal::integer("0", Span::call_site())));
+    ts.push(TokenTree::Punct(Punct::new(
+        ';',
+        Spacing::Alone,
+        Span::call_site(),
+    )));
+    serialize_output(result_into_wire(ts, Vec::new()), output, output_len);
+}
+
+unsafe extern "C-unwind" fn emit_warning(
+    input: *const u8,
+    input_len: usize,
+    output: *mut *mut u8,
+    output_len: *mut usize,
+) {
+    let input_wire = deserialize_input(input, input_len);
+    let input = from_wire(input_wire);
+    let diag = Diagnostic {
+        level: Level::Warning,
+        message: "intentional fixture warning".to_string(),
+        spans: Vec::new(),
+    };
+    serialize_output(result_into_wire(input, vec![diag]), output, output_len);
 }
 
 unsafe extern "C-unwind" fn panic_macro(
