@@ -28,6 +28,17 @@ pub fn recover(
         }
     }
 
+    // Defensive: ensure the next file number is beyond any existing SSTable so
+    // we never overwrite a file referenced by the recovered version.
+    let max_file = version_set
+        .current()
+        .levels
+        .iter()
+        .flat_map(|level| level.iter().map(|f| f.number))
+        .max()
+        .unwrap_or(0);
+    version_set.set_next_file_number(max_file + 1);
+
     // 2. Replay WAL.
     let wal = storage_wal::Wal::open(
         db_path.join("wal"),

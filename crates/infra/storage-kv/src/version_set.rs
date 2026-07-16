@@ -39,6 +39,18 @@ impl VersionSet {
         n
     }
 
+    /// Return the next file number that will be assigned (without consuming it).
+    pub fn next_file_number(&self) -> FileNumber {
+        self.inner.lock().unwrap().next_file_number
+    }
+
+    /// Set the next file number. Used during recovery to ensure reused opens
+    /// do not collide with existing SSTable files.
+    pub fn set_next_file_number(&self, n: FileNumber) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.next_file_number = inner.next_file_number.max(n);
+    }
+
     #[allow(dead_code)]
     pub fn last_sequence(&self) -> u64 {
         self.inner.lock().unwrap().last_sequence

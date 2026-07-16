@@ -11,7 +11,8 @@ use bytes::Bytes;
 
 use crate::compaction::pick_compaction;
 use crate::cursor::LsmCursor;
-use crate::immutable::sstable_path;
+use crate::flush::flush_memtable;
+use crate::immutable::{ImmutableMemTables, sstable_path};
 use crate::internal_key::{extract_user_key, parse_internal_key, ValueType};
 use crate::manifest::Manifest;
 use crate::memtable::MemTable;
@@ -23,11 +24,13 @@ use crate::transaction::LsmTransaction;
 use crate::version::FileMetaData;
 use crate::version_set::{VersionEdit, VersionSet};
 use crate::wal::WalRecord;
+use crate::worker::{Worker, WorkerCommand};
 use crate::{Error, Result, SequenceNumber};
 
 /// Public handle to an LSM-tree engine.
 pub struct LsmEngine {
     inner: LsmEngineInner,
+    worker: Option<Worker>,
 }
 
 impl LsmEngine {
@@ -38,7 +41,8 @@ impl LsmEngine {
         std::fs::create_dir_all(&path)?;
 
         let version_set = Arc::new(VersionSet::new(options.num_levels));
-        let (recovered_mem, last_sequence) = recovery::recover(&path, &options, &version_set)?;
+        let (recovered_mem, last_sequence) =
+            recovery::recover(&path, &options, &version_set)?;
 
         let wal = storage_wal::Wal::open(
             path.join("wal"),
@@ -49,11 +53,11 @@ impl LsmEngine {
         )?;
 
         let manifest_path = path.join("MANIFEST-000001");
-        let manifest = if manifest_path.exists() {
+        let manifest = Arc::new(Mutex::new(if manifest_path.exists() {
             Manifest::open(&manifest_path)?
         } else {
             Manifest::create(&manifest_path)?
-        };
+        }));
         std::fs::write(path.join("CURRENT"), "MANIFEST-000001\n")?;
 
         let state = Arc::new(Mutex::new(EngineState {
@@ -63,11 +67,19 @@ impl LsmEngine {
             manifest,
             version_set,
             memtable: Arc::new(recovered_mem),
+            immutable: ImmutableMemTables::new(options.max_write_buffer_number.saturating_sub(1).max(1)),
+            active_flushes: 0,
             last_sequence,
         }));
 
+        let (worker, flush_sender) = Worker::spawn(Arc::clone(&state));
+
         Ok(Self {
-            inner: LsmEngineInner { state },
+            inner: LsmEngineInner {
+                state,
+                flush_sender,
+            },
+            worker: Some(worker),
         })
     }
 
@@ -86,6 +98,15 @@ impl LsmEngine {
 
     pub fn sync(&self) -> Result<()> {
         self.inner.sync()
+    }
+}
+
+impl Drop for LsmEngine {
+    fn drop(&mut self) {
+        // Shut down the background worker, waiting for all pending flushes.
+        if let Some(worker) = self.worker.take() {
+            worker.shutdown();
+        }
     }
 }
 
@@ -134,6 +155,7 @@ impl storage_traits::Engine for LsmEngine {
 #[derive(Clone)]
 pub struct LsmEngineInner {
     state: Arc<Mutex<EngineState>>,
+    flush_sender: crossbeam_channel::Sender<WorkerCommand>,
 }
 
 impl LsmEngineInner {
@@ -154,7 +176,11 @@ impl LsmEngineInner {
         Arc::get_mut(&mut state.memtable)
             .expect("single owner")
             .put(key, sequence, value);
-        Self::maybe_freeze(&mut state)?;
+        let queued = Self::maybe_freeze(&mut state)?;
+        drop(state);
+        if queued {
+            let _ = self.flush_sender.send(WorkerCommand::Wake);
+        }
         Ok(())
     }
 
@@ -165,7 +191,11 @@ impl LsmEngineInner {
         Arc::get_mut(&mut state.memtable)
             .expect("single owner")
             .delete(key, sequence);
-        Self::maybe_freeze(&mut state)?;
+        let queued = Self::maybe_freeze(&mut state)?;
+        drop(state);
+        if queued {
+            let _ = self.flush_sender.send(WorkerCommand::Wake);
+        }
         Ok(())
     }
 
@@ -176,61 +206,37 @@ impl LsmEngineInner {
         Ok(())
     }
 
-    fn maybe_freeze(state: &mut EngineState) -> Result<()> {
+    /// Freeze the current MemTable when it reaches `write_buffer_size`.
+    ///
+    /// Returns `true` if a MemTable was queued for background flush. If the
+    /// immutable queue is already full, the MemTable is flushed synchronously
+    /// under the lock to apply backpressure.
+    fn maybe_freeze(state: &mut EngineState) -> Result<bool> {
         if state.memtable.approximate_size() >= state.options.write_buffer_size {
             let old_mem = std::mem::replace(&mut state.memtable, Arc::new(MemTable::new()));
-            Self::flush_memtable(state, old_mem)?;
-            Self::maybe_compact(state)?;
-        }
-        Ok(())
-    }
-
-    fn flush_memtable(state: &mut EngineState, mem: Arc<MemTable>) -> Result<FileMetaData> {
-        let file_number = state.version_set.new_file_number();
-        let path = sstable_path(&state.path, file_number);
-        let opts = SSTableBuilderOptions {
-            block_size: state.options.block_size,
-            block_restart_interval: state.options.block_restart_interval,
-            bloom_bits_per_key: state.options.bloom_bits_per_key,
-        };
-        let mut builder = SSTableBuilder::open(path, opts)?;
-        // The MemTable iter is sorted by internal-key comparator (user key
-        // ascending, sequence descending). Keep only the newest version of each
-        // user key, then reorder by raw internal-key bytes because the SSTable
-        // block format relies on lexicographic ordering.
-        let mut deduped: Vec<(Vec<u8>, Bytes)> = Vec::new();
-        let mut last_user_key: Option<Vec<u8>> = None;
-        for (ikey, value) in mem.iter() {
-            let user_key = extract_user_key(&ikey).to_vec();
-            if Some(&user_key) == last_user_key.as_ref() {
-                continue;
+            if state.immutable.is_full() {
+                // Backpressure path: flush synchronously when the worker can't
+                // keep up. This avoids unbounded memory growth.
+                flush_memtable(
+                    &state.path,
+                    &state.options,
+                    &state.version_set,
+                    &state.manifest,
+                    &old_mem,
+                    state.last_sequence,
+                )?;
+                Self::maybe_compact(state)?;
+                Ok(false)
+            } else {
+                state.immutable.push(old_mem);
+                Ok(true)
             }
-            last_user_key = Some(user_key);
-            deduped.push((ikey, value));
+        } else {
+            Ok(false)
         }
-        deduped.sort_by(|a, b| a.0.cmp(&b.0));
-        for (ikey, value) in deduped {
-            builder.add(&ikey, &value)?;
-        }
-        let built = builder.finish()?;
-        let meta = FileMetaData {
-            number: file_number,
-            file_size: built.file_size,
-            smallest: built.smallest_key,
-            largest: built.largest_key,
-        };
-
-        let edit = VersionEdit {
-            new_files: vec![(0, meta.clone())],
-            last_sequence: state.last_sequence,
-            ..Default::default()
-        };
-        state.manifest.log_edit(&edit)?;
-        state.version_set.apply(edit)?;
-        Ok(meta)
     }
 
-    fn maybe_compact(state: &mut EngineState) -> Result<()> {
+    pub(crate) fn maybe_compact(state: &mut EngineState) -> Result<()> {
         loop {
             let version = state.version_set.current();
             let job = match pick_compaction(&version, &state.options) {
@@ -329,6 +335,7 @@ impl LsmEngineInner {
             // Apply version edit.
             let mut edit = VersionEdit {
                 last_sequence: state.last_sequence,
+                next_file_number: state.version_set.next_file_number(),
                 ..Default::default()
             };
             for file in &inputs {
@@ -337,7 +344,7 @@ impl LsmEngineInner {
             for file in output_files {
                 edit.new_files.push((output_level, file));
             }
-            state.manifest.log_edit(&edit)?;
+            state.manifest.lock().unwrap().log_edit(&edit)?;
             state.version_set.apply(edit)?;
 
             // Delete input files.
@@ -354,6 +361,12 @@ impl LsmEngineInner {
 
         if let Some(v) = state.memtable.get(key, snapshot) {
             return Ok(v);
+        }
+
+        for mem in state.immutable.iter_newest_first() {
+            if let Some(v) = mem.get(key, snapshot) {
+                return Ok(v);
+            }
         }
 
         let version = state.version_set.current();
@@ -423,6 +436,9 @@ impl LsmEngineInner {
         {
             let state = self.state.lock().unwrap();
             add_entries(&mut candidates, &state.memtable.iter());
+            for mem in state.immutable.iter_newest_first() {
+                add_entries(&mut candidates, &mem.iter());
+            }
 
             let version = state.version_set.current();
             drop(state);
@@ -481,9 +497,19 @@ impl LsmEngineInner {
     }
 
     pub(crate) fn sync(&self) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+        // Wake the worker so any queued immutable MemTables are flushed.
+        let _ = self.flush_sender.send(WorkerCommand::Wake);
+        loop {
+            let state = self.state.lock().unwrap();
+            if state.immutable.is_empty() && state.active_flushes == 0 {
+                break;
+            }
+            drop(state);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let state = self.state.lock().unwrap();
         // WAL already fsyncs every append. Force manifest sync for metadata.
-        state.manifest.sync()
+        state.manifest.lock().unwrap().sync()
     }
 
     fn path(&self) -> PathBuf {
@@ -491,12 +517,14 @@ impl LsmEngineInner {
     }
 }
 
-struct EngineState {
-    path: PathBuf,
-    options: LsmOptions,
-    wal: storage_wal::Wal,
-    manifest: Manifest,
-    version_set: Arc<VersionSet>,
-    memtable: Arc<MemTable>,
-    last_sequence: SequenceNumber,
+pub(crate) struct EngineState {
+    pub(crate) path: PathBuf,
+    pub(crate) options: LsmOptions,
+    pub(crate) wal: storage_wal::Wal,
+    pub(crate) manifest: Arc<Mutex<Manifest>>,
+    pub(crate) version_set: Arc<VersionSet>,
+    pub(crate) memtable: Arc<MemTable>,
+    pub(crate) immutable: ImmutableMemTables,
+    pub(crate) active_flushes: usize,
+    pub(crate) last_sequence: SequenceNumber,
 }
