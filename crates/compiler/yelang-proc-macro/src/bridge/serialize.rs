@@ -1,8 +1,12 @@
 //! Convert between `TokenStream` and `WireTokenStream`.
 
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+
 use yelang_proc_macro_bridge::protocol::token::{
-    WireDelimiter, WireDiagnostic, WireDiagnosticSpan, WireExpansionResult, WireLevel, WireLitKind,
-    WireSpacing, WireSpan, WireTokenStream, WireTokenTree,
+    WireDelimiter, WireDiagnostic, WireDiagnosticSpan, WireExpansionResult, WireExpnData,
+    WireExpnKind, WireHygienePayload, WireLevel, WireLitKind, WireSpacing, WireSpan,
+    WireSyntaxContext, WireTokenStream, WireTokenTree, WireTransparency,
 };
 
 use crate::api::diagnostic::DiagnosticSpan;
@@ -32,6 +36,38 @@ pub fn set_call_site_from_wire(span: WireSpan) {
 /// Clear the thread-local call-site span after a macro invocation finishes.
 pub fn clear_call_site() {
     Span::clear_call_site();
+}
+
+/// Set the thread-local definition-site span from its wire representation.
+pub fn set_def_site_from_wire(span: WireSpan) {
+    Span::set_def_site(span_from_wire(span));
+}
+
+/// Set the thread-local mixed-site span from its wire representation.
+pub fn set_mixed_site_from_wire(span: WireSpan) {
+    Span::set_mixed_site(span_from_wire(span));
+}
+
+/// Clear all thread-local site spans.
+pub fn clear_sites() {
+    Span::clear_sites();
+}
+
+thread_local! {
+    /// Hygiene payload for the tokens currently being expanded, sent by the
+    /// compiler. The output payload is built from the contexts actually used in
+    /// the macro output plus their ancestor chains.
+    static INPUT_HYGIENE: RefCell<Option<WireHygienePayload>> = const { RefCell::new(None) };
+}
+
+/// Load the input hygiene payload for the current macro invocation.
+pub fn set_hygiene_from_wire(hygiene: WireHygienePayload) {
+    INPUT_HYGIENE.with(|c| *c.borrow_mut() = Some(hygiene));
+}
+
+/// Clear the input hygiene payload after the macro invocation finishes.
+pub fn clear_hygiene() {
+    INPUT_HYGIENE.with(|c| *c.borrow_mut() = None);
 }
 
 /// Convert a public API `TokenStream` into a `WireTokenStream` for sending to
@@ -182,8 +218,10 @@ fn lit_kind_into_wire(kind: &yelang_macro_core::LitKind) -> WireLitKind {
 }
 
 /// Convert a `WireExpansionResult` from the server into the public API
-/// `(TokenStream, Vec<Diagnostic>)` pair.
-pub fn result_from_wire(result: WireExpansionResult) -> (TokenStream, Vec<Diagnostic>) {
+/// `(TokenStream, Vec<Diagnostic>, hygiene)` triple.
+pub fn result_from_wire(
+    result: WireExpansionResult,
+) -> (TokenStream, Vec<Diagnostic>, WireHygienePayload) {
     (
         from_wire(result.output),
         result
@@ -191,15 +229,192 @@ pub fn result_from_wire(result: WireExpansionResult) -> (TokenStream, Vec<Diagno
             .into_iter()
             .map(diagnostic_from_wire)
             .collect(),
+        result.hygiene,
     )
 }
 
 /// Convert a public API `(TokenStream, Vec<Diagnostic>)` pair into a
 /// `WireExpansionResult` for sending to the server.
 pub fn result_into_wire(output: TokenStream, diagnostics: Vec<Diagnostic>) -> WireExpansionResult {
+    let output = into_wire(output);
+    let hygiene = build_output_hygiene(&output);
     WireExpansionResult {
-        output: into_wire(output),
+        output,
         diagnostics: diagnostics.into_iter().map(diagnostic_into_wire).collect(),
+        hygiene,
+    }
+}
+
+/// Build a hygiene payload describing every syntax context used in `output`.
+///
+/// The output payload contains the subset of the input payload reachable from
+/// the contexts that appear on output tokens, including all ancestor contexts
+/// and their associated expansion data.
+fn build_output_hygiene(output: &WireTokenStream) -> WireHygienePayload {
+    let mut used = HashSet::new();
+    collect_syntax_contexts_from_stream(output, &mut used);
+
+    let input = INPUT_HYGIENE
+        .with(|c| c.borrow().clone())
+        .unwrap_or_default();
+    let context_map: HashMap<u32, WireSyntaxContext> =
+        input.contexts.iter().map(|c| (c.id, *c)).collect();
+    let expansion_map: HashMap<u64, WireExpnData> =
+        input.expansions.iter().map(|e| (e.id, *e)).collect();
+
+    let mut contexts = Vec::new();
+    let mut expansions = Vec::new();
+    let mut seen_ctx = HashSet::new();
+    let mut seen_expn = HashSet::new();
+
+    fn add_context(
+        id: u32,
+        context_map: &HashMap<u32, WireSyntaxContext>,
+        expansion_map: &HashMap<u64, WireExpnData>,
+        contexts: &mut Vec<WireSyntaxContext>,
+        expansions: &mut Vec<WireExpnData>,
+        seen_ctx: &mut HashSet<u32>,
+        seen_expn: &mut HashSet<u64>,
+    ) {
+        if id == 0 || !seen_ctx.insert(id) {
+            return;
+        }
+
+        let ctx = context_map.get(&id).copied().unwrap_or(WireSyntaxContext {
+            id,
+            parent: None,
+            outer_expn: None,
+            transparency: WireTransparency::Opaque,
+        });
+        contexts.push(ctx);
+
+        if let Some(parent) = ctx.parent {
+            add_context(
+                parent,
+                context_map,
+                expansion_map,
+                contexts,
+                expansions,
+                seen_ctx,
+                seen_expn,
+            );
+        }
+        if let Some(outer_expn) = ctx.outer_expn {
+            add_expn(
+                outer_expn,
+                expansion_map,
+                contexts,
+                expansions,
+                seen_ctx,
+                seen_expn,
+                context_map,
+            );
+        }
+    }
+
+    fn add_expn(
+        id: u64,
+        expansion_map: &HashMap<u64, WireExpnData>,
+        contexts: &mut Vec<WireSyntaxContext>,
+        expansions: &mut Vec<WireExpnData>,
+        seen_ctx: &mut HashSet<u32>,
+        seen_expn: &mut HashSet<u64>,
+        context_map: &HashMap<u32, WireSyntaxContext>,
+    ) {
+        if id == 0 || !seen_expn.insert(id) {
+            return;
+        }
+
+        let expn = expansion_map.get(&id).copied().unwrap_or(WireExpnData {
+            id,
+            parent: 0,
+            call_site: WireSpan {
+                lo: 0,
+                hi: 0,
+                file: 0,
+                syntax_context: 1,
+            },
+            def_site: WireSpan {
+                lo: 0,
+                hi: 0,
+                file: 0,
+                syntax_context: 1,
+            },
+            kind: WireExpnKind::Macro,
+        });
+        expansions.push(expn);
+
+        if expn.parent != 0 {
+            add_expn(
+                expn.parent,
+                expansion_map,
+                contexts,
+                expansions,
+                seen_ctx,
+                seen_expn,
+                context_map,
+            );
+        }
+        add_context(
+            expn.call_site.syntax_context,
+            context_map,
+            expansion_map,
+            contexts,
+            expansions,
+            seen_ctx,
+            seen_expn,
+        );
+        add_context(
+            expn.def_site.syntax_context,
+            context_map,
+            expansion_map,
+            contexts,
+            expansions,
+            seen_ctx,
+            seen_expn,
+        );
+    }
+
+    for id in used {
+        add_context(
+            id,
+            &context_map,
+            &expansion_map,
+            &mut contexts,
+            &mut expansions,
+            &mut seen_ctx,
+            &mut seen_expn,
+        );
+    }
+
+    WireHygienePayload {
+        contexts,
+        expansions,
+    }
+}
+
+fn collect_syntax_contexts_from_stream(stream: &WireTokenStream, out: &mut HashSet<u32>) {
+    for tree in &stream.trees {
+        collect_syntax_contexts_from_tree(tree, out);
+    }
+}
+
+fn collect_syntax_contexts_from_tree(tree: &WireTokenTree, out: &mut HashSet<u32>) {
+    match tree {
+        WireTokenTree::Group { span, trees, .. } => {
+            out.insert(span.syntax_context);
+            collect_syntax_contexts_from_stream(
+                &WireTokenStream {
+                    trees: trees.clone(),
+                },
+                out,
+            );
+        }
+        WireTokenTree::Ident { span, .. }
+        | WireTokenTree::Punct { span, .. }
+        | WireTokenTree::Literal { span, .. } => {
+            out.insert(span.syntax_context);
+        }
     }
 }
 

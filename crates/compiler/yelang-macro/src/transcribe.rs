@@ -642,4 +642,57 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn transcription_applies_generated_context_to_terminals() {
+        let interner = Interner::new();
+        let generated_ctx = SyntaxContextId::new(42);
+        let ops = vec![TranscriberOp::Terminal(TokenTree::Ident(Ident::new(
+            interner.get_or_intern("x"),
+            Span::default(),
+        )))];
+        let out = transcribe(
+            &ops,
+            &Bindings::new(),
+            &interner,
+            generated_ctx,
+            CrateId::new(1),
+        )
+        .unwrap();
+        let trees: Vec<_> = out.into_iter().collect();
+        assert_eq!(trees.len(), 1);
+        let TokenTree::Ident(ident) = &trees[0] else {
+            panic!("expected ident, got {:?}", trees[0]);
+        };
+        assert_eq!(ident.span.ctx, generated_ctx);
+    }
+
+    #[test]
+    fn transcription_preserves_captured_binding_context() {
+        let interner = Interner::new();
+        let captured_ctx = SyntaxContextId::new(7);
+        let captured_span = Span::default().with_ctx(captured_ctx);
+        let mut bindings = Bindings::new();
+        bindings.insert(
+            interner.get_or_intern("x"),
+            Binding::single(TokenStream::from_vec(vec![TokenTree::Ident(Ident::new(
+                interner.get_or_intern("foo"),
+                captured_span,
+            ))])),
+        );
+        let ops = vec![TranscriberOp::Subst(interner.get_or_intern("x"))];
+        let out = transcribe(
+            &ops,
+            &bindings,
+            &interner,
+            SyntaxContextId::new(42),
+            CrateId::new(1),
+        )
+        .unwrap();
+        let trees: Vec<_> = out.into_iter().collect();
+        let TokenTree::Ident(ident) = &trees[0] else {
+            panic!("expected ident, got {:?}", trees[0]);
+        };
+        assert_eq!(ident.span.ctx, captured_ctx);
+    }
 }

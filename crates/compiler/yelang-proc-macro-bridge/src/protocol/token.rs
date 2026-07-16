@@ -67,6 +67,61 @@ pub struct WireSpan {
     pub syntax_context: u32,
 }
 
+/// Hygiene data sent alongside a token stream so the server can reconstruct
+/// spans with their full syntax-context chains, and so the compiler can
+/// reconstruct contexts returned by the macro.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireHygienePayload {
+    /// Syntax contexts referenced by tokens in the accompanying stream.
+    pub contexts: Vec<WireSyntaxContext>,
+    /// Expansion data for every `ExpnId` referenced by the contexts.
+    pub expansions: Vec<WireExpnData>,
+}
+
+impl WireHygienePayload {
+    /// An empty payload for the root context.
+    pub fn empty() -> Self {
+        Self {
+            contexts: Vec::new(),
+            expansions: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireSyntaxContext {
+    pub id: u32,
+    pub parent: Option<u32>,
+    pub outer_expn: Option<u64>,
+    pub transparency: WireTransparency,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireExpnData {
+    pub id: u64,
+    pub parent: u64,
+    pub call_site: WireSpan,
+    pub def_site: WireSpan,
+    pub kind: WireExpnKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireTransparency {
+    Opaque,
+    Transparent,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireExpnKind {
+    Root,
+    MacroRules,
+    Macro,
+    ProcMacro,
+    Comptime,
+    AstPass,
+}
+
 /// A diagnostic on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireDiagnostic {
@@ -98,4 +153,16 @@ pub enum WireLevel {
 pub struct WireExpansionResult {
     pub output: WireTokenStream,
     pub diagnostics: Vec<WireDiagnostic>,
+    pub hygiene: WireHygienePayload,
+}
+
+impl WireExpansionResult {
+    /// Result with no output, diagnostics, or hygiene data.
+    pub fn empty() -> Self {
+        Self {
+            output: WireTokenStream { trees: Vec::new() },
+            diagnostics: Vec::new(),
+            hygiene: WireHygienePayload::empty(),
+        }
+    }
 }

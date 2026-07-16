@@ -12,6 +12,7 @@ pub use run::{
     run_fn_like_macro, run_fn_like_macro_to_bytes,
 };
 pub use serialize::{
-    clear_call_site, from_wire, into_wire, result_from_wire, result_into_wire,
-    set_call_site_from_wire,
+    clear_call_site, clear_hygiene, clear_sites, from_wire, into_wire, result_from_wire,
+    result_into_wire, set_call_site_from_wire, set_def_site_from_wire, set_hygiene_from_wire,
+    set_mixed_site_from_wire,
 };

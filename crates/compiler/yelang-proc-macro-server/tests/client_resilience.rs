@@ -4,6 +4,7 @@ mod macro_fixture;
 
 use macro_fixture::{fixture_dylib_path, server_path};
 use yelang_macro::proc_macro::{ProcMacroClient, ProcMacroClientError};
+use yelang_proc_macro_bridge::protocol::token::{WireHygienePayload, WireSpan};
 use yelang_proc_macro_bridge::sandbox::Limits;
 
 fn empty_stream() -> yelang_proc_macro_bridge::protocol::WireTokenStream {
@@ -39,6 +40,8 @@ fn client_detects_server_death_and_restarts() {
             8,
             empty_stream(),
             default_call_site(),
+            default_call_site(),
+            WireHygienePayload::empty(),
             Limits::default(),
         )
         .expect_err("expected server death");
@@ -53,12 +56,14 @@ fn client_detects_server_death_and_restarts() {
     let library = client
         .load_library(&dylib.to_string_lossy())
         .expect("reload fixture library after restart");
-    let (output, _) = client
+    let (output, _, _) = client
         .expand_fn_like(
             library.handle,
             0,
             empty_stream(),
             default_call_site(),
+            default_call_site(),
+            WireHygienePayload::empty(),
             Limits::default(),
         )
         .expect("expand after restart");
@@ -84,6 +89,8 @@ fn client_restarts_dead_server_transparently_between_requests() {
         8,
         empty_stream(),
         default_call_site(),
+        default_call_site(),
+        WireHygienePayload::empty(),
         Limits::default(),
     );
 

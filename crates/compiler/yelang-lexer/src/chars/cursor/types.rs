@@ -86,11 +86,29 @@ impl Display for Position {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+/// The raw value used for the root hygiene context. Matches
+/// `yelang_macro_core::SyntaxContextId::default()`.
+pub const ROOT_SYNTAX_CONTEXT: u32 = 1;
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Span {
     pub(super) start: Position,
     pub(super) end: Position,
     pub(super) file_id: FileId,
+    /// Hygiene context ID. Stored as a raw `u32` to keep `yelang-lexer`
+    /// independent of `yelang-macro-core`. The root context is 1.
+    pub(super) syntax_context: u32,
+}
+
+impl Default for Span {
+    fn default() -> Self {
+        Self {
+            start: Position::default(),
+            end: Position::default(),
+            file_id: FileId::default(),
+            syntax_context: ROOT_SYNTAX_CONTEXT,
+        }
+    }
 }
 
 impl std::fmt::Debug for Span {
@@ -98,6 +116,7 @@ impl std::fmt::Debug for Span {
         f.debug_struct("Span")
             .field("start", &self.start)
             .field("end", &self.end)
+            .field("syntax_context", &self.syntax_context)
             .finish()
     }
 }
@@ -108,6 +127,7 @@ impl Span {
             start,
             end,
             file_id: FileId::default(),
+            syntax_context: ROOT_SYNTAX_CONTEXT,
         }
     }
 
@@ -116,6 +136,14 @@ impl Span {
             start,
             end,
             file_id,
+            syntax_context: ROOT_SYNTAX_CONTEXT,
+        }
+    }
+
+    pub fn with_syntax_context(self, syntax_context: u32) -> Self {
+        Self {
+            syntax_context,
+            ..self
         }
     }
 
@@ -124,6 +152,7 @@ impl Span {
             start: Position::default(),
             end: Position::default(),
             file_id,
+            syntax_context: ROOT_SYNTAX_CONTEXT,
         }
     }
 
@@ -140,6 +169,7 @@ impl Span {
             start: self.start.min(other.start),
             end: self.end.max(other.end),
             file_id: self.file_id,
+            syntax_context: self.syntax_context,
         }
     }
 
@@ -156,7 +186,9 @@ impl Span {
     }
 
     pub(crate) fn is_default(&self) -> bool {
-        self.start == Position::default() && self.end == Position::default()
+        self.start == Position::default()
+            && self.end == Position::default()
+            && self.syntax_context == ROOT_SYNTAX_CONTEXT
     }
 
     pub fn start(&self) -> Position {
@@ -165,6 +197,10 @@ impl Span {
 
     pub fn end(&self) -> Position {
         self.end
+    }
+
+    pub fn syntax_context(&self) -> u32 {
+        self.syntax_context
     }
 }
 

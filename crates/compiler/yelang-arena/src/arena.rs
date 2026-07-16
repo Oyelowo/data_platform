@@ -1,4 +1,6 @@
-use slotmap::{DefaultKey, SecondaryMap, SlotMap as InnerSlotMap, SparseSecondaryMap};
+use slotmap::{
+    DefaultKey, Key, KeyData, SecondaryMap, SlotMap as InnerSlotMap, SparseSecondaryMap,
+};
 
 /// An arena allocator that assigns stable keys to values.
 ///
@@ -15,6 +17,19 @@ pub struct Arena<T> {
 /// A stable key into an `Arena`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ArenaKey(DefaultKey);
+
+impl ArenaKey {
+    /// Return the opaque key as a stable integer suitable for serialization.
+    pub fn as_u64(self) -> u64 {
+        Key::data(&self.0).as_ffi()
+    }
+
+    /// Reconstruct an `ArenaKey` from a value previously returned by
+    /// [`Self::as_u64`]. Returns `None` if the integer is not a valid key.
+    pub fn from_u64(raw: u64) -> Option<Self> {
+        Some(ArenaKey(DefaultKey::from(KeyData::from_ffi(raw))))
+    }
+}
 
 impl<T> Arena<T> {
     pub fn new() -> Self {

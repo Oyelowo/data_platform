@@ -8,7 +8,7 @@ use yelang_proc_macro_bridge::protocol::{
     CURRENT_PROTOCOL_VERSION, ErrorCode, LibraryHandle, MacroDescriptor, ProcMacroKind, Request,
     Response, WireTokenStream,
     serialize::{read_response, write_request},
-    token::{WireDiagnostic, WireLevel, WireTokenTree},
+    token::{WireDiagnostic, WireHygienePayload, WireLevel, WireSpan, WireTokenTree},
 };
 use yelang_proc_macro_bridge::sandbox::Limits;
 
@@ -16,13 +16,26 @@ fn server_path() -> &'static str {
     env!("CARGO_BIN_EXE_yelang-proc-macro-server")
 }
 
-fn default_call_site() -> yelang_proc_macro_bridge::protocol::token::WireSpan {
-    yelang_proc_macro_bridge::protocol::token::WireSpan {
+fn default_call_site() -> WireSpan {
+    WireSpan {
         lo: 0,
         hi: 0,
         file: 0,
         syntax_context: 0,
     }
+}
+
+fn default_def_site() -> WireSpan {
+    WireSpan {
+        lo: 0,
+        hi: 0,
+        file: 0,
+        syntax_context: 0,
+    }
+}
+
+fn empty_hygiene() -> WireHygienePayload {
+    WireHygienePayload::empty()
 }
 
 /// Return the path to the compiled `test_macro` dylib fixture.
@@ -211,6 +224,8 @@ fn expand_fn_like_macro() {
             macro_index: 0,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -218,7 +233,7 @@ fn expand_fn_like_macro() {
 
     let response = read_response(server.stdout()).unwrap();
     match response {
-        Response::Expanded { output } => {
+        Response::Expanded { output, .. } => {
             assert_eq!(output.trees.len(), 1);
             match &output.trees[0] {
                 WireTokenTree::Literal { text, kind, .. } => {
@@ -257,6 +272,8 @@ fn expand_attribute_macro() {
             args: empty_stream(),
             item: item.clone(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -264,7 +281,7 @@ fn expand_attribute_macro() {
 
     let response = read_response(server.stdout()).unwrap();
     match response {
-        Response::Expanded { output } => {
+        Response::Expanded { output, .. } => {
             assert_eq!(output, item);
         }
         other => panic!("expected Expanded, got {:?}", other),
@@ -291,6 +308,8 @@ fn expand_derive_macro() {
             macro_index: 2,
             item: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -298,7 +317,7 @@ fn expand_derive_macro() {
 
     let response = read_response(server.stdout()).unwrap();
     match response {
-        Response::Expanded { output } => {
+        Response::Expanded { output, .. } => {
             assert_eq!(output.trees.len(), 1);
             match &output.trees[0] {
                 WireTokenTree::Literal { text, kind, .. } => {
@@ -335,6 +354,8 @@ fn panic_in_macro_returns_error_diagnostic() {
             macro_index: 5,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -380,6 +401,8 @@ fn macro_index_out_of_bounds_returns_error() {
             macro_index: 99,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -420,6 +443,8 @@ fn wrong_macro_kind_returns_error() {
             macro_index: 0,
             item: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -459,6 +484,8 @@ fn expand_generate_const_derive_macro() {
             macro_index: 3,
             item: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -466,7 +493,7 @@ fn expand_generate_const_derive_macro() {
 
     let response = read_response(server.stdout()).unwrap();
     match response {
-        Response::Expanded { output } => {
+        Response::Expanded { output, .. } => {
             assert!(!output.trees.is_empty());
         }
         other => panic!("expected Expanded, got {:?}", other),
@@ -493,6 +520,8 @@ fn expand_emit_warning_macro_returns_diagnostic() {
             macro_index: 4,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -529,7 +558,7 @@ fn unload_library_removes_handle() {
     write_request(server.stdin(), &Request::UnloadLibrary { library: handle }).unwrap();
     let response = read_response(server.stdout()).unwrap();
     assert!(
-        matches!(response, Response::Expanded { ref output } if output.trees.is_empty()),
+        matches!(response, Response::Expanded { ref output, .. } if output.trees.is_empty()),
         "expected empty Expanded, got {:?}",
         response
     );
@@ -542,6 +571,8 @@ fn unload_library_removes_handle() {
             macro_index: 0,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits::default(),
         },
     )
@@ -581,6 +612,8 @@ fn fn_like_macro_times_out() {
             macro_index: 6,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits {
                 max_cpu_seconds: 1,
                 ..Limits::default()
@@ -634,6 +667,8 @@ fn fn_like_macro_output_limit() {
             macro_index: 7,
             input: empty_stream(),
             call_site: default_call_site(),
+            def_site: default_def_site(),
+            hygiene: empty_hygiene(),
             limits: Limits {
                 max_output_tokens: 100,
                 ..Limits::default()

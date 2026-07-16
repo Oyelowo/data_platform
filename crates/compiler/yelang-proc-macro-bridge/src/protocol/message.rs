@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::token::{WireDiagnostic, WireSpan, WireTokenStream};
+use super::token::{WireDiagnostic, WireHygienePayload, WireSpan, WireTokenStream};
 use crate::sandbox::Limits;
 
 slotmap::new_key_type! {
@@ -23,6 +23,8 @@ pub enum Request {
         macro_index: u32,
         input: WireTokenStream,
         call_site: WireSpan,
+        def_site: WireSpan,
+        hygiene: WireHygienePayload,
         limits: Limits,
     },
     /// Invoke an attribute macro.
@@ -32,6 +34,8 @@ pub enum Request {
         args: WireTokenStream,
         item: WireTokenStream,
         call_site: WireSpan,
+        def_site: WireSpan,
+        hygiene: WireHygienePayload,
         limits: Limits,
     },
     /// Invoke a derive macro.
@@ -40,6 +44,8 @@ pub enum Request {
         macro_index: u32,
         item: WireTokenStream,
         call_site: WireSpan,
+        def_site: WireSpan,
+        hygiene: WireHygienePayload,
         limits: Limits,
     },
     /// Unload a previously loaded library.
@@ -59,7 +65,10 @@ pub enum Response {
         macros: Vec<MacroDescriptor>,
     },
     /// Expansion succeeded.
-    Expanded { output: WireTokenStream },
+    Expanded {
+        output: WireTokenStream,
+        hygiene: WireHygienePayload,
+    },
     /// Expansion produced a diagnostic.
     Diagnostic { diagnostic: WireDiagnostic },
     /// The macro panicked.

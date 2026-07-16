@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use yelang_proc_macro_bridge::protocol::token::WireHygienePayload;
 use yelang_proc_macro_bridge::protocol::{LibraryHandle, ProcMacroKind};
 use yelang_proc_macro_bridge::sandbox::Limits;
 
@@ -166,11 +167,14 @@ impl ProcMacroRuntime {
         args: Option<yelang_proc_macro_bridge::protocol::WireTokenStream>,
         item: Option<yelang_proc_macro_bridge::protocol::WireTokenStream>,
         span: yelang_lexer::Span,
+        def_site: yelang_lexer::Span,
+        hygiene: WireHygienePayload,
         limits: Limits,
     ) -> Result<
         (
             yelang_proc_macro_bridge::protocol::WireTokenStream,
             Vec<yelang_proc_macro_bridge::protocol::token::WireDiagnostic>,
+            WireHygienePayload,
         ),
         ExpandError,
     > {
@@ -180,6 +184,8 @@ impl ProcMacroRuntime {
             args,
             item,
             span,
+            def_site,
+            hygiene,
             limits,
         )
     }

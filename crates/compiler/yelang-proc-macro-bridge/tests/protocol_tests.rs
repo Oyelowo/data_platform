@@ -4,7 +4,7 @@ use yelang_proc_macro_bridge::protocol::{
     CURRENT_PROTOCOL_VERSION, ErrorCode, LibraryHandle, MacroDescriptor, ProcMacroKind, Request,
     Response, WireTokenStream, negotiate_version,
     serialize::{read_request, write_request},
-    token::{WireDelimiter, WireSpan, WireTokenTree},
+    token::{WireDelimiter, WireHygienePayload, WireSpan, WireTokenTree},
 };
 use yelang_proc_macro_bridge::sandbox::Limits;
 
@@ -57,6 +57,13 @@ fn expand_fn_like_round_trip() {
             file: 1,
             syntax_context: 0,
         },
+        def_site: WireSpan {
+            lo: 100,
+            hi: 110,
+            file: 2,
+            syntax_context: 0,
+        },
+        hygiene: WireHygienePayload::empty(),
         limits: Limits::default(),
     };
     let mut buf = Vec::new();

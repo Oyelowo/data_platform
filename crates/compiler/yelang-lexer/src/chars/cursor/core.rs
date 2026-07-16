@@ -291,6 +291,7 @@ impl Span {
             start: cursor.current_pos,
             end: cursor.current_pos,
             file_id: cursor.file_id,
+            syntax_context: crate::chars::cursor::ROOT_SYNTAX_CONTEXT,
         }
     }
 

@@ -3,7 +3,7 @@
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use thiserror::Error;
-use yelang_proc_macro_bridge::protocol::token::{WireDiagnostic, WireSpan};
+use yelang_proc_macro_bridge::protocol::token::{WireDiagnostic, WireHygienePayload, WireSpan};
 use yelang_proc_macro_bridge::protocol::{
     CURRENT_PROTOCOL_VERSION, ErrorCode, LibraryHandle, MacroDescriptor, Request, Response,
     WireTokenStream, read_response, write_request,
@@ -189,14 +189,19 @@ impl ProcMacroClient {
         macro_index: u32,
         input: WireTokenStream,
         call_site: WireSpan,
+        def_site: WireSpan,
+        hygiene: WireHygienePayload,
         limits: Limits,
-    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), ProcMacroClientError>
+    {
         self.ensure_alive()?;
         self.send_request(&Request::ExpandFnLike {
             library,
             macro_index,
             input,
             call_site,
+            def_site,
+            hygiene,
             limits,
         })?;
         self.read_expanded()
@@ -210,8 +215,11 @@ impl ProcMacroClient {
         args: WireTokenStream,
         item: WireTokenStream,
         call_site: WireSpan,
+        def_site: WireSpan,
+        hygiene: WireHygienePayload,
         limits: Limits,
-    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), ProcMacroClientError>
+    {
         self.ensure_alive()?;
         self.send_request(&Request::ExpandAttr {
             library,
@@ -219,6 +227,8 @@ impl ProcMacroClient {
             args,
             item,
             call_site,
+            def_site,
+            hygiene,
             limits,
         })?;
         self.read_expanded()
@@ -231,14 +241,19 @@ impl ProcMacroClient {
         macro_index: u32,
         item: WireTokenStream,
         call_site: WireSpan,
+        def_site: WireSpan,
+        hygiene: WireHygienePayload,
         limits: Limits,
-    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), ProcMacroClientError>
+    {
         self.ensure_alive()?;
         self.send_request(&Request::ExpandDerive {
             library,
             macro_index,
             item,
             call_site,
+            def_site,
+            hygiene,
             limits,
         })?;
         self.read_expanded()
@@ -246,11 +261,14 @@ impl ProcMacroClient {
 
     fn read_expanded(
         &mut self,
-    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+    ) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), ProcMacroClientError>
+    {
         let mut diagnostics = Vec::new();
         loop {
             match self.read_response()? {
-                Response::Expanded { output } => return Ok((output, diagnostics)),
+                Response::Expanded { output, hygiene } => {
+                    return Ok((output, diagnostics, hygiene));
+                }
                 Response::Diagnostic { diagnostic } => diagnostics.push(diagnostic),
                 Response::Panic { message } => return Err(ProcMacroClientError::Panic(message)),
                 Response::Error { code, message } => {

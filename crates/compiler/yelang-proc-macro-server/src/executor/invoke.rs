@@ -1,8 +1,11 @@
 //! Invoke proc-macro functions across the stable serialized dylib ABI.
 
-use yelang_proc_macro::bridge::{clear_call_site, set_call_site_from_wire};
+use yelang_proc_macro::bridge::{
+    clear_call_site, clear_hygiene, clear_sites, set_call_site_from_wire, set_def_site_from_wire,
+    set_hygiene_from_wire, set_mixed_site_from_wire,
+};
 use yelang_proc_macro_bridge::protocol::token::{
-    WireDiagnostic, WireExpansionResult, WireTokenStream,
+    WireDiagnostic, WireExpansionResult, WireHygienePayload, WireSpan, WireTokenStream,
 };
 use yelang_proc_macro_bridge::sandbox::Limits;
 
@@ -52,9 +55,11 @@ pub fn invoke_fn_like(
     library: &LoadedLibrary,
     macro_index: u32,
     input: WireTokenStream,
-    call_site: yelang_proc_macro_bridge::protocol::token::WireSpan,
+    call_site: WireSpan,
+    def_site: WireSpan,
+    hygiene: WireHygienePayload,
     limits: Limits,
-) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), InvokeError> {
     let mac = library
         .get_macro(macro_index as usize)
         .ok_or(InvokeError::MacroIndexOutOfBounds)?;
@@ -68,7 +73,13 @@ pub fn invoke_fn_like(
     let input_bytes = postcard::to_allocvec(&input).map_err(InvokeError::InputSerialization)?;
 
     let (output_handle, output_len) = enforce_limits(limits, move || {
+        set_hygiene_from_wire(hygiene);
         set_call_site_from_wire(call_site);
+        set_def_site_from_wire(def_site);
+        // Full mixed-site hygiene requires compiler-side transparency handling.
+        // Until then, mixed_site falls back to the call site, which matches the
+        // most common proc-macro expectations for identifier resolution.
+        set_mixed_site_from_wire(call_site);
         let result = invoke_ffi(move || {
             let mut output_ptr: *mut u8 = std::ptr::null_mut();
             let mut output_len: usize = 0;
@@ -83,7 +94,8 @@ pub fn invoke_fn_like(
             (output_ptr, output_len)
         })
         .map(|(ptr, len)| (ptr as usize, len));
-        clear_call_site();
+        clear_sites();
+        clear_hygiene();
         result
     })??;
 
@@ -96,9 +108,11 @@ pub fn invoke_attr(
     macro_index: u32,
     args: WireTokenStream,
     item: WireTokenStream,
-    call_site: yelang_proc_macro_bridge::protocol::token::WireSpan,
+    call_site: WireSpan,
+    def_site: WireSpan,
+    hygiene: WireHygienePayload,
     limits: Limits,
-) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), InvokeError> {
     let mac = library
         .get_macro(macro_index as usize)
         .ok_or(InvokeError::MacroIndexOutOfBounds)?;
@@ -113,7 +127,10 @@ pub fn invoke_attr(
     let item_bytes = postcard::to_allocvec(&item).map_err(InvokeError::InputSerialization)?;
 
     let (output_handle, output_len) = enforce_limits(limits, move || {
+        set_hygiene_from_wire(hygiene);
         set_call_site_from_wire(call_site);
+        set_def_site_from_wire(def_site);
+        set_mixed_site_from_wire(call_site);
         let result = invoke_ffi(move || {
             let mut output_ptr: *mut u8 = std::ptr::null_mut();
             let mut output_len: usize = 0;
@@ -130,7 +147,8 @@ pub fn invoke_attr(
             (output_ptr, output_len)
         })
         .map(|(ptr, len)| (ptr as usize, len));
-        clear_call_site();
+        clear_sites();
+        clear_hygiene();
         result
     })??;
 
@@ -142,9 +160,11 @@ pub fn invoke_derive(
     library: &LoadedLibrary,
     macro_index: u32,
     item: WireTokenStream,
-    call_site: yelang_proc_macro_bridge::protocol::token::WireSpan,
+    call_site: WireSpan,
+    def_site: WireSpan,
+    hygiene: WireHygienePayload,
     limits: Limits,
-) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), InvokeError> {
     let mac = library
         .get_macro(macro_index as usize)
         .ok_or(InvokeError::MacroIndexOutOfBounds)?;
@@ -156,7 +176,10 @@ pub fn invoke_derive(
     let item_bytes = postcard::to_allocvec(&item).map_err(InvokeError::InputSerialization)?;
 
     let (output_handle, output_len) = enforce_limits(limits, move || {
+        set_hygiene_from_wire(hygiene);
         set_call_site_from_wire(call_site);
+        set_def_site_from_wire(def_site);
+        set_mixed_site_from_wire(call_site);
         let result = invoke_ffi(move || {
             let mut output_ptr: *mut u8 = std::ptr::null_mut();
             let mut output_len: usize = 0;
@@ -171,7 +194,8 @@ pub fn invoke_derive(
             (output_ptr, output_len)
         })
         .map(|(ptr, len)| (ptr as usize, len));
-        clear_call_site();
+        clear_sites();
+        clear_hygiene();
         result
     })??;
 
@@ -196,7 +220,7 @@ fn decode_result(
     output_ptr: *mut u8,
     output_len: usize,
     limits: Limits,
-) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), InvokeError> {
     if output_ptr.is_null() {
         return Err(InvokeError::NullOutput);
     }
@@ -242,5 +266,5 @@ fn decode_result(
         });
     }
 
-    Ok((result.output, result.diagnostics))
+    Ok((result.output, result.diagnostics, result.hygiene))
 }

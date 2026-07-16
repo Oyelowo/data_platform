@@ -103,6 +103,9 @@ pub struct MacroExpander<'a> {
     hygiene: HygieneData,
     /// Stack of macro invocations currently being expanded (loop detection).
     expansion_stack: Vec<ExpansionFrame>,
+    /// Stack of active hygiene contexts. The root context is always present so
+    /// nested macro expansions parent their marks to the current context.
+    hygiene_stack: Vec<yelang_macro_core::SyntaxContextId>,
     /// Total number of macro expansions performed.
     expansion_count: usize,
     /// File-system abstraction for `include!` and friends.
@@ -127,6 +130,7 @@ impl<'a> MacroExpander<'a> {
             resolver: MacroResolver::new(),
             hygiene: HygieneData::new(),
             expansion_stack: vec![],
+            hygiene_stack: vec![yelang_macro_core::SyntaxContextId::default()],
             expansion_count: 0,
             file_loader: &StdFileLoader,
             env_provider: &StdEnvProvider,
@@ -144,6 +148,7 @@ impl<'a> MacroExpander<'a> {
             resolver: MacroResolver::with_local_crate(local_crate),
             hygiene: HygieneData::new(),
             expansion_stack: vec![],
+            hygiene_stack: vec![yelang_macro_core::SyntaxContextId::default()],
             expansion_count: 0,
             file_loader: &StdFileLoader,
             env_provider: &StdEnvProvider,
@@ -2042,13 +2047,10 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_in_process_attr(mac, proc_args, proc_item, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => parse_items_from_token_stream(
-                    &stream,
-                    self.interner,
-                    &self.eager_context(),
-                )
-                .unwrap_or_else(|reason| {
-                    self.errors.push(
+                Ok(stream) => {
+                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
+                        .unwrap_or_else(|reason| {
+                            self.errors.push(
                         ExpandError::malformed_macro_args(
                             format!(
                                 "attribute macro `{}` expansion did not produce valid items: {}",
@@ -2058,8 +2060,9 @@ impl<'a> MacroExpander<'a> {
                         )
                         .with_backtrace(self.backtrace()),
                     );
-                    vec![item.clone()]
-                }),
+                            vec![item.clone()]
+                        })
+                }
                 Err(e) => {
                     self.errors.push(e);
                     vec![item.clone()]
@@ -2097,13 +2100,10 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_server_attr(&mac, attr_args_stream, item_stream, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => parse_items_from_token_stream(
-                    &stream,
-                    self.interner,
-                    &self.eager_context(),
-                )
-                .unwrap_or_else(|reason| {
-                    self.errors.push(
+                Ok(stream) => {
+                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
+                        .unwrap_or_else(|reason| {
+                            self.errors.push(
                         ExpandError::malformed_macro_args(
                             format!(
                                 "attribute macro `{}` expansion did not produce valid items: {}",
@@ -2113,8 +2113,9 @@ impl<'a> MacroExpander<'a> {
                         )
                         .with_backtrace(self.backtrace()),
                     );
-                    vec![item.clone()]
-                }),
+                            vec![item.clone()]
+                        })
+                }
                 Err(e) => {
                     self.errors.push(e);
                     vec![item.clone()]
@@ -2336,13 +2337,10 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_in_process_derive(mac, proc_item, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => parse_items_from_token_stream(
-                    &stream,
-                    self.interner,
-                    &self.eager_context(),
-                )
-                .unwrap_or_else(|reason| {
-                    self.errors.push(
+                Ok(stream) => {
+                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
+                        .unwrap_or_else(|reason| {
+                            self.errors.push(
                         ExpandError::malformed_macro_args(
                             format!(
                                 "derive macro `{}` expansion did not produce valid items: {}",
@@ -2352,8 +2350,9 @@ impl<'a> MacroExpander<'a> {
                         )
                         .with_backtrace(self.backtrace()),
                     );
-                    vec![]
-                }),
+                            vec![]
+                        })
+                }
                 Err(e) => {
                     self.errors.push(e);
                     vec![]
@@ -2619,6 +2618,10 @@ impl<'a> MacroExpander<'a> {
     }
 
     /// Transcribe a matched rule, applying hygiene.
+    ///
+    /// The generated context is parented to the current hygiene context so that
+    /// nested macro expansions form a proper chain rather than collapsing back
+    /// to the root context.
     fn transcribe_rule(
         &mut self,
         rule: &crate::matcher::types::MacroRule,
@@ -2627,18 +2630,28 @@ impl<'a> MacroExpander<'a> {
         span: yelang_lexer::Span,
         def_id: MacroDefId,
     ) -> Option<TokenStream> {
+        let parent_ctx = *self
+            .hygiene_stack
+            .last()
+            .unwrap_or(&self.hygiene.root_syntax_context());
+        let parent_expn = self
+            .hygiene
+            .syntax_context_data(parent_ctx)
+            .and_then(|data| data.outer_expn)
+            .unwrap_or_else(|| self.hygiene.root_expn());
+
         let expn_id = self.hygiene.fresh_expn(ExpnData {
-            parent: self.hygiene.root_expn(),
+            parent: parent_expn,
             call_site: span,
             def_site: span,
             kind: ExpnKind::Macro,
             desc: format!("expand {}", name),
         });
-        let generated_ctx = self.hygiene.apply_mark(
-            self.hygiene.root_syntax_context(),
-            expn_id,
-            Transparency::Opaque,
-        );
+        let generated_ctx = self
+            .hygiene
+            .apply_mark(parent_ctx, expn_id, Transparency::Opaque);
+
+        self.hygiene_stack.push(generated_ctx);
 
         let defining_crate = self
             .resolver
@@ -2646,7 +2659,7 @@ impl<'a> MacroExpander<'a> {
             .map(|d| d.defining_crate)
             .unwrap_or_else(|| CrateId::new(1));
 
-        match transcribe(
+        let result = match transcribe(
             &rule.transcriber,
             bindings,
             self.interner,
@@ -2661,7 +2674,10 @@ impl<'a> MacroExpander<'a> {
                 );
                 None
             }
-        }
+        };
+
+        self.hygiene_stack.pop();
+        result
     }
 
     /// Convert diagnostics emitted by an in-process proc macro into expansion
@@ -2731,13 +2747,27 @@ impl<'a> MacroExpander<'a> {
         args: &yelang_macro_core::token_tree::TokenStream,
         span: yelang_lexer::Span,
     ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let (def_site, mixed_site) = self.proc_macro_sites(span);
         let runtime = self
             .proc_macro_runtime
             .as_ref()
             .expect("server macro expansion requires a runtime");
         let wire_input = core_to_wire(args, self.interner);
-        let (wire_output, diagnostics) =
-            runtime.expand_proc_macro(mac, Some(wire_input), None, span, Limits::default())?;
+        let hygiene = crate::hygiene::payload_from_stream_with_spans(
+            args,
+            &[span, def_site, mixed_site],
+            &self.hygiene,
+        );
+        let (wire_output, diagnostics, returned_hygiene) = runtime.expand_proc_macro(
+            mac,
+            Some(wire_input),
+            None,
+            span,
+            def_site,
+            hygiene,
+            Limits::default(),
+        )?;
+        crate::hygiene::merge_payload(&self.hygiene, &returned_hygiene);
         self.push_server_diagnostics(&diagnostics, &mac.name, span);
         wire_to_core(wire_output, self.interner, span)
     }
@@ -2750,19 +2780,30 @@ impl<'a> MacroExpander<'a> {
         item: yelang_macro_core::token_tree::TokenStream,
         span: yelang_lexer::Span,
     ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let (def_site, mixed_site) = self.proc_macro_sites(span);
         let runtime = self
             .proc_macro_runtime
             .as_ref()
             .expect("server macro expansion requires a runtime");
         let wire_args = core_to_wire(&args, self.interner);
         let wire_item = core_to_wire(&item, self.interner);
-        let (wire_output, diagnostics) = runtime.expand_proc_macro(
+        let mut combined = args.clone();
+        combined.extend(item.clone());
+        let hygiene = crate::hygiene::payload_from_stream_with_spans(
+            &combined,
+            &[span, def_site, mixed_site],
+            &self.hygiene,
+        );
+        let (wire_output, diagnostics, returned_hygiene) = runtime.expand_proc_macro(
             mac,
             Some(wire_args),
             Some(wire_item),
             span,
+            def_site,
+            hygiene,
             Limits::default(),
         )?;
+        crate::hygiene::merge_payload(&self.hygiene, &returned_hygiene);
         self.push_server_diagnostics(&diagnostics, &mac.name, span);
         wire_to_core(wire_output, self.interner, span)
     }
@@ -2774,15 +2815,55 @@ impl<'a> MacroExpander<'a> {
         item: yelang_macro_core::token_tree::TokenStream,
         span: yelang_lexer::Span,
     ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
+        let (def_site, mixed_site) = self.proc_macro_sites(span);
         let runtime = self
             .proc_macro_runtime
             .as_ref()
             .expect("server macro expansion requires a runtime");
         let wire_item = core_to_wire(&item, self.interner);
-        let (wire_output, diagnostics) =
-            runtime.expand_proc_macro(mac, None, Some(wire_item), span, Limits::default())?;
+        let hygiene = crate::hygiene::payload_from_stream_with_spans(
+            &item,
+            &[span, def_site, mixed_site],
+            &self.hygiene,
+        );
+        let (wire_output, diagnostics, returned_hygiene) = runtime.expand_proc_macro(
+            mac,
+            None,
+            Some(wire_item),
+            span,
+            def_site,
+            hygiene,
+            Limits::default(),
+        )?;
+        crate::hygiene::merge_payload(&self.hygiene, &returned_hygiene);
         self.push_server_diagnostics(&diagnostics, &mac.name, span);
         wire_to_core(wire_output, self.interner, span)
+    }
+
+    /// Compute the definition-site and mixed-site spans for a procedural macro
+    /// invocation.
+    ///
+    /// `def_site` currently falls back to the call site because the macro
+    /// definition span is not yet threaded through the resolver. `mixed_site` is
+    /// a fresh syntax context with mixed transparency parented to the call-site
+    /// context.
+    fn proc_macro_sites(
+        &mut self,
+        span: yelang_lexer::Span,
+    ) -> (yelang_lexer::Span, yelang_lexer::Span) {
+        let call_site_ctx = yelang_macro_core::SyntaxContextId::new(span.syntax_context());
+        let expn_id = self.hygiene.fresh_expn(ExpnData {
+            parent: self.hygiene.root_expn(),
+            call_site: span,
+            def_site: span,
+            kind: ExpnKind::ProcMacro,
+            desc: "mixed-site".to_string(),
+        });
+        let mixed_ctx = self
+            .hygiene
+            .apply_mark(call_site_ctx, expn_id, Transparency::Mixed);
+        let mixed_site = span.with_syntax_context(mixed_ctx.raw());
+        (span, mixed_site)
     }
 
     /// Convert server diagnostics into expansion errors and push them.

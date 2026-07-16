@@ -11,4 +11,4 @@ mod parse;
 mod types;
 
 pub use core::CharCursor;
-pub use types::{Checkpoint, FileId, Position, Span};
+pub use types::{Checkpoint, FileId, Position, ROOT_SYNTAX_CONTEXT, Span};

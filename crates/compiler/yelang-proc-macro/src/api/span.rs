@@ -16,6 +16,15 @@ thread_local! {
     /// The span of the current macro invocation, set by the proc-macro server
     /// before the user-provided macro body runs.
     static CALL_SITE: RefCell<Option<Span>> = const { RefCell::new(None) };
+
+    /// The span of the macro definition site, set by the proc-macro server.
+    static DEF_SITE: RefCell<Option<Span>> = const { RefCell::new(None) };
+
+    /// The mixed-site hygiene span, set by the proc-macro server.
+    ///
+    /// Mixed-site behaves like the call site for local bindings and like the
+    /// definition site for items/types, mirroring Rust's `macro_rules!` hygiene.
+    static MIXED_SITE: RefCell<Option<Span>> = const { RefCell::new(None) };
 }
 
 impl Span {
@@ -28,17 +37,22 @@ impl Span {
 
     /// The span of the macro definition site.
     ///
-    /// For now this resolves to the call-site span. A future refinement will
-    /// expose the true definition-site hygiene context for `def_site` spans.
+    /// Returns the definition-site span supplied by the compiler, falling back
+    /// to [`Self::call_site`] if none was provided.
     pub fn def_site() -> Self {
-        Self::call_site()
+        DEF_SITE
+            .with(|c| *c.borrow())
+            .unwrap_or_else(Self::call_site)
     }
 
     /// Mixed-site hygiene, similar to `macro_rules!` `$crate`.
     ///
-    /// See [`Span::def_site`] for implementation notes.
+    /// Returns the mixed-site span supplied by the compiler, falling back to
+    /// [`Self::call_site`] if none was provided.
     pub fn mixed_site() -> Self {
-        Self::call_site()
+        MIXED_SITE
+            .with(|c| *c.borrow())
+            .unwrap_or_else(Self::call_site)
     }
 
     pub(crate) fn from_inner(inner: yelang_macro_core::Span) -> Self {
@@ -58,10 +72,42 @@ impl Span {
         CALL_SITE.with(|c| *c.borrow_mut() = Some(span));
     }
 
+    /// Set the span that `Span::def_site()` will return for the current thread.
+    #[doc(hidden)]
+    pub fn set_def_site(span: Span) {
+        DEF_SITE.with(|c| *c.borrow_mut() = Some(span));
+    }
+
+    /// Set the span that `Span::mixed_site()` will return for the current thread.
+    #[doc(hidden)]
+    pub fn set_mixed_site(span: Span) {
+        MIXED_SITE.with(|c| *c.borrow_mut() = Some(span));
+    }
+
     /// Clear the thread-local call-site span.
     #[doc(hidden)]
     pub fn clear_call_site() {
         CALL_SITE.with(|c| *c.borrow_mut() = None);
+    }
+
+    /// Clear the thread-local definition-site span.
+    #[doc(hidden)]
+    pub fn clear_def_site() {
+        DEF_SITE.with(|c| *c.borrow_mut() = None);
+    }
+
+    /// Clear the thread-local mixed-site span.
+    #[doc(hidden)]
+    pub fn clear_mixed_site() {
+        MIXED_SITE.with(|c| *c.borrow_mut() = None);
+    }
+
+    /// Clear all thread-local site spans at once.
+    #[doc(hidden)]
+    pub fn clear_sites() {
+        Self::clear_call_site();
+        Self::clear_def_site();
+        Self::clear_mixed_site();
     }
 
     /// Resolve this span's hygiene to another span's context.

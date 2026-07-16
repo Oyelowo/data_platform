@@ -14,6 +14,18 @@ impl ExpnId {
     pub fn as_arena_key(self) -> ArenaKey {
         self.0
     }
+
+    /// Return this expansion id as a stable integer for serialization across the
+    /// proc-macro server boundary.
+    pub fn raw(self) -> u64 {
+        self.0.as_u64()
+    }
+
+    /// Reconstruct an `ExpnId` from a value previously returned by [`Self::raw`].
+    /// Returns `None` if the integer does not correspond to a valid arena key.
+    pub fn from_raw(raw: u64) -> Option<Self> {
+        ArenaKey::from_u64(raw).map(Self)
+    }
 }
 
 /// A hygiene context: a chain of macro expansion marks.

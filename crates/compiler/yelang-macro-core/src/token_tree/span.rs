@@ -44,7 +44,12 @@ impl From<yelang_lexer::Span> for Span {
     fn from(span: yelang_lexer::Span) -> Self {
         let start = span.start().absolute as u32;
         let end = span.end().absolute as u32;
-        Self::new(start, end, span.file_id(), SyntaxContextId::default())
+        Self::new(
+            start,
+            end,
+            span.file_id(),
+            SyntaxContextId::new(span.syntax_context()),
+        )
     }
 }
 
@@ -62,5 +67,6 @@ impl From<Span> for yelang_lexer::Span {
             absolute: span.hi as usize,
         };
         yelang_lexer::Span::new_with_file_id(start, end, span.file)
+            .with_syntax_context(span.ctx.raw())
     }
 }

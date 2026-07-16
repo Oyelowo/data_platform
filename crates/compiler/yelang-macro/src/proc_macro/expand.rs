@@ -3,7 +3,7 @@
 use yelang_interner::Interner;
 use yelang_proc_macro::bridge::{from_wire, into_wire};
 use yelang_proc_macro_bridge::protocol::WireTokenStream;
-use yelang_proc_macro_bridge::protocol::token::{WireDiagnostic, WireSpan};
+use yelang_proc_macro_bridge::protocol::token::{WireDiagnostic, WireHygienePayload, WireSpan};
 use yelang_proc_macro_bridge::sandbox::Limits;
 
 use super::ResolvedProcMacro;
@@ -42,9 +42,12 @@ pub fn expand_proc_macro(
     args: Option<WireTokenStream>,
     item: Option<WireTokenStream>,
     span: yelang_lexer::Span,
+    def_site: yelang_lexer::Span,
+    hygiene: WireHygienePayload,
     limits: Limits,
-) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ExpandError> {
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), ExpandError> {
     let call_site = span_to_wire(span);
+    let def_site = span_to_wire(def_site);
     use yelang_proc_macro_bridge::protocol::ProcMacroKind;
 
     match macro_def.kind {
@@ -58,6 +61,8 @@ pub fn expand_proc_macro(
                     macro_def.macro_index,
                     input,
                     call_site,
+                    def_site,
+                    hygiene,
                     limits,
                 )
                 .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))
@@ -74,6 +79,8 @@ pub fn expand_proc_macro(
                     args,
                     item,
                     call_site,
+                    def_site,
+                    hygiene,
                     limits,
                 )
                 .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))
@@ -88,6 +95,8 @@ pub fn expand_proc_macro(
                     macro_def.macro_index,
                     item,
                     call_site,
+                    def_site,
+                    hygiene,
                     limits,
                 )
                 .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))
@@ -100,7 +109,7 @@ fn span_to_wire(span: yelang_lexer::Span) -> WireSpan {
         lo: span.start().absolute as u32,
         hi: span.end().absolute as u32,
         file: span.file_id().raw(),
-        syntax_context: 0,
+        syntax_context: span.syntax_context(),
     }
 }
 

@@ -64,6 +64,18 @@ impl HygieneData {
             .cloned()
     }
 
+    /// Insert a new expansion and return its allocated `ExpnId`.
+    pub fn insert_expn(&self, data: ExpnData) -> ExpnId {
+        ExpnId::from_arena_key(self.expn_arena.lock().unwrap().insert(data))
+    }
+
+    /// Update an existing expansion in place.
+    pub fn update_expn<F: FnOnce(&mut ExpnData)>(&self, id: ExpnId, f: F) {
+        if let Some(data) = self.expn_arena.lock().unwrap().get_mut(id.as_arena_key()) {
+            f(data);
+        }
+    }
+
     pub fn apply_mark(
         &self,
         parent: SyntaxContextId,
@@ -135,5 +147,26 @@ mod tests {
         });
         let ctx = data.apply_mark(data.root_syntax_context(), expn, Transparency::Opaque);
         assert_ne!(ctx, data.root_syntax_context());
+    }
+
+    #[test]
+    fn insert_expn_and_update_parent_round_trip() {
+        let data = HygieneData::new();
+        let child = data.insert_expn(ExpnData {
+            parent: data.root_expn(),
+            call_site: yelang_lexer::Span::default(),
+            def_site: yelang_lexer::Span::default(),
+            kind: ExpnKind::Macro,
+            desc: "child".to_string(),
+        });
+        let parent = data.insert_expn(ExpnData {
+            parent: data.root_expn(),
+            call_site: yelang_lexer::Span::default(),
+            def_site: yelang_lexer::Span::default(),
+            kind: ExpnKind::Macro,
+            desc: "parent".to_string(),
+        });
+        data.update_expn(child, |e| e.parent = parent);
+        assert_eq!(data.expn_data(child).unwrap().parent, parent);
     }
 }

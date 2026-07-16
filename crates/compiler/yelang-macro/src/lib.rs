@@ -21,6 +21,7 @@ mod builtin_macros;
 mod eager;
 mod error;
 mod expander;
+mod hygiene;
 mod matcher;
 mod paste;
 pub mod proc_macro;

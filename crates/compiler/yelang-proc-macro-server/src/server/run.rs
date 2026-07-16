@@ -6,7 +6,8 @@ use yelang_proc_macro_bridge::{
     ErrorCode,
     protocol::{
         CURRENT_PROTOCOL_VERSION, LibraryHandle, Request, Response, WireTokenStream,
-        negotiate_version, token::WireDiagnostic,
+        negotiate_version,
+        token::{WireDiagnostic, WireHygienePayload},
     },
 };
 
@@ -82,6 +83,7 @@ fn handle_request(session: &mut Session, request: Request) -> Response {
             session.remove_library(library);
             Response::Expanded {
                 output: WireTokenStream { trees: Vec::new() },
+                hygiene: WireHygienePayload::empty(),
             }
         }
         Request::Shutdown => unreachable!("handled above"),
@@ -90,9 +92,19 @@ fn handle_request(session: &mut Session, request: Request) -> Response {
             macro_index,
             input,
             call_site,
+            def_site,
+            hygiene,
             limits,
         } => expand(session, library, macro_index, |lib| {
-            invoke_fn_like(lib, macro_index, input, call_site, limits)
+            invoke_fn_like(
+                lib,
+                macro_index,
+                input,
+                call_site,
+                def_site,
+                hygiene,
+                limits,
+            )
         }),
         Request::ExpandAttr {
             library,
@@ -100,35 +112,51 @@ fn handle_request(session: &mut Session, request: Request) -> Response {
             args,
             item,
             call_site,
+            def_site,
+            hygiene,
             limits,
         } => expand(session, library, macro_index, |lib| {
-            invoke_attr(lib, macro_index, args, item, call_site, limits)
+            invoke_attr(
+                lib,
+                macro_index,
+                args,
+                item,
+                call_site,
+                def_site,
+                hygiene,
+                limits,
+            )
         }),
         Request::ExpandDerive {
             library,
             macro_index,
             item,
             call_site,
+            def_site,
+            hygiene,
             limits,
         } => expand(session, library, macro_index, |lib| {
-            invoke_derive(lib, macro_index, item, call_site, limits)
+            invoke_derive(lib, macro_index, item, call_site, def_site, hygiene, limits)
         }),
     }
 }
 
 fn expand<F>(session: &Session, library: LibraryHandle, _macro_index: u32, f: F) -> Response
 where
-    F: FnOnce(&LoadedLibrary) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError>,
+    F: FnOnce(
+        &LoadedLibrary,
+    )
+        -> Result<(WireTokenStream, Vec<WireDiagnostic>, WireHygienePayload), InvokeError>,
 {
     match session.get_library(library) {
         Some(lib) => match f(lib) {
-            Ok((output, diagnostics)) => {
+            Ok((output, diagnostics, hygiene)) => {
                 for d in diagnostics {
                     let _ = crate::protocol::write_response_to_stdout(&Response::Diagnostic {
                         diagnostic: d,
                     });
                 }
-                Response::Expanded { output }
+                Response::Expanded { output, hygiene }
             }
             Err(InvokeError::Panic(message)) => Response::Panic { message },
             Err(e) => error(error_code_for_invoke_error(&e), e.to_string()),
