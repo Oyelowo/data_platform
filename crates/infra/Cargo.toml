@@ -5,6 +5,7 @@ members = [
     "storage-testkit",
     "storage-skipmap",
     "storage-memory",
+    "storage-wal",
     # "object_store",
     # "distributed_storages",
     # "consensus",

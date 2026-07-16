@@ -125,8 +125,6 @@ where
                     continue;
                 }
 
-                self.len.fetch_add(1, MemOrdering::Relaxed);
-
                 // Mark the old node as deleted. From this point on find()
                 // will skip it because its level-0 next pointer is tagged.
                 let _ = node.next[0].compare_exchange(
@@ -136,6 +134,11 @@ where
                     MemOrdering::Relaxed,
                     &guard,
                 );
+
+                // Physically unlink the old node from all levels before
+                // retiring it, so no future reader can dereference it after
+                // reclamation.
+                self.unlink_all(&pos, n, &guard);
 
                 // Build the tower for the new node and retire the old one.
                 self.build_tower(new, &pos, &guard);
