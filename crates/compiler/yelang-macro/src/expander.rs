@@ -41,6 +41,39 @@ struct ExpansionFrame {
     def_id: MacroDefId,
 }
 
+/// Result of matching a set of attribute/derive rules against an invocation.
+enum RuleMatches {
+    /// Exactly one rule matched the invocation.
+    Matched {
+        rule: crate::matcher::types::MacroRule,
+        bindings: crate::matcher::bindings::Bindings,
+    },
+    /// No rule matched.
+    NoMatch { unsafe_available: bool },
+    /// More than one rule matched.
+    Ambiguous,
+}
+
+impl RuleMatches {
+    fn from_vec(
+        mut matches: Vec<(
+            &crate::matcher::types::MacroRule,
+            crate::matcher::bindings::Bindings,
+        )>,
+    ) -> Self {
+        match matches.len() {
+            0 => RuleMatches::NoMatch {
+                unsafe_available: false,
+            },
+            1 => RuleMatches::Matched {
+                rule: matches[0].0.clone(),
+                bindings: std::mem::take(&mut matches[0].1),
+            },
+            _ => RuleMatches::Ambiguous,
+        }
+    }
+}
+
 /// The main macro expansion engine.
 ///
 /// Walks the AST, expands macro invocations, and applies decorators.
@@ -223,12 +256,47 @@ impl<'a> MacroExpander<'a> {
                 .unwrap_or_default();
             item.attributes.remove(0);
 
-            let expanded: Vec<Item> = if attr_name == "derive" {
+            let expanded: Vec<Item> = if attr_name == "unsafe" {
+                match peel_unsafe_attribute(&attr, self.interner) {
+                    Some((inner_attr, is_unsafe)) => {
+                        if self.is_user_attribute_macro(&inner_attr) {
+                            self.expand_user_attribute_macro(&inner_attr, &item, is_unsafe)
+                                .unwrap_or_else(|| vec![item.clone()])
+                        } else {
+                            self.errors.push(
+                                ExpandError::decorator_error(
+                                    format!(
+                                        "`unsafe(...)` wrapper does not name a known attribute macro: `{}`",
+                                        inner_attr
+                                            .path
+                                            .first()
+                                            .map(|id| self.interner.resolve(&id.symbol))
+                                            .unwrap_or("")
+                                    ),
+                                    attr.span,
+                                )
+                                .with_backtrace(self.backtrace()),
+                            );
+                            vec![item.clone()]
+                        }
+                    }
+                    None => {
+                        self.errors.push(
+                            ExpandError::decorator_error(
+                                "`unsafe(...)` attribute wrapper is malformed".to_string(),
+                                attr.span,
+                            )
+                            .with_backtrace(self.backtrace()),
+                        );
+                        vec![item.clone()]
+                    }
+                }
+            } else if attr_name == "derive" {
                 // `@derive(A, B, C)` is special: each name may be a user macro or a
                 // built-in derive.
                 self.expand_derive_attribute(&attr, &item)
             } else if self.is_user_attribute_macro(&attr) {
-                self.expand_user_attribute_macro(&attr, &item)
+                self.expand_user_attribute_macro(&attr, &item, false)
                     .unwrap_or_else(|| vec![item.clone()])
             } else if let Some(decorator) = BuiltinDecorator::from_attribute(&attr, self.interner) {
                 let result = apply_decorator(decorator, &attr, &item, self.interner);
@@ -1866,7 +1934,12 @@ impl<'a> MacroExpander<'a> {
     /// original item is returned and an error is recorded). Returns `None` if
     /// the attribute is not a user macro, so callers can fall through to
     /// built-in decorators.
-    fn expand_user_attribute_macro(&mut self, attr: &Attribute, item: &Item) -> Option<Vec<Item>> {
+    fn expand_user_attribute_macro(
+        &mut self,
+        attr: &Attribute,
+        item: &Item,
+        require_unsafe: bool,
+    ) -> Option<Vec<Item>> {
         let name = attr.path.first()?;
         let name_str = self.interner.resolve(&name.symbol).to_string();
         let mac = self.resolver.resolve(&name_str)?.clone();
@@ -1888,36 +1961,34 @@ impl<'a> MacroExpander<'a> {
             return Some(vec![item.clone()]);
         };
 
-        let mut matches = Vec::new();
-        for rule in rules {
-            let attr_bindings =
-                try_match_matcher(&rule.attr_args, &attr_args_stream, self.interner);
-            let (delimiter, item_matcher) = item_matcher_ops(&rule.matcher);
-            let wrapped_item_stream = wrap_item_stream(item_stream.clone(), delimiter);
-            let item_bindings =
-                try_match_matcher(item_matcher, &wrapped_item_stream, self.interner);
-            if let (Ok(attr_bindings), Ok(item_bindings)) = (attr_bindings, item_bindings) {
-                let mut combined = attr_bindings;
-                combined.extend(item_bindings);
-                matches.push((rule, combined));
-            }
-        }
+        let matches = self.match_attribute_rules(
+            &name_str,
+            &rules,
+            &attr_args_stream,
+            &item_stream,
+            span,
+            require_unsafe,
+        );
 
-        let (rule, bindings) = match matches.len() {
-            0 => {
-                self.errors.push(
-                    ExpandError::macro_match_error(
-                        name_str.clone(),
-                        "no attribute rule matched the invocation".to_string(),
-                        span,
+        let (rule, bindings) = match matches {
+            RuleMatches::Matched { rule, bindings } => (rule, bindings),
+            RuleMatches::NoMatch { unsafe_available } => {
+                let msg = if unsafe_available && !require_unsafe {
+                    format!(
+                        "attribute macro `{}` has only unsafe rules; use `#[unsafe({}(...))]` or `@unsafe({}(...))`",
+                        name_str, name_str, name_str
                     )
-                    .with_backtrace(self.backtrace()),
+                } else {
+                    "no attribute rule matched the invocation".to_string()
+                };
+                self.errors.push(
+                    ExpandError::macro_match_error(name_str.clone(), msg, span)
+                        .with_backtrace(self.backtrace()),
                 );
                 self.after_expand();
                 return Some(vec![item.clone()]);
             }
-            1 => (&matches[0].0, &matches[0].1),
-            _ => {
+            RuleMatches::Ambiguous => {
                 self.errors.push(
                     ExpandError::ambiguous_macro(name_str.clone(), span)
                         .with_backtrace(self.backtrace()),
@@ -1927,7 +1998,8 @@ impl<'a> MacroExpander<'a> {
             }
         };
 
-        let expanded_stream = match self.transcribe_rule(rule, bindings, &name_str, span, def_id) {
+        let expanded_stream = match self.transcribe_rule(&rule, &bindings, &name_str, span, def_id)
+        {
             Some(stream) => stream,
             None => {
                 self.after_expand();
@@ -1955,15 +2027,81 @@ impl<'a> MacroExpander<'a> {
         }
     }
 
+    fn match_attribute_rules(
+        &mut self,
+        name_str: &str,
+        rules: &[&crate::matcher::types::MacroRule],
+        attr_args_stream: &yelang_macro_core::token_tree::TokenStream,
+        item_stream: &yelang_macro_core::token_tree::TokenStream,
+        span: yelang_lexer::Span,
+        require_unsafe: bool,
+    ) -> RuleMatches {
+        let mut safe_matches = Vec::new();
+        let mut unsafe_matches = Vec::new();
+
+        for rule in rules {
+            let attr_bindings = try_match_matcher(&rule.attr_args, attr_args_stream, self.interner);
+            let (delimiter, item_matcher) = item_matcher_ops(&rule.matcher);
+            let wrapped_item_stream = wrap_item_stream(item_stream.clone(), delimiter);
+            let item_bindings =
+                try_match_matcher(item_matcher, &wrapped_item_stream, self.interner);
+            if let (Ok(attr_bindings), Ok(item_bindings)) = (attr_bindings, item_bindings) {
+                let mut combined = attr_bindings;
+                combined.extend(item_bindings);
+                if rule.is_unsafe {
+                    unsafe_matches.push((*rule, combined));
+                } else {
+                    safe_matches.push((*rule, combined));
+                }
+            }
+        }
+
+        if require_unsafe {
+            if !unsafe_matches.is_empty() {
+                return RuleMatches::from_vec(unsafe_matches);
+            }
+            // Unsafe wrapper used but no unsafe rule matched: warn and fall back
+            // to safe rules (the wrapper is accepted as a no-op).
+            if !safe_matches.is_empty() {
+                self.errors.push(
+                    ExpandError::decorator_error(
+                        format!(
+                            "`unsafe(...)` wrapper on attribute macro `{}` is unnecessary; the macro has no unsafe rules",
+                            name_str
+                        ),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
+                return RuleMatches::from_vec(safe_matches);
+            }
+        } else {
+            if !safe_matches.is_empty() {
+                return RuleMatches::from_vec(safe_matches);
+            }
+            if !unsafe_matches.is_empty() {
+                return RuleMatches::NoMatch {
+                    unsafe_available: true,
+                };
+            }
+        }
+
+        RuleMatches::NoMatch {
+            unsafe_available: !unsafe_matches.is_empty(),
+        }
+    }
+
     /// Expand `@derive(A, B, C)`, invoking user-defined derive macros when
     /// available and falling back to built-in derives otherwise.
     fn expand_derive_attribute(&mut self, attr: &Attribute, item: &Item) -> Vec<Item> {
-        let trait_names = crate::builtin_decorators::collect_trait_names(&attr.args, self.interner);
+        let invocations =
+            crate::builtin_decorators::collect_derive_invocations(&attr.args, self.interner);
         let span = attr.span;
         let mut result = vec![item.clone()];
 
-        for trait_name in trait_names {
-            if let Some(generated) = self.expand_user_derive_macro(trait_name.as_str(), item, span)
+        for (trait_name, is_unsafe) in invocations {
+            if let Some(generated) =
+                self.expand_user_derive_macro(trait_name.as_str(), item, span, is_unsafe)
             {
                 result.extend(generated);
                 continue;
@@ -1997,6 +2135,7 @@ impl<'a> MacroExpander<'a> {
         trait_name: &str,
         item: &Item,
         span: yelang_lexer::Span,
+        require_unsafe: bool,
     ) -> Option<Vec<Item>> {
         let mac = self.resolver.resolve(trait_name)?.clone();
         let rules: Vec<&crate::matcher::types::MacroRule> = mac
@@ -2014,36 +2153,28 @@ impl<'a> MacroExpander<'a> {
             return Some(vec![]);
         };
 
-        let mut matches = Vec::new();
-        for rule in rules {
-            let attr_bindings =
-                try_match_matcher(&rule.attr_args, &TokenStream::new(), self.interner);
-            let (delimiter, item_matcher) = item_matcher_ops(&rule.matcher);
-            let wrapped_item_stream = wrap_item_stream(item_stream.clone(), delimiter);
-            let item_bindings =
-                try_match_matcher(item_matcher, &wrapped_item_stream, self.interner);
-            if let (Ok(attr_bindings), Ok(item_bindings)) = (attr_bindings, item_bindings) {
-                let mut combined = attr_bindings;
-                combined.extend(item_bindings);
-                matches.push((rule, combined));
-            }
-        }
+        let matches =
+            self.match_derive_rules(trait_name, &rules, &item_stream, span, require_unsafe);
 
-        let (rule, bindings) = match matches.len() {
-            0 => {
-                self.errors.push(
-                    ExpandError::macro_match_error(
-                        trait_name.to_string(),
-                        "no derive rule matched the item".to_string(),
-                        span,
+        let (rule, bindings) = match matches {
+            RuleMatches::Matched { rule, bindings } => (rule, bindings),
+            RuleMatches::NoMatch { unsafe_available } => {
+                let msg = if unsafe_available && !require_unsafe {
+                    format!(
+                        "derive macro `{}` has only unsafe rules; use `#[derive(unsafe({}))]` or `@derive(unsafe({}))`",
+                        trait_name, trait_name, trait_name
                     )
-                    .with_backtrace(self.backtrace()),
+                } else {
+                    "no derive rule matched the item".to_string()
+                };
+                self.errors.push(
+                    ExpandError::macro_match_error(trait_name.to_string(), msg, span)
+                        .with_backtrace(self.backtrace()),
                 );
                 self.after_expand();
                 return Some(vec![]);
             }
-            1 => (&matches[0].0, &matches[0].1),
-            _ => {
+            RuleMatches::Ambiguous => {
                 self.errors.push(
                     ExpandError::ambiguous_macro(trait_name.to_string(), span)
                         .with_backtrace(self.backtrace()),
@@ -2053,7 +2184,8 @@ impl<'a> MacroExpander<'a> {
             }
         };
 
-        let expanded_stream = match self.transcribe_rule(rule, bindings, trait_name, span, def_id) {
+        let expanded_stream = match self.transcribe_rule(&rule, &bindings, trait_name, span, def_id)
+        {
             Some(stream) => stream,
             None => {
                 self.after_expand();
@@ -2078,6 +2210,70 @@ impl<'a> MacroExpander<'a> {
                 );
                 Some(vec![])
             }
+        }
+    }
+
+    fn match_derive_rules(
+        &mut self,
+        trait_name: &str,
+        rules: &[&crate::matcher::types::MacroRule],
+        item_stream: &yelang_macro_core::token_tree::TokenStream,
+        span: yelang_lexer::Span,
+        require_unsafe: bool,
+    ) -> RuleMatches {
+        let mut safe_matches = Vec::new();
+        let mut unsafe_matches = Vec::new();
+
+        for rule in rules {
+            let attr_bindings =
+                try_match_matcher(&rule.attr_args, &TokenStream::new(), self.interner);
+            let (delimiter, item_matcher) = item_matcher_ops(&rule.matcher);
+            let wrapped_item_stream = wrap_item_stream(item_stream.clone(), delimiter);
+            let item_bindings =
+                try_match_matcher(item_matcher, &wrapped_item_stream, self.interner);
+            if let (Ok(attr_bindings), Ok(item_bindings)) = (attr_bindings, item_bindings) {
+                let mut combined = attr_bindings;
+                combined.extend(item_bindings);
+                if rule.is_unsafe {
+                    unsafe_matches.push((*rule, combined));
+                } else {
+                    safe_matches.push((*rule, combined));
+                }
+            }
+        }
+
+        if require_unsafe {
+            if !unsafe_matches.is_empty() {
+                return RuleMatches::from_vec(unsafe_matches);
+            }
+            // Unsafe wrapper used but no unsafe rule matched: warn and fall back
+            // to safe rules (the wrapper is accepted as a no-op).
+            if !safe_matches.is_empty() {
+                self.errors.push(
+                    ExpandError::decorator_error(
+                        format!(
+                            "`unsafe(...)` wrapper on derive macro `{}` is unnecessary; the macro has no unsafe rules",
+                            trait_name
+                        ),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()),
+                );
+                return RuleMatches::from_vec(safe_matches);
+            }
+        } else {
+            if !safe_matches.is_empty() {
+                return RuleMatches::from_vec(safe_matches);
+            }
+            if !unsafe_matches.is_empty() {
+                return RuleMatches::NoMatch {
+                    unsafe_available: true,
+                };
+            }
+        }
+
+        RuleMatches::NoMatch {
+            unsafe_available: !unsafe_matches.is_empty(),
         }
     }
 
@@ -2377,6 +2573,57 @@ fn parse_pattern_from_token_stream(
     }
     let _ = local_interner;
     Ok(pat)
+}
+
+/// Peel an `unsafe(...)` attribute wrapper, returning the inner attribute and
+/// a flag indicating that the wrapper was present.
+///
+/// `@unsafe(foo(args))` and `#[unsafe(foo(args))]` are accepted. The inner
+/// attribute is reconstructed so that normal attribute macro dispatch can
+/// process it.
+fn peel_unsafe_attribute(attr: &Attribute, interner: &Interner) -> Option<(Attribute, bool)> {
+    let first = attr.path.first()?;
+    if interner.resolve(&first.symbol) != "unsafe" {
+        return None;
+    }
+    let exprs = match &attr.args {
+        AttributeArgs::Positional(exprs) => exprs,
+        _ => return None,
+    };
+    let expr = exprs.first()?;
+    let (name, args) = match &expr.kind {
+        ExprKind::Path(path) if path.segments.len() == 1 => {
+            (path.segments[0].ident.clone(), AttributeArgs::Empty)
+        }
+        ExprKind::Call(call) => {
+            let callee = &call.callee;
+            match &callee.kind {
+                ExprKind::Path(path) if path.segments.len() == 1 => {
+                    let name = path.segments[0].ident.clone();
+                    let args: Vec<Expr> = call
+                        .args
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            yelang_ast::CallArgument::Positional(e) => Some(e.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    (name, AttributeArgs::Positional(args))
+                }
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some((
+        Attribute {
+            path: vec![name],
+            is_absolute: false,
+            args,
+            span: attr.span,
+        },
+        true,
+    ))
 }
 
 /// Convert attribute arguments back into a macro `TokenStream` so that

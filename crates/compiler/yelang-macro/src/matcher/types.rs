@@ -1,7 +1,7 @@
 use yelang_interner::Symbol;
 use yelang_macro_core::{
     CrateId, MacroDefId,
-    token_tree::{Delimiter, TokenTree},
+    token_tree::{Delimiter, TokenStream, TokenTree},
 };
 
 /// A single matcher atom inside a macro rule.
@@ -52,6 +52,8 @@ pub enum TranscriberOp {
     },
     /// A substitution: `$name`.
     Subst(Symbol),
+    /// A fragment field access: `$name.field`.
+    FragmentField { name: Symbol, field: Symbol },
     /// A repetition expansion: `$($body)sep*` / `+` / `?`.
     Repeat {
         kind: RepetitionKind,
@@ -127,6 +129,25 @@ pub enum MacroKind {
     Derive,
 }
 
+/// Fields extracted from a captured fragment for `$name.field` syntax.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FragmentFields {
+    /// For `:ident` fragments: the identifier token tree.
+    pub name: Option<TokenStream>,
+    /// For `:expr` fragments with type ascription: the ascribed type.
+    pub ty: Option<TokenStream>,
+    /// For `:ty` fragments: the base type name/path.
+    pub type_name: Option<TokenStream>,
+    /// For `:ty` fragments: the generic arguments.
+    pub type_args: Option<TokenStream>,
+    /// For `:item` fragments: visibility.
+    pub vis: Option<TokenStream>,
+    /// For `:item` fragments: item name.
+    pub item_name: Option<TokenStream>,
+    /// For `:item` fragments: attributes.
+    pub attrs: Option<TokenStream>,
+}
+
 /// A parsed macro rule.
 ///
 /// Function-like rules have `attr_args` empty and `matcher` matches the
@@ -136,6 +157,8 @@ pub enum MacroKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MacroRule {
     pub kind: MacroKind,
+    /// Whether this rule requires `unsafe(...)` invocation syntax.
+    pub is_unsafe: bool,
     pub attr_args: Vec<MatcherOp>,
     pub matcher: Vec<MatcherOp>,
     pub transcriber: Vec<TranscriberOp>,

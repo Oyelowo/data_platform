@@ -99,6 +99,19 @@ fn transcribe_op(
             let stream = binding.expect_single(&resolve_name(interner, *name))?;
             Ok(stream)
         }
+        TranscriberOp::FragmentField { name, field } => {
+            let binding = lookup_binding(env, *name).ok_or_else(|| {
+                format!(
+                    "unknown metavariable `{}` in fragment field access",
+                    resolve_name(interner, *name)
+                )
+            })?;
+            let stream = binding.expect_field(
+                &resolve_name(interner, *name),
+                &resolve_name(interner, *field),
+            )?;
+            Ok(stream)
+        }
         TranscriberOp::MetavarExpr(expr) => evaluate_metavar_expr(
             expr,
             repeat_stack,
@@ -121,8 +134,8 @@ fn transcribe_op(
                     if let Some(binding) = lookup_binding(env, *name) {
                         let iter_binding = match binding {
                             Binding::Repeat(list) => list.get(i).cloned(),
-                            Binding::Single(_) if i == 0 => Some(binding.clone()),
-                            Binding::Single(_) => None,
+                            Binding::Single { .. } if i == 0 => Some(binding.clone()),
+                            Binding::Single { .. } => None,
                         };
                         if let Some(b) = iter_binding {
                             frame.insert(*name, b);
@@ -219,7 +232,7 @@ fn frame_at_depth(repeat_stack: &[RepeatFrame], depth: usize) -> Result<&RepeatF
 
 fn count_total(binding: &Binding) -> usize {
     match binding {
-        Binding::Single(_) => 1,
+        Binding::Single { .. } => 1,
         Binding::Repeat(list) => list.iter().map(count_total).sum(),
     }
 }
@@ -227,12 +240,12 @@ fn count_total(binding: &Binding) -> usize {
 fn count_at_depth(binding: &Binding, depth: usize) -> usize {
     if depth == 0 {
         match binding {
-            Binding::Single(_) => 1,
+            Binding::Single { .. } => 1,
             Binding::Repeat(list) => list.len(),
         }
     } else {
         match binding {
-            Binding::Single(_) => 0,
+            Binding::Single { .. } => 0,
             Binding::Repeat(list) => list.iter().map(|b| count_at_depth(b, depth - 1)).sum(),
         }
     }
@@ -272,7 +285,7 @@ fn resolve_repeat_count(
             for name in names {
                 match lookup_binding(env, *name) {
                     None => counts.push(0),
-                    Some(Binding::Single(_)) => counts.push(1),
+                    Some(Binding::Single { .. }) => counts.push(1),
                     Some(Binding::Repeat(list)) => {
                         if list.len() > 1 {
                             return Err(format!(
@@ -309,7 +322,7 @@ fn resolve_repeat_count(
             let mut counts = Vec::new();
             for name in names {
                 match lookup_binding(env, *name) {
-                    None | Some(Binding::Single(_)) => {
+                    None | Some(Binding::Single { .. }) => {
                         return Err(format!(
                             "metavariable `{}` used with `{}` is not repeated",
                             resolve_name(interner, *name),
@@ -348,7 +361,9 @@ fn referenced_names(ops: &[TranscriberOp]) -> Vec<yelang_interner::Symbol> {
     let mut names = Vec::new();
     for op in ops {
         match op {
-            TranscriberOp::Subst(name) => names.push(*name),
+            TranscriberOp::Subst(name) | TranscriberOp::FragmentField { name, .. } => {
+                names.push(*name);
+            }
             TranscriberOp::Group { ops, .. } | TranscriberOp::Repeat { ops, .. } => {
                 names.extend(referenced_names(ops));
             }
@@ -391,7 +406,7 @@ mod tests {
     use yelang_macro_core::token_tree::{Ident, Punct, Spacing, Span, TokenTree};
 
     fn single_ident_binding(_name: &str, value: &str, interner: &Interner) -> Binding {
-        Binding::Single(TokenStream::from_vec(vec![TokenTree::Ident(Ident::new(
+        Binding::single(TokenStream::from_vec(vec![TokenTree::Ident(Ident::new(
             interner.get_or_intern(value),
             Span::default(),
         ))]))

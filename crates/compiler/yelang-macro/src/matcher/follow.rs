@@ -422,6 +422,7 @@ mod tests {
     fn rule_with_matcher(matcher: Vec<MatcherOp>) -> MacroRule {
         MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher,
             transcriber: vec![TranscriberOp::Subst(Interner::new().get_or_intern("x"))],

@@ -3,6 +3,7 @@ pub mod cursor;
 pub mod engine;
 pub mod follow;
 pub mod fragment;
+pub mod fragment_fields;
 pub mod parser;
 pub mod types;
 

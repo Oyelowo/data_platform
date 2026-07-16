@@ -730,16 +730,68 @@ fn apply_lang(attr: &Attribute, item: &Item, interner: &Interner) -> DecoratorRe
 // --- Helpers ---
 
 pub fn collect_trait_names(args: &AttributeArgs, interner: &Interner) -> Vec<String> {
+    collect_derive_invocations(args, interner)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// Collect trait names from a derive attribute together with whether each
+/// name was wrapped in `unsafe(...)`.
+pub fn collect_derive_invocations(
+    args: &AttributeArgs,
+    interner: &Interner,
+) -> Vec<(String, bool)> {
     match args {
         AttributeArgs::Positional(exprs) => exprs
             .iter()
-            .filter_map(|e| expr_to_string(e, interner))
+            .filter_map(|e| parse_derive_expr(e, interner))
             .collect(),
         AttributeArgs::Named(named) => named
             .iter()
-            .map(|n| interner.resolve(&n.name.symbol).to_string())
+            .filter_map(|n| {
+                let name = interner.resolve(&n.name.symbol);
+                if name == "unsafe" {
+                    None
+                } else {
+                    Some((name.to_string(), false))
+                }
+            })
             .collect(),
         AttributeArgs::Empty => vec![],
+    }
+}
+
+fn parse_derive_expr(expr: &Expr, interner: &Interner) -> Option<(String, bool)> {
+    match &expr.kind {
+        ExprKind::Path(path) if path.segments.len() == 1 => Some((
+            interner.resolve(&path.segments[0].ident.symbol).to_string(),
+            false,
+        )),
+        ExprKind::Call(call) => {
+            let callee = &call.callee;
+            match &callee.kind {
+                ExprKind::Path(path)
+                    if path.segments.len() == 1
+                        && interner.resolve(&path.segments[0].ident.symbol) == "unsafe"
+                        && call.args.len() == 1 =>
+                {
+                    if let yelang_ast::CallArgument::Positional(e) = &call.args[0] {
+                        if let ExprKind::Path(p) = &e.kind {
+                            if p.segments.len() == 1 {
+                                return Some((
+                                    interner.resolve(&p.segments[0].ident.symbol).to_string(),
+                                    true,
+                                ));
+                            }
+                        }
+                    }
+                    None
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 

@@ -2,20 +2,41 @@ use std::collections::HashMap;
 use yelang_interner::Symbol;
 use yelang_macro_core::token_tree::TokenStream;
 
+use super::types::FragmentFields;
+
 /// A captured value for a metavariable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Binding {
     /// A single capture (the default for non-repeated metavariables).
-    Single(TokenStream),
+    Single {
+        stream: TokenStream,
+        fields: Option<FragmentFields>,
+    },
     /// A repeated capture: one binding per iteration.
     Repeat(Vec<Binding>),
 }
 
 impl Binding {
+    /// Create a single capture with no fragment fields (e.g. for `:tt`).
+    pub fn single(stream: TokenStream) -> Self {
+        Binding::Single {
+            stream,
+            fields: None,
+        }
+    }
+
+    /// Create a single capture with pre-extracted fragment fields.
+    pub fn fragment(stream: TokenStream, fields: FragmentFields) -> Self {
+        Binding::Single {
+            stream,
+            fields: Some(fields),
+        }
+    }
+
     /// Expect this binding to be a single capture, returning its token stream.
     pub fn expect_single(&self, name: &str) -> Result<TokenStream, String> {
         match self {
-            Binding::Single(stream) => Ok(stream.clone()),
+            Binding::Single { stream, .. } => Ok(stream.clone()),
             Binding::Repeat(_) => Err(format!(
                 "metavariable `{}` is repeated but used outside a repetition",
                 name
@@ -28,8 +49,44 @@ impl Binding {
     pub fn expect_repeat(&self, name: &str) -> Result<&Vec<Binding>, String> {
         match self {
             Binding::Repeat(bindings) => Ok(bindings),
-            Binding::Single(_) => Err(format!(
+            Binding::Single { .. } => Err(format!(
                 "metavariable `{}` is not repeated but used inside a repetition",
+                name
+            )),
+        }
+    }
+
+    /// Look up a fragment field on a single capture.
+    pub fn expect_field(&self, name: &str, field: &str) -> Result<TokenStream, String> {
+        match self {
+            Binding::Single { fields, .. } => {
+                let fields = fields.as_ref().ok_or_else(|| {
+                    format!("metavariable `{}` does not support fragment fields", name)
+                })?;
+                let stream = match field {
+                    // `.name` is overloaded: identifier name, type name, or item name.
+                    "name" => fields
+                        .name
+                        .clone()
+                        .or_else(|| fields.type_name.clone())
+                        .or_else(|| fields.item_name.clone()),
+                    "type" | "ty" => fields.ty.clone(),
+                    "type_name" | "typename" => fields.type_name.clone(),
+                    "type_args" | "typeargs" | "args" => fields.type_args.clone(),
+                    "vis" | "visibility" => fields.vis.clone(),
+                    "item_name" => fields.item_name.clone(),
+                    "attrs" | "attributes" => fields.attrs.clone(),
+                    _ => None,
+                };
+                stream.ok_or_else(|| {
+                    format!(
+                        "fragment field `{}` is not available for metavariable `{}`",
+                        field, name
+                    )
+                })
+            }
+            Binding::Repeat(_) => Err(format!(
+                "metavariable `{}` is repeated but used outside a repetition",
                 name
             )),
         }
@@ -79,7 +136,7 @@ impl Bindings {
                         // then push previous missing captures as empty singles.
                         let mut list = Vec::with_capacity(iterations.len());
                         for _ in 0..idx {
-                            list.push(Binding::Single(TokenStream::new()));
+                            list.push(Binding::single(TokenStream::new()));
                         }
                         list.push(binding.clone());
                         out.map.insert(*name, Binding::Repeat(list));
@@ -97,7 +154,7 @@ impl Bindings {
                     if iter_bindings.map.contains_key(&name) {
                         list.push(iter_bindings.map[&name].clone());
                     } else {
-                        list.push(Binding::Single(TokenStream::new()));
+                        list.push(Binding::single(TokenStream::new()));
                     }
                 }
             }
@@ -114,7 +171,7 @@ mod tests {
     use yelang_macro_core::token_tree::{Ident, Span, TokenTree};
 
     fn ident_binding(name: &str, interner: &Interner) -> Binding {
-        Binding::Single(TokenStream::from_vec(vec![TokenTree::Ident(Ident::new(
+        Binding::single(TokenStream::from_vec(vec![TokenTree::Ident(Ident::new(
             interner.get_or_intern(name),
             Span::default(),
         ))]))

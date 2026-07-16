@@ -2,7 +2,15 @@ use yelang_interner::Interner;
 use yelang_macro_core::token_tree::{Delimiter, TokenStream, TokenTree};
 
 use super::cursor::TokenCursor;
-use super::types::FragmentKind;
+use super::fragment_fields;
+use super::types::{FragmentFields, FragmentKind};
+
+/// The result of consuming a fragment: the raw captured token stream plus any
+/// pre-extracted fragment fields for `$name.field` syntax.
+pub struct FragmentCapture {
+    pub stream: TokenStream,
+    pub fields: Option<FragmentFields>,
+}
 
 /// Consume a fragment from the input stream and return its captured token stream.
 ///
@@ -12,18 +20,42 @@ pub fn consume_fragment(
     cursor: &mut TokenCursor,
     fragment: FragmentKind,
     interner: &Interner,
-) -> Result<TokenStream, String> {
+) -> Result<FragmentCapture, String> {
     match fragment {
-        FragmentKind::Tt => consume_tt(cursor),
-        FragmentKind::Ident => consume_ident(cursor),
-        FragmentKind::Literal => consume_literal(cursor),
-        FragmentKind::Block => consume_block(cursor, interner),
-        FragmentKind::Expr => consume_nonterminal(cursor, interner, "expr", parse_expr),
-        FragmentKind::Stmt => consume_nonterminal(cursor, interner, "stmt", parse_stmt),
-        FragmentKind::Ty => consume_nonterminal(cursor, interner, "ty", parse_ty),
-        FragmentKind::Path => consume_nonterminal(cursor, interner, "path", parse_path),
-        FragmentKind::Item => consume_nonterminal(cursor, interner, "item", parse_item),
-        FragmentKind::Pat => consume_nonterminal(cursor, interner, "pat", parse_pat),
+        FragmentKind::Tt => consume_tt(cursor).map(|s| FragmentCapture {
+            stream: s,
+            fields: None,
+        }),
+        FragmentKind::Ident => consume_ident(cursor).map(|s| FragmentCapture {
+            stream: s.clone(),
+            fields: Some(fragment_fields::from_ident(&s)),
+        }),
+        FragmentKind::Literal => consume_literal(cursor).map(|s| FragmentCapture {
+            stream: s,
+            fields: None,
+        }),
+        FragmentKind::Block => consume_block(cursor, interner).map(|s| FragmentCapture {
+            stream: s,
+            fields: None,
+        }),
+        FragmentKind::Expr => consume_nonterminal(cursor, interner, "expr", parse_expr, |s| {
+            fragment_fields::from_expr(s, interner)
+        }),
+        FragmentKind::Stmt => consume_nonterminal(cursor, interner, "stmt", parse_stmt, |_| {
+            Ok(FragmentFields::default())
+        }),
+        FragmentKind::Ty => consume_nonterminal(cursor, interner, "ty", parse_ty, |s| {
+            fragment_fields::from_ty(s, interner)
+        }),
+        FragmentKind::Path => consume_nonterminal(cursor, interner, "path", parse_path, |_| {
+            Ok(FragmentFields::default())
+        }),
+        FragmentKind::Item => consume_nonterminal(cursor, interner, "item", parse_item, |s| {
+            fragment_fields::from_item(s, interner)
+        }),
+        FragmentKind::Pat => consume_nonterminal(cursor, interner, "pat", parse_pat, |_| {
+            Ok(FragmentFields::default())
+        }),
     }
 }
 
@@ -74,14 +106,16 @@ fn consume_block(cursor: &mut TokenCursor, interner: &Interner) -> Result<TokenS
     }
 }
 
-fn consume_nonterminal<P, T>(
+fn consume_nonterminal<P, T, F>(
     cursor: &mut TokenCursor,
     interner: &Interner,
     label: &str,
     parse: P,
-) -> Result<TokenStream, String>
+    extract_fields: F,
+) -> Result<FragmentCapture, String>
 where
     P: FnOnce(&str, &Interner) -> Result<T, String>,
+    F: FnOnce(&TokenStream) -> Result<FragmentFields, String>,
 {
     let captured = capture_until_separator(cursor);
     if captured.is_empty() {
@@ -89,7 +123,11 @@ where
     }
     let rendered = captured.render(interner);
     parse(&rendered, interner).map_err(|e| format!("invalid {}: {}", label, e))?;
-    Ok(captured)
+    let fields = extract_fields(&captured)?;
+    Ok(FragmentCapture {
+        stream: captured,
+        fields: Some(fields),
+    })
 }
 
 /// Capture tokens from the cursor until a top-level argument separator (`,`)

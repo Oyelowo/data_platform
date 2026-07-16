@@ -81,7 +81,11 @@ fn match_op(
                 ))
             })?;
             let mut b = Bindings::new();
-            b.insert(*name, Binding::Single(captured));
+            let binding = match captured.fields {
+                Some(fields) => Binding::fragment(captured.stream, fields),
+                None => Binding::single(captured.stream),
+            };
+            b.insert(*name, binding);
             Ok(b)
         }
         MatcherOp::Group { delimiter, ops } => {
@@ -188,6 +192,7 @@ mod tests {
     fn paren_rule_with_single_ident(interner: &Interner) -> MacroRule {
         MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
@@ -221,6 +226,7 @@ mod tests {
         let interner = Interner::new();
         let rule = MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
@@ -251,6 +257,7 @@ mod tests {
         let interner = Interner::new();
         let rule = MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
@@ -294,6 +301,7 @@ mod tests {
         let interner = Interner::new();
         let rule = MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
@@ -346,6 +354,7 @@ mod tests {
         let interner = Interner::new();
         let rule = MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
@@ -386,6 +395,7 @@ mod tests {
         let interner = Interner::new();
         let rule = MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,
@@ -417,6 +427,7 @@ mod tests {
         let interner = Interner::new();
         let rule = MacroRule {
             kind: MacroKind::FunctionLike,
+            is_unsafe: false,
             attr_args: vec![],
             matcher: vec![MatcherOp::Group {
                 delimiter: Delimiter::Parenthesis,

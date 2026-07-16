@@ -37,31 +37,50 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Attribute {
     fn parse(stream: &mut TokenStream<crate::tokenizer::TokenKind>) -> TokenResult<Self> {
         type Segs = SeparatedList<Ident, T![::], false>;
 
-        let ((_, is_absolute, path, args), span) = stream.parse_with_span::<(
-            T![@],
-            Option<T![::]>,
-            Segs,
-            Option<(T!['('], AttributeArgs, T![')'])>,
-        )>()?;
-
-        let path = path.value_owned();
+        let start = stream.checkpoint();
+        stream.parse::<T![@]>()?;
+        let is_absolute = stream.optional::<T![::]>().is_ok();
+        let path = stream.parse::<Segs>()?.value_owned();
 
         // SeparatedList can yield empty if the parser is in recovery mode.
         // Keep behavior deterministic: require at least one segment.
         if path.is_empty() {
             return Err(yelang_lexer::TokenError::SyntaxError {
                 message: "Expected at least one segment in attribute path".to_string(),
-                span,
+                span: stream.span_since(start),
                 source: None,
             });
         }
 
+        let special_path = path
+            .first()
+            .map(|id| stream.interner().resolve(&id.symbol))
+            .map(|s| s == "unsafe" || s == "derive")
+            .unwrap_or(false);
+
+        let args = if stream
+            .peek()
+            .map(|t| t.kind() == &crate::tokenizer::TokenKind::OpenParen)
+            .unwrap_or(false)
+        {
+            stream.advance();
+            let args = if special_path {
+                type SepExpr = SeparatedList<Expr, T![,], true>;
+                AttributeArgs::Positional(stream.parse::<SepExpr>()?.value_owned())
+            } else {
+                stream.parse::<AttributeArgs>()?
+            };
+            stream.consume(crate::tokenizer::TokenKind::CloseParen)?;
+            args
+        } else {
+            AttributeArgs::Empty
+        };
+
+        let span = stream.span_since(start);
         Ok(Attribute {
             path,
-            is_absolute: is_absolute.is_some(),
-            args: args
-                .map(|(_, args, _)| args)
-                .unwrap_or(AttributeArgs::Empty),
+            is_absolute,
+            args,
             span,
         })
     }

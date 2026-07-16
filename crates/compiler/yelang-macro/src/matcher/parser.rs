@@ -1,4 +1,4 @@
-use yelang_interner::Interner;
+use yelang_interner::{Interner, Symbol};
 use yelang_macro_core::token_tree::{Delimiter, TokenTree};
 
 use super::cursor::TokenCursor;
@@ -23,41 +23,58 @@ pub fn parse_rules(
             continue;
         }
 
-        let (kind, attr_args, matcher) = match cursor.peek() {
+        let (is_unsafe, kind, attr_args, matcher) = match cursor.peek() {
             Some(TokenTree::Ident(ident)) => {
                 let name = interner.resolve(&ident.sym);
-                match name {
-                    "attr" | "derive" => {
-                        let kind = if name == "attr" {
-                            MacroKind::Attribute
-                        } else {
-                            MacroKind::Derive
-                        };
-                        cursor.advance(); // consume `attr`/`derive`
-
-                        let attr_args_group = expect_group(&mut cursor, interner)?;
-                        let item_matcher_group = expect_group(&mut cursor, interner)?;
-
-                        let attr_args = parse_matcher_seq(
-                            &mut TokenCursor::new(attr_args_group.stream),
-                            interner,
-                        )?;
-                        let matcher = parse_matcher_seq(
-                            &mut TokenCursor::new(item_matcher_group.stream),
-                            interner,
-                        )?;
-                        (kind, attr_args, matcher)
+                let (is_unsafe, kind) = match name {
+                    "unsafe" => {
+                        cursor.advance(); // consume `unsafe`
+                        let next = cursor.peek().ok_or(MatcherError::UnexpectedEof)?;
+                        match next {
+                            TokenTree::Ident(next_ident) => {
+                                let next_name = interner.resolve(&next_ident.sym);
+                                match next_name {
+                                    "attr" => (true, MacroKind::Attribute),
+                                    "derive" => (true, MacroKind::Derive),
+                                    _ => {
+                                        return Err(MatcherError::InvalidMatcher(format!(
+                                            "expected `attr` or `derive` after `unsafe`, found `{}`",
+                                            next_name
+                                        )));
+                                    }
+                                }
+                            }
+                            other => {
+                                return Err(MatcherError::InvalidMatcher(format!(
+                                    "expected `attr` or `derive` after `unsafe`, found {}",
+                                    other.render(interner)
+                                )));
+                            }
+                        }
                     }
+                    "attr" => (false, MacroKind::Attribute),
+                    "derive" => (false, MacroKind::Derive),
                     _ => {
                         // Function-like rule whose matcher happens to start
                         // with an identifier is impossible: matchers are
                         // delimited groups. Treat as an error.
                         return Err(MatcherError::InvalidMatcher(format!(
-                            "expected macro rule to start with `attr`, `derive`, or a delimited group, found identifier `{}`",
+                            "expected macro rule to start with `attr`, `derive`, `unsafe`, or a delimited group, found identifier `{}`",
                             name
                         )));
                     }
-                }
+                };
+
+                cursor.advance(); // consume `attr`/`derive`
+
+                let attr_args_group = expect_group(&mut cursor, interner)?;
+                let item_matcher_group = expect_group(&mut cursor, interner)?;
+
+                let attr_args =
+                    parse_matcher_seq(&mut TokenCursor::new(attr_args_group.stream), interner)?;
+                let matcher =
+                    parse_matcher_seq(&mut TokenCursor::new(item_matcher_group.stream), interner)?;
+                (is_unsafe, kind, attr_args, matcher)
             }
             Some(TokenTree::Group(_)) => {
                 let matcher_group = match cursor.advance() {
@@ -66,11 +83,11 @@ pub fn parse_rules(
                 };
                 let matcher =
                     parse_matcher_seq(&mut TokenCursor::new(matcher_group.stream), interner)?;
-                (MacroKind::FunctionLike, Vec::new(), matcher)
+                (false, MacroKind::FunctionLike, Vec::new(), matcher)
             }
             Some(other) => {
                 return Err(MatcherError::InvalidMatcher(format!(
-                    "expected macro rule to start with `attr`, `derive`, or a delimited group, found {}",
+                    "expected macro rule to start with `attr`, `derive`, `unsafe`, or a delimited group, found {}",
                     other.render(interner)
                 )));
             }
@@ -95,6 +112,7 @@ pub fn parse_rules(
 
         let rule = MacroRule {
             kind,
+            is_unsafe,
             attr_args,
             matcher,
             transcriber,
@@ -204,7 +222,15 @@ fn parse_transcriber_seq(
                     ops.push(TranscriberOp::DollarDollar);
                 }
                 TokenTree::Ident(ident) => {
-                    ops.push(TranscriberOp::Subst(ident.sym));
+                    // $name.field is a fragment field access, not a substitution.
+                    if let Some(field) = parse_fragment_field(cursor, interner)? {
+                        ops.push(TranscriberOp::FragmentField {
+                            name: ident.sym,
+                            field,
+                        });
+                    } else {
+                        ops.push(TranscriberOp::Subst(ident.sym));
+                    }
                 }
                 TokenTree::Group(group) => {
                     let inner_ops =
@@ -324,6 +350,30 @@ fn parse_metavar_expr(
 
 fn is_comma(tree: &TokenTree) -> bool {
     matches!(tree, TokenTree::Punct(p) if p.ch == ',')
+}
+
+/// If the next tokens are `. field_name`, consume them and return the field
+/// name. Otherwise return `None` so the caller emits a plain substitution.
+fn parse_fragment_field(
+    cursor: &mut TokenCursor,
+    interner: &Interner,
+) -> Result<Option<Symbol>, MatcherError> {
+    let mut lookahead = cursor.clone();
+    if !matches!(lookahead.advance(), Some(TokenTree::Punct(p)) if p.ch == '.') {
+        return Ok(None);
+    }
+    let field = match lookahead.advance() {
+        Some(TokenTree::Ident(ident)) => ident.sym,
+        Some(other) => {
+            return Err(MatcherError::InvalidTranscriber(format!(
+                "expected identifier after `.` in fragment field access, found {}",
+                other.render(interner)
+            )));
+        }
+        None => return Err(MatcherError::UnexpectedEof),
+    };
+    *cursor = lookahead;
+    Ok(Some(field))
 }
 
 fn expect_usize_literal(
@@ -559,7 +609,7 @@ mod tests {
         let mut interner = Interner::new();
         let body = tokenize_macro_body("($x:expr) => ( (${index()}, ${len()}) )", &mut interner);
         let rules = parse_rules(&body, &interner).unwrap();
-        eprintln!("transcriber ops: {:?}", rules[0].transcriber);
+        assert!(!rules[0].transcriber.is_empty());
     }
 
     #[test]
