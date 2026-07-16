@@ -7,7 +7,7 @@ pub mod cursor;
 pub mod error;
 pub mod parser;
 
-pub use buffered::Buffered;
+pub use buffered::BufferedCursor;
 pub use cursor::Cursor;
 pub use error::ParseError;
 pub use parser::{Parse, Parser};

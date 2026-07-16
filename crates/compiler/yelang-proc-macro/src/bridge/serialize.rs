@@ -142,6 +142,8 @@ fn literal_from_wire(text: String, kind: WireLitKind, span: Span) -> Literal {
         WireLitKind::Str => Literal::string(text, span),
         WireLitKind::Char => Literal::character(text.chars().next().unwrap_or('\0'), span),
         WireLitKind::Bool => Literal::boolean(text == "true", span),
+        WireLitKind::ByteStr => Literal::byte_string(text, span),
+        WireLitKind::Byte => Literal::byte(text.parse().unwrap_or(0), span),
     }
 }
 
@@ -152,6 +154,8 @@ fn lit_kind_into_wire(kind: &yelang_macro_core::LitKind) -> WireLitKind {
         yelang_macro_core::LitKind::Str { .. } => WireLitKind::Str,
         yelang_macro_core::LitKind::Char(_) => WireLitKind::Char,
         yelang_macro_core::LitKind::Bool(_) => WireLitKind::Bool,
+        yelang_macro_core::LitKind::ByteStr { .. } => WireLitKind::ByteStr,
+        yelang_macro_core::LitKind::Byte(_) => WireLitKind::Byte,
     }
 }
 

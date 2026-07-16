@@ -1017,6 +1017,7 @@ dependencies = [
  "yelang-lexer",
  "yelang-macro-core",
  "yelang-proc-macro-bridge",
+ "yelang-quote",
 ]
 
 [[package]]
@@ -1060,6 +1061,10 @@ dependencies = [
  "yelang-proc-macro",
  "yelang-proc-macro-bridge",
 ]
+
+[[package]]
+name = "yelang-quote"
+version = "0.1.0"
 
 [[package]]
 name = "yelang-resolve"

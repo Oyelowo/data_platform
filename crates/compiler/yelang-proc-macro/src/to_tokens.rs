@@ -37,6 +37,18 @@ impl ToTokens for Literal {
     }
 }
 
+impl ToTokens for crate::Punct {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        stream.push(TokenTree::Punct(self.clone()));
+    }
+}
+
+impl ToTokens for crate::Group {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        stream.push(TokenTree::Group(self.clone()));
+    }
+}
+
 impl ToTokens for str {
     fn to_tokens(&self, stream: &mut TokenStream) {
         Literal::string(self, crate::Span::call_site()).to_tokens(stream);
@@ -46,6 +58,42 @@ impl ToTokens for str {
 impl ToTokens for String {
     fn to_tokens(&self, stream: &mut TokenStream) {
         self.as_str().to_tokens(stream);
+    }
+}
+
+impl<T: ToTokens + ?Sized> ToTokens for &T {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        (**self).to_tokens(stream);
+    }
+}
+
+impl<T: ToTokens + ?Sized> ToTokens for &mut T {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        (**self).to_tokens(stream);
+    }
+}
+
+impl<T: ToTokens> ToTokens for Option<T> {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        if let Some(value) = self {
+            value.to_tokens(stream);
+        }
+    }
+}
+
+impl<T: ToTokens> ToTokens for Vec<T> {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        for item in self {
+            item.to_tokens(stream);
+        }
+    }
+}
+
+impl<T: ToTokens> ToTokens for [T] {
+    fn to_tokens(&self, stream: &mut TokenStream) {
+        for item in self {
+            item.to_tokens(stream);
+        }
     }
 }
 

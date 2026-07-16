@@ -55,6 +55,17 @@ pub fn render_literal(lit: &Literal, interner: &Interner) -> String {
         }
         LitKind::Char(c) => format!("'{}'", c),
         LitKind::Bool(b) => b.to_string(),
+        LitKind::ByteStr { value, kind } => {
+            let text = interner.resolve(value);
+            match kind {
+                StrKind::Normal => format!("b\"{}\"", text),
+                StrKind::Raw(n) => {
+                    let hashes = "#".repeat(*n);
+                    format!("br{}\"{}\"{}", hashes, text, hashes)
+                }
+            }
+        }
+        LitKind::Byte(b) => format!("b'{}'", b),
     }
 }
 

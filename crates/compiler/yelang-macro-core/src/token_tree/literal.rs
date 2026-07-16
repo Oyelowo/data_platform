@@ -56,6 +56,20 @@ impl Literal {
     pub fn bool(value: bool, span: Span) -> Self {
         Self::new(LitKind::Bool(value), span)
     }
+
+    pub fn byte_string(value: yelang_interner::Symbol, span: Span) -> Self {
+        Self::new(
+            LitKind::ByteStr {
+                value,
+                kind: StrKind::Normal,
+            },
+            span,
+        )
+    }
+
+    pub fn byte(value: u8, span: Span) -> Self {
+        Self::new(LitKind::Byte(value), span)
+    }
 }
 
 impl fmt::Display for Literal {
@@ -86,6 +100,22 @@ impl fmt::Display for Literal {
             }
             LitKind::Char(c) => write!(f, "'{}'", c),
             LitKind::Bool(b) => write!(f, "{}", b),
+            LitKind::ByteStr { value, kind } => {
+                let v = value.as_usize();
+                match kind {
+                    StrKind::Normal => write!(f, "b\"<symbol:{}>\"", v),
+                    StrKind::Raw(n) => {
+                        write!(
+                            f,
+                            "br{}\"<symbol:{}>\"{}",
+                            "#".repeat(*n),
+                            v,
+                            "#".repeat(*n)
+                        )
+                    }
+                }
+            }
+            LitKind::Byte(b) => write!(f, "b'{}'", b),
         }
     }
 }
@@ -106,6 +136,11 @@ pub enum LitKind {
     },
     Char(char),
     Bool(bool),
+    ByteStr {
+        value: yelang_interner::Symbol,
+        kind: StrKind,
+    },
+    Byte(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

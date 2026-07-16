@@ -14,6 +14,7 @@ yelang-macro-core = { path = "../yelang-macro-core" }
 yelang-interner = { path = "../yelang-interner" }
 yelang-lexer = { path = "../yelang-lexer" }
 yelang-proc-macro-bridge = { path = "../yelang-proc-macro-bridge" }
+yelang-quote = { path = "../yelang-quote" }
 libc = { workspace = true }
 postcard = { workspace = true }
 thiserror = { workspace = true }

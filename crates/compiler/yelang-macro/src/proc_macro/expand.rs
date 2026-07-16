@@ -108,6 +108,12 @@ fn ast_tree_to_wire(tree: &yelang_macro_core::TokenTree) -> Option<WireTokenTree
                 yelang_macro_core::LitKind::Bool(_) => {
                     yelang_proc_macro_bridge::protocol::token::WireLitKind::Bool
                 }
+                yelang_macro_core::LitKind::ByteStr { .. } => {
+                    yelang_proc_macro_bridge::protocol::token::WireLitKind::ByteStr
+                }
+                yelang_macro_core::LitKind::Byte(_) => {
+                    yelang_proc_macro_bridge::protocol::token::WireLitKind::Byte
+                }
             },
             span: ast_span_to_wire(l.span),
         },

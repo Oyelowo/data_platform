@@ -473,6 +473,12 @@ fn parse_concat_elements(
                     elements.push(ConcatElement::Text(ctx.interner.resolve(value).to_string()));
                 }
                 LitKind::Bool(b) => elements.push(ConcatElement::Text(b.to_string())),
+                LitKind::ByteStr { value, .. } => {
+                    elements.push(ConcatElement::String(
+                        ctx.interner.resolve(value).to_string(),
+                    ));
+                }
+                LitKind::Byte(b) => elements.push(ConcatElement::Text(b.to_string())),
             },
             TokenTree::Ident(ident) => {
                 let name = ctx.interner.resolve(&ident.sym);

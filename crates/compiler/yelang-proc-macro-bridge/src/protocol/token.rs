@@ -54,6 +54,8 @@ pub enum WireLitKind {
     Str,
     Char,
     Bool,
+    ByteStr,
+    Byte,
 }
 
 /// A span on the wire.

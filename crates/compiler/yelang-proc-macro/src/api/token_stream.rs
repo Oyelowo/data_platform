@@ -210,6 +210,18 @@ fn core_literal_to_proc_macro(
         }
         LitKind::Char(c) => super::Literal::character(*c, span),
         LitKind::Bool(b) => super::Literal::boolean(*b, span),
+        LitKind::ByteStr { value, kind } => {
+            let text = interner.resolve(value).to_string();
+            match kind {
+                yelang_macro_core::StrKind::Normal => super::Literal::byte_string(text, span),
+                yelang_macro_core::StrKind::Raw(n) => {
+                    // Byte raw strings are not exposed yet; treat as normal.
+                    let _ = n;
+                    super::Literal::byte_string(text, span)
+                }
+            }
+        }
+        LitKind::Byte(b) => super::Literal::byte(*b, span),
     }
 }
 

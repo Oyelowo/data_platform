@@ -257,17 +257,17 @@ impl<'a> ExportCollector<'a> {
         let (fn_like_init, attr_init, derive_init) = match kind {
             ProcMacroExportKind::FunctionLike => (
                 wrapper_name.clone(),
-                "0 as yelang_proc_macro::YelangAttrMacro".to_string(),
-                "0 as yelang_proc_macro::YelangDeriveMacro".to_string(),
+                "yelang_null_attr".to_string(),
+                "yelang_null_derive".to_string(),
             ),
             ProcMacroExportKind::Attribute => (
-                "0 as yelang_proc_macro::YelangFnLikeMacro".to_string(),
+                "yelang_null_fn_like".to_string(),
                 wrapper_name.clone(),
-                "0 as yelang_proc_macro::YelangDeriveMacro".to_string(),
+                "yelang_null_derive".to_string(),
             ),
             ProcMacroExportKind::Derive => (
-                "0 as yelang_proc_macro::YelangFnLikeMacro".to_string(),
-                "0 as yelang_proc_macro::YelangAttrMacro".to_string(),
+                "yelang_null_fn_like".to_string(),
+                "yelang_null_attr".to_string(),
                 wrapper_name.clone(),
             ),
         };
@@ -293,6 +293,43 @@ impl<'a> ExportCollector<'a> {
         if self.exports.is_empty() {
             return;
         }
+
+        // Null stubs for unused YelangMacroInvoke fields. A safe extern function
+        // coerces to an unsafe function-pointer type, avoiding invalid
+        // integer-to-function-pointer casts.
+        self.parse_and_append(
+            "@no_mangle\n\
+             pub extern \"C-unwind\" fn yelang_null_fn_like(\n\
+                 _: *const u8,\n\
+                 _: usize,\n\
+                 _: *mut *mut u8,\n\
+                 _: *mut usize,\n\
+             ) {\n\
+                 unreachable!(\"null fn-like invoke\")\n\
+             }\n\
+             \n\
+             @no_mangle\n\
+             pub extern \"C-unwind\" fn yelang_null_attr(\n\
+                 _: *const u8,\n\
+                 _: usize,\n\
+                 _: *const u8,\n\
+                 _: usize,\n\
+                 _: *mut *mut u8,\n\
+                 _: *mut usize,\n\
+             ) {\n\
+                 unreachable!(\"null attr invoke\")\n\
+             }\n\
+             \n\
+             @no_mangle\n\
+             pub extern \"C-unwind\" fn yelang_null_derive(\n\
+                 _: *const u8,\n\
+                 _: usize,\n\
+                 _: *mut *mut u8,\n\
+                 _: *mut usize,\n\
+             ) {\n\
+                 unreachable!(\"null derive invoke\")\n\
+             }",
+        );
 
         // Allocator / deallocator exported by every proc-macro dylib.
         self.parse_and_append(

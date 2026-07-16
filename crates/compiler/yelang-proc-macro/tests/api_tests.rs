@@ -59,9 +59,68 @@ fn quote_emits_ident() {
 #[test]
 fn quote_emits_group() {
     let stream = yelang_proc_macro::quote! { ( x ) };
-    // The bootstrap `quote!` inserts spaces between tokens; spacing will be
-    // preserved by the production compiler-hosted `quote!` macro.
     assert_eq!(stream.to_string(), "(x)");
+}
+
+#[test]
+fn quote_interpolates_ident() {
+    let name = Ident::new("bar", Span::call_site());
+    let stream = yelang_proc_macro::quote! { foo #name baz };
+    assert_eq!(stream.to_string(), "foo bar baz");
+}
+
+#[test]
+fn quote_interpolates_token_stream() {
+    let inner = yelang_proc_macro::quote! { a + b };
+    let stream = yelang_proc_macro::quote! { ( #inner ) };
+    assert_eq!(stream.to_string(), "(a + b)");
+}
+
+#[test]
+fn quote_repeats_without_separator() {
+    let items = vec![
+        Ident::new("a", Span::call_site()),
+        Ident::new("b", Span::call_site()),
+        Ident::new("c", Span::call_site()),
+    ];
+    let stream = yelang_proc_macro::quote! { #( #items )* };
+    assert_eq!(stream.to_string(), "a b c");
+}
+
+#[test]
+fn quote_repeats_with_comma_separator() {
+    let items = vec![
+        Ident::new("a", Span::call_site()),
+        Ident::new("b", Span::call_site()),
+    ];
+    let stream = yelang_proc_macro::quote! { #( #items ),* };
+    assert_eq!(stream.to_string(), "a , b");
+}
+
+#[test]
+fn quote_group_with_interpolation() {
+    let name = Ident::new("x", Span::call_site());
+    let stream = yelang_proc_macro::quote! { { #name } };
+    assert_eq!(stream.to_string(), "{x}");
+}
+
+#[test]
+fn quote_string_literal() {
+    let stream = yelang_proc_macro::quote! { "hello" };
+    assert_eq!(stream.to_string(), "\"hello\"");
+}
+
+#[test]
+fn quote_integer_literal() {
+    let stream = yelang_proc_macro::quote! { 42 };
+    assert_eq!(stream.to_string(), "42");
+}
+
+#[test]
+fn quote_interpolates_grouped_expression() {
+    let value = Literal::integer("7", Span::call_site());
+    let stream = yelang_proc_macro::quote! { 1 + #(value) };
+    assert_eq!(stream.to_string(), "1 + 7");
 }
 
 #[test]
