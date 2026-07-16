@@ -3,7 +3,8 @@
 use yelang_interner::Interner;
 use yelang_proc_macro::bridge::{from_wire, into_wire};
 use yelang_proc_macro_bridge::protocol::WireTokenStream;
-use yelang_proc_macro_bridge::protocol::token::WireDiagnostic;
+use yelang_proc_macro_bridge::protocol::token::{WireDiagnostic, WireSpan};
+use yelang_proc_macro_bridge::sandbox::Limits;
 
 use super::ResolvedProcMacro;
 use crate::error::ExpandError;
@@ -23,35 +24,15 @@ pub fn core_to_wire(
 
 /// Convert a wire token stream back to a compiler-internal token stream.
 ///
-/// The returned tokens are rendered to source and re-tokenized through the
-/// compiler's interner so that all symbols are valid in the current compilation
-/// context.
+/// Symbols are re-interned in the current compilation context while preserving
+/// per-token spans and hygiene contexts from the proc macro output.
 pub fn wire_to_core(
     stream: WireTokenStream,
     interner: &Interner,
-    span: yelang_lexer::Span,
+    _span: yelang_lexer::Span,
 ) -> Result<yelang_macro_core::TokenStream, ExpandError> {
     let proc_stream = from_wire(stream);
-    proc_macro_output_to_core_stream(proc_stream, interner, span)
-}
-
-/// Convert a procedural macro output stream back into a compiler-internal
-/// token stream, re-tokenizing through the interner so symbols remain valid in
-/// the current compilation context.
-fn proc_macro_output_to_core_stream(
-    output: yelang_proc_macro::TokenStream,
-    interner: &Interner,
-    span: yelang_lexer::Span,
-) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
-    let rendered = output.render_source(interner);
-    let mut local_interner = interner.clone();
-    let lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
-        .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))?;
-    let tokens: Vec<_> = lex.tokens.iter().cloned().collect();
-    Ok(yelang_ast::expr::convert::from_lexer_tokens(
-        &tokens,
-        &local_interner,
-    ))
+    Ok(proc_stream.into_core_stream_with_interner(interner))
 }
 
 /// Expand a procedural macro invocation through the server.
@@ -61,7 +42,9 @@ pub fn expand_proc_macro(
     args: Option<WireTokenStream>,
     item: Option<WireTokenStream>,
     span: yelang_lexer::Span,
+    limits: Limits,
 ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ExpandError> {
+    let call_site = span_to_wire(span);
     use yelang_proc_macro_bridge::protocol::ProcMacroKind;
 
     match macro_def.kind {
@@ -70,7 +53,13 @@ pub fn expand_proc_macro(
                 ExpandError::malformed_macro_args("function-like macro missing input", span)
             })?;
             client
-                .expand_fn_like(macro_def.library, macro_def.macro_index, input)
+                .expand_fn_like(
+                    macro_def.library,
+                    macro_def.macro_index,
+                    input,
+                    call_site,
+                    limits,
+                )
                 .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))
         }
         ProcMacroKind::Attribute => {
@@ -79,7 +68,14 @@ pub fn expand_proc_macro(
                 ExpandError::malformed_macro_args("attribute macro missing item", span)
             })?;
             client
-                .expand_attr(macro_def.library, macro_def.macro_index, args, item)
+                .expand_attr(
+                    macro_def.library,
+                    macro_def.macro_index,
+                    args,
+                    item,
+                    call_site,
+                    limits,
+                )
                 .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))
         }
         ProcMacroKind::Derive => {
@@ -87,9 +83,24 @@ pub fn expand_proc_macro(
                 ExpandError::malformed_macro_args("derive macro missing item", span)
             })?;
             client
-                .expand_derive(macro_def.library, macro_def.macro_index, item)
+                .expand_derive(
+                    macro_def.library,
+                    macro_def.macro_index,
+                    item,
+                    call_site,
+                    limits,
+                )
                 .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))
         }
+    }
+}
+
+fn span_to_wire(span: yelang_lexer::Span) -> WireSpan {
+    WireSpan {
+        lo: span.start().absolute as u32,
+        hi: span.end().absolute as u32,
+        file: span.file_id().raw(),
+        syntax_context: 0,
     }
 }
 

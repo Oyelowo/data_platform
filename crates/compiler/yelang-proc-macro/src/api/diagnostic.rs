@@ -55,7 +55,7 @@ impl Diagnostic {
     pub fn emit(self) {
         thread_local! {
             static DIAGNOSTICS: std::cell::RefCell<Vec<Diagnostic>> =
-                std::cell::RefCell::new(Vec::new());
+                const { std::cell::RefCell::new(Vec::new()) };
         }
         DIAGNOSTICS.with(|d| d.borrow_mut().push(self));
     }
@@ -65,7 +65,7 @@ impl Diagnostic {
 pub fn drain_diagnostics() -> Vec<Diagnostic> {
     thread_local! {
         static DIAGNOSTICS: std::cell::RefCell<Vec<Diagnostic>> =
-            std::cell::RefCell::new(Vec::new());
+            const { std::cell::RefCell::new(Vec::new()) };
     }
     DIAGNOSTICS.with(|d| std::mem::take(&mut *d.borrow_mut()))
 }

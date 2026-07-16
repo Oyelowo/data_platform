@@ -21,6 +21,19 @@ pub fn from_wire(stream: WireTokenStream) -> TokenStream {
         .collect()
 }
 
+/// Set the thread-local call-site span from its wire representation.
+///
+/// This is called by the proc-macro server before invoking the user macro so
+/// that `Span::call_site()` returns the actual invocation site.
+pub fn set_call_site_from_wire(span: WireSpan) {
+    Span::set_call_site(span_from_wire(span));
+}
+
+/// Clear the thread-local call-site span after a macro invocation finishes.
+pub fn clear_call_site() {
+    Span::clear_call_site();
+}
+
 /// Convert a public API `TokenStream` into a `WireTokenStream` for sending to
 /// the proc-macro server.
 pub fn into_wire(stream: TokenStream) -> WireTokenStream {
@@ -85,11 +98,20 @@ fn tree_into_wire(tree: TokenTree) -> Option<WireTokenTree> {
 }
 
 fn span_from_wire(span: WireSpan) -> Span {
+    // A file or syntax context of 0 on the wire means "no specific context"
+    // (e.g. a synthesized call-site span). Map 0 to 1 because the internal ID
+    // types reject 0.
+    let file = if span.file == 0 { 1 } else { span.file };
+    let syntax_context = if span.syntax_context == 0 {
+        1
+    } else {
+        span.syntax_context
+    };
     Span::from_inner(yelang_macro_core::Span::new(
         span.lo,
         span.hi,
-        yelang_lexer::FileId::new(span.file),
-        yelang_macro_core::SyntaxContextId::new(span.syntax_context),
+        yelang_lexer::FileId::new(file),
+        yelang_macro_core::SyntaxContextId::new(syntax_context),
     ))
 }
 

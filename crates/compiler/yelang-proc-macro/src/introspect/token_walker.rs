@@ -32,7 +32,7 @@ pub trait TokenWalker {
 
     /// Called when a punctuation token is encountered.
     fn visit_punct(&mut self, punct: &Punct) -> ControlFlow<()> {
-        self.visit_token(&TokenTree::Punct(punct.clone()))
+        self.visit_token(&TokenTree::Punct(*punct))
     }
 
     /// Called when a literal token is encountered.

@@ -7,7 +7,7 @@ High-level Intermediate Representation (HIR) for Yelang. Lowered from AST after 
 - `yelang-ast` (path: `../yelang-ast`)
 - `yelang-lexer` (path: `../yelang-lexer`) — for Span, FileId
 - `yelang-interner` (path: `../yelang-interner`) — for Symbol
-- `yelang-util` (path: `../yelang-util`) — for Arena, ArenaMap, FxHashMap, DefId, HirId, BodyId
+- `yelang-arena` (path: `../yelang-arena`) — for Arena, ArenaMap, FxHashMap, DefId, HirId, BodyId
 - `yelang-resolve` (path: `../yelang-resolve`) — for ResolvedCrate, Resolution
 - `thiserror` (workspace)
 
@@ -17,7 +17,7 @@ High-level Intermediate Representation (HIR) for Yelang. Lowered from AST after 
 3. **Max file size**: ~500 lines. Split by concern.
 4. **No unwrap/expect in library code**: Use `Result` or `Option`. Only `unwrap` in tests.
 5. **Error types**: Use `thiserror` for all error enums.
-6. **Use yelang-util types**: `DefId`, `HirId`, `BodyId`, `Arena`, `ArenaMap`, `FxHashMap`.
+6. **Use yelang-arena types**: `DefId`, `HirId`, `BodyId`, `Arena`, `ArenaMap`, `FxHashMap`.
 7. **HIR has no unresolved names**: Every path is a `Res` (resolved path), every variable is a `HirId` or `DefId`.
 
 ## Module Structure
@@ -25,7 +25,7 @@ High-level Intermediate Representation (HIR) for Yelang. Lowered from AST after 
 ```
 src/
   lib.rs              — Public exports, Crate root
-  ids.rs              — HirId, BodyId, LocalId (or re-export from yelang-util)
+  ids.rs              — HirId, BodyId, LocalId (or re-export from yelang-arena)
   res.rs              — Res: how a path was resolved (Def, Local, PrimTy, etc.)
   hir.rs              — Core HIR types (Item, Expr, Stmt, Ty, Pat, Body)
   hir_expr.rs         — ExprKind enum (named struct variants)

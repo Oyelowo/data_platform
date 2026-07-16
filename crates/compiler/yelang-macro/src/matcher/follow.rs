@@ -208,12 +208,12 @@ fn first_op(op: &MatcherOp, interner: &yelang_interner::Interner) -> ClassSet {
             if matches!(kind, RepetitionKind::ZeroOrMore | RepetitionKind::ZeroOrOne) {
                 set.insert(TokenClass::Epsilon);
             }
-            if let Some(sep_tree) = sep {
-                if set.contains(&TokenClass::Epsilon) {
-                    set.insert(TokenClass::Terminal(SimpleToken::from_token_tree(
-                        sep_tree, interner,
-                    )));
-                }
+            if let Some(sep_tree) = sep
+                && set.contains(&TokenClass::Epsilon)
+            {
+                set.insert(TokenClass::Terminal(SimpleToken::from_token_tree(
+                    sep_tree, interner,
+                )));
             }
             set
         }

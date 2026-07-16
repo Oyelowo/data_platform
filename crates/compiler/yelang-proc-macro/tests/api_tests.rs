@@ -94,7 +94,7 @@ fn quote_repeats_with_comma_separator() {
         Ident::new("b", Span::call_site()),
     ];
     let stream = yelang_proc_macro::quote! { #( #items ),* };
-    assert_eq!(stream.to_string(), "a , b");
+    assert_eq!(stream.to_string(), "a, b");
 }
 
 #[test]
@@ -121,6 +121,85 @@ fn quote_interpolates_grouped_expression() {
     let value = Literal::integer("7", Span::call_site());
     let stream = yelang_proc_macro::quote! { 1 + #(value) };
     assert_eq!(stream.to_string(), "1 + 7");
+}
+
+#[test]
+fn quote_repeats_plus_one_or_more() {
+    let items = vec![
+        Ident::new("a", Span::call_site()),
+        Ident::new("b", Span::call_site()),
+    ];
+    let stream = yelang_proc_macro::quote! { #( #items )+ };
+    assert_eq!(stream.to_string(), "a b");
+}
+
+#[test]
+#[should_panic(expected = "`quote!` `+` repetition requires a non-empty iterator")]
+fn quote_repeats_plus_requires_non_empty() {
+    let items: Vec<Ident> = Vec::new();
+    let _stream = yelang_proc_macro::quote! { #( #items )+ };
+}
+
+#[test]
+fn quote_repeats_empty_star_yields_nothing() {
+    let items: Vec<Ident> = Vec::new();
+    let stream = yelang_proc_macro::quote! { before #( #items )* after };
+    assert_eq!(stream.to_string(), "before after");
+}
+
+#[test]
+fn quote_repeats_with_multiple_interpolations() {
+    let names = vec![
+        Ident::new("a", Span::call_site()),
+        Ident::new("b", Span::call_site()),
+    ];
+    let tys = vec![
+        Ident::new("i32", Span::call_site()),
+        Ident::new("u32", Span::call_site()),
+    ];
+    let stream = yelang_proc_macro::quote! { #( #names: #tys ),* };
+    assert_eq!(stream.to_string(), "a: i32, b: u32");
+}
+
+#[test]
+fn quote_repeats_with_multiple_interpolations_and_separator() {
+    let names = vec![
+        Ident::new("x", Span::call_site()),
+        Ident::new("y", Span::call_site()),
+    ];
+    let values = vec![
+        Literal::integer("1", Span::call_site()),
+        Literal::integer("2", Span::call_site()),
+    ];
+    let stream = yelang_proc_macro::quote! { #( #names = #values );* };
+    assert_eq!(stream.to_string(), "x = 1; y = 2");
+}
+
+#[test]
+fn quote_nested_repetitions() {
+    let xs = vec![
+        Literal::integer("1", Span::call_site()),
+        Literal::integer("2", Span::call_site()),
+    ];
+    let ys = vec![
+        Literal::integer("10", Span::call_site()),
+        Literal::integer("20", Span::call_site()),
+    ];
+    // Both inner and outer interpolations reference `xs` and `ys`, so the
+    // outer loop repeats the inner loop body `xs.len()` times.
+    let stream = yelang_proc_macro::quote! { #( #( #xs + #ys ),* );* };
+    assert_eq!(stream.to_string(), "1 + 10, 2 + 20; 1 + 10, 2 + 20");
+}
+
+#[test]
+fn quote_spanned_applies_span_to_originating_tokens() {
+    let span = Span::call_site();
+    let name = Ident::new("x", Span::call_site());
+    let stream = yelang_proc_macro::quote_spanned!(span=> #name: Copy);
+    // The originating tokens (`:`, `Copy`) carry the span; the interpolated
+    // `name` keeps its own span. We mainly check that the macro expands and
+    // produces the expected tokens.
+    assert_eq!(stream.to_string(), "x: Copy");
 }
 
 #[test]

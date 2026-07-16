@@ -227,14 +227,14 @@ fn register_all(
     let library_path = canonical_dylib.to_string_lossy().into_owned();
 
     // Enforce the one-dylib-per-registration invariant.
-    if let Some(existing) = registry.iter().find(|m| m.library_path == library_path) {
-        if existing.crate_name != crate_name {
-            return Err(DiscoveryError::DuplicateLibrary {
-                path: canonical_dylib.to_path_buf(),
-                first_crate: existing.crate_name.clone(),
-                second_crate: crate_name.to_string(),
-            });
-        }
+    if let Some(existing) = registry.iter().find(|m| m.library_path == library_path)
+        && existing.crate_name != crate_name
+    {
+        return Err(DiscoveryError::DuplicateLibrary {
+            path: canonical_dylib.to_path_buf(),
+            first_crate: existing.crate_name.clone(),
+            second_crate: crate_name.to_string(),
+        });
     }
 
     for (name, kind) in &macros {

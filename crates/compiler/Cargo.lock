@@ -1102,6 +1102,7 @@ dependencies = [
 name = "yelang-proc-macro-server"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "libloading",
  "postcard",
  "rstest",

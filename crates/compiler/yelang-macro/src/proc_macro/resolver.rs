@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use yelang_proc_macro_bridge::protocol::{LibraryHandle, ProcMacroKind};
+use yelang_proc_macro_bridge::sandbox::Limits;
 
 use super::client::{LoadedLibrary, ProcMacroClient, ProcMacroClientError};
 use super::discovery::{
@@ -165,6 +166,7 @@ impl ProcMacroRuntime {
         args: Option<yelang_proc_macro_bridge::protocol::WireTokenStream>,
         item: Option<yelang_proc_macro_bridge::protocol::WireTokenStream>,
         span: yelang_lexer::Span,
+        limits: Limits,
     ) -> Result<
         (
             yelang_proc_macro_bridge::protocol::WireTokenStream,
@@ -173,11 +175,12 @@ impl ProcMacroRuntime {
         ExpandError,
     > {
         crate::proc_macro::expand_proc_macro(
-            &mut *self.client.borrow_mut(),
+            &mut self.client.borrow_mut(),
             macro_def,
             args,
             item,
             span,
+            limits,
         )
     }
 
@@ -192,10 +195,10 @@ impl ProcMacroRuntime {
         // previous successful validation) return it immediately.
         {
             let loaded = self.loaded.borrow();
-            if let Some(entry) = loaded.get(&key) {
-                if entry.validated {
-                    return entry.result.clone().map(|loaded| loaded.handle);
-                }
+            if let Some(entry) = loaded.get(&key)
+                && entry.validated
+            {
+                return entry.result.clone().map(|loaded| loaded.handle);
             }
         }
 

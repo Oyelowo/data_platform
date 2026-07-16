@@ -304,15 +304,15 @@ pub fn expand_eager_macros_in_stream(
     let mut i = 0;
 
     while i < trees.len() {
-        if let Some((inv, consumed)) = try_parse_invocation(&trees[i..], ctx.interner) {
-            if EagerBuiltin::from_path(&inv.path_segments, ctx.interner).is_some() {
-                let expanded_args = expand_eager_macros_in_stream(&inv.args, ctx)?;
-                let builtin = EagerBuiltin::from_path(&inv.path_segments, ctx.interner).unwrap();
-                let replacement = expand_eager_builtin(builtin, &expanded_args, ctx, inv.span)?;
-                result.extend(replacement);
-                i += consumed;
-                continue;
-            }
+        if let Some((inv, consumed)) = try_parse_invocation(&trees[i..], ctx.interner)
+            && EagerBuiltin::from_path(&inv.path_segments, ctx.interner).is_some()
+        {
+            let expanded_args = expand_eager_macros_in_stream(&inv.args, ctx)?;
+            let builtin = EagerBuiltin::from_path(&inv.path_segments, ctx.interner).unwrap();
+            let replacement = expand_eager_builtin(builtin, &expanded_args, ctx, inv.span)?;
+            result.extend(replacement);
+            i += consumed;
+            continue;
         }
 
         match &trees[i] {
@@ -372,9 +372,7 @@ fn try_parse_invocation(
     // do not accidentally consume a user macro named `concat` in an unrelated
     // position. We only treat it as an invocation if the name is an eager
     // builtin; otherwise the caller falls back to normal token handling.
-    if EagerBuiltin::from_path(&path_segments, interner).is_none() {
-        return None;
-    }
+    EagerBuiltin::from_path(&path_segments, interner)?;
 
     Some((
         ParsedInvocation {
@@ -567,10 +565,10 @@ fn parse_concat_bytes_elements(
     span: LexerSpan,
 ) -> Result<Vec<u8>, ExpandError> {
     let mut bytes = Vec::new();
-    let mut iter = args.iter().peekable();
+    let iter = args.iter().peekable();
     let mut index = 0;
 
-    while let Some(tree) = iter.next() {
+    for tree in iter {
         if index % 2 == 1 {
             if !is_punct(tree, ',') {
                 return Err(ExpandError::malformed_macro_args(
@@ -704,12 +702,12 @@ fn expand_include(
     // Tokenize the included file. We intentionally do not parse it here: the
     // caller will parse the returned tokens according to the invocation context
     // (items, expression, etc.).
-    let mut local_interner = ctx.interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&contents, &mut local_interner).map_err(|e| {
+    let local_interner = ctx.interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&contents, &local_interner).map_err(|e| {
         ExpandError::malformed_macro_args(format!("include! tokenize: {}", e), span)
     })?;
     let tokens: Vec<yelang_lexer::Token<_>> =
-        std::iter::from_fn(|| lex.advance().map(|t| t.clone())).collect();
+        std::iter::from_fn(|| lex.advance().cloned()).collect();
     Ok(from_lexer_tokens(&tokens, ctx.interner))
 }
 
@@ -960,30 +958,30 @@ fn parse_cfg_predicate_from_iter<'a>(
                 }
                 _ => {
                     // `name` or `name = "value"`
-                    if let Some(eq) = iter.peek() {
-                        if is_punct(eq, '=') {
-                            iter.next();
-                            let value_tree = iter.next().ok_or_else(|| {
-                                ExpandError::malformed_macro_args(
-                                    "cfg! expected value after `=`".to_string(),
-                                    span,
-                                )
-                            })?;
-                            let TokenTree::Literal(lit) = value_tree else {
-                                return Err(ExpandError::malformed_macro_args(
-                                    "cfg! value must be a string literal".to_string(),
-                                    span,
-                                ));
-                            };
-                            let LitKind::Str { value, .. } = &lit.kind else {
-                                return Err(ExpandError::malformed_macro_args(
-                                    "cfg! value must be a string literal".to_string(),
-                                    span,
-                                ));
-                            };
-                            let value = ctx.interner.resolve(value).to_string();
-                            return Ok(CfgPredicate::KeyValue(name.to_string(), value));
-                        }
+                    if let Some(eq) = iter.peek()
+                        && is_punct(eq, '=')
+                    {
+                        iter.next();
+                        let value_tree = iter.next().ok_or_else(|| {
+                            ExpandError::malformed_macro_args(
+                                "cfg! expected value after `=`".to_string(),
+                                span,
+                            )
+                        })?;
+                        let TokenTree::Literal(lit) = value_tree else {
+                            return Err(ExpandError::malformed_macro_args(
+                                "cfg! value must be a string literal".to_string(),
+                                span,
+                            ));
+                        };
+                        let LitKind::Str { value, .. } = &lit.kind else {
+                            return Err(ExpandError::malformed_macro_args(
+                                "cfg! value must be a string literal".to_string(),
+                                span,
+                            ));
+                        };
+                        let value = ctx.interner.resolve(value).to_string();
+                        return Ok(CfgPredicate::KeyValue(name.to_string(), value));
                     }
                     Ok(CfgPredicate::Name(name.to_string()))
                 }
@@ -1029,7 +1027,7 @@ fn parse_single_string_arg(
 
     // Reject trailing tokens except a single trailing comma.
     let remaining: Vec<_> = iter.collect();
-    if !remaining.is_empty() && !(remaining.len() == 1 && is_punct(remaining[0], ',')) {
+    if !(remaining.is_empty() || remaining.len() == 1 && is_punct(remaining[0], ',')) {
         return Err(ExpandError::malformed_macro_args(
             "expected exactly one string literal argument".to_string(),
             span,

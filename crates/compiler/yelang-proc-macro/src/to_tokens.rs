@@ -6,7 +6,7 @@ use crate::{Ident, Literal, TokenStream, TokenTree};
 pub trait ToTokens {
     fn to_tokens(&self, stream: &mut TokenStream);
 
-    fn into_token_stream(&self) -> TokenStream {
+    fn to_token_stream(&self) -> TokenStream {
         let mut s = TokenStream::new();
         self.to_tokens(&mut s);
         s
@@ -39,7 +39,7 @@ impl ToTokens for Literal {
 
 impl ToTokens for crate::Punct {
     fn to_tokens(&self, stream: &mut TokenStream) {
-        stream.push(TokenTree::Punct(self.clone()));
+        stream.push(TokenTree::Punct(*self));
     }
 }
 

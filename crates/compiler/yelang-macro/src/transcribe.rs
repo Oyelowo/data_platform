@@ -159,12 +159,12 @@ fn transcribe_op(
                 env.pop();
                 out.extend(part);
 
-                if i + 1 < count {
-                    if let Some(sep_tree) = sep {
-                        let mut sep = sep_tree.clone();
-                        apply_ctx_to_tree(&mut sep, generated_ctx);
-                        out.push(sep);
-                    }
+                if i + 1 < count
+                    && let Some(sep_tree) = sep
+                {
+                    let mut sep = sep_tree.clone();
+                    apply_ctx_to_tree(&mut sep, generated_ctx);
+                    out.push(sep);
                 }
             }
             Ok(out)

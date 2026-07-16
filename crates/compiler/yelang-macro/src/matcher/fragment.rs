@@ -199,9 +199,8 @@ fn parse_pat(src: &str, interner: &Interner) -> Result<yelang_ast::Pattern, Stri
 }
 
 fn parse_block(src: &str) -> Result<yelang_ast::BlockExpr, String> {
-    let mut interner = Interner::new();
-    let mut stream =
-        yelang_ast::TokenKind::tokenize(src, &mut interner).map_err(|e| e.to_string())?;
+    let interner = Interner::new();
+    let mut stream = yelang_ast::TokenKind::tokenize(src, &interner).map_err(|e| e.to_string())?;
     stream
         .parse::<yelang_ast::BlockExpr>()
         .map_err(|e| e.to_string())

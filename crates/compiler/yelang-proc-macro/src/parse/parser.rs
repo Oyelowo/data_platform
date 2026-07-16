@@ -67,6 +67,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume and return the current token.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<TokenTree> {
         self.cursor.next()
     }

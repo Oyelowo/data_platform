@@ -83,6 +83,7 @@ pub enum ReprKind {
 }
 
 impl ReprKind {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "C" => Some(ReprKind::C),
@@ -138,7 +139,7 @@ fn apply_derive(attr: &Attribute, item: &Item, interner: &Interner) -> Decorator
     let traits = collect_trait_names(&attr.args, interner);
 
     let (struct_name, fields, generics) = match &item.kind {
-        ItemKind::Struct(s) => (s.name.clone(), s.fields.clone(), s.generics.clone()),
+        ItemKind::Struct(s) => (s.name, s.fields.clone(), s.generics.clone()),
         ItemKind::Enum(e) => {
             // For enums, we support Copy, Clone, Debug, PartialEq by generating
             // impls that delegate to each variant.  For the MVP we keep it simple
@@ -329,7 +330,7 @@ pub fn generate_clone_impl(
                     let value =
                         expr_from_str(&format!("self.{}.clone()", field_name_str), span, interner);
                     FieldAssign {
-                        name: f.name.clone(),
+                        name: f.name,
                         value,
                         is_shorthand: false,
                         span,
@@ -426,7 +427,7 @@ pub fn generate_debug_impl(
     interner: &Interner,
 ) -> Item {
     let name_str = interner.resolve(&struct_name.symbol);
-    let msg = format!("{}", name_str);
+    let msg = name_str.to_string();
     let body = BlockExpr {
         label: None,
         statements: vec![Stmt {
@@ -492,7 +493,7 @@ pub fn generate_partial_eq_impl(
     let body = BlockExpr {
         label: None,
         statements: vec![Stmt {
-            kind: StmtKind::TermExpr(Box::new(eq_expr.unwrap_or_else(|| Expr {
+            kind: StmtKind::TermExpr(Box::new(eq_expr.unwrap_or(Expr {
                 kind: ExprKind::Literal(Literal::Bool(true)),
                 span,
             }))),
@@ -642,7 +643,7 @@ pub fn path_from_ident(ident: &Ident) -> Path {
     Path {
         qself: None,
         segments: vec![PathSegment {
-            ident: ident.clone(),
+            ident: *ident,
             args: None,
         }],
         is_absolute: false,
@@ -777,15 +778,14 @@ fn parse_derive_expr(expr: &Expr, interner: &Interner) -> Option<(String, bool)>
                         && interner.resolve(&path.segments[0].ident.symbol) == "unsafe"
                         && call.args.len() == 1 =>
                 {
-                    if let yelang_ast::CallArgument::Positional(e) = &call.args[0] {
-                        if let ExprKind::Path(p) = &e.kind {
-                            if p.segments.len() == 1 {
-                                return Some((
-                                    interner.resolve(&p.segments[0].ident.symbol).to_string(),
-                                    true,
-                                ));
-                            }
-                        }
+                    if let yelang_ast::CallArgument::Positional(e) = &call.args[0]
+                        && let ExprKind::Path(p) = &e.kind
+                        && p.segments.len() == 1
+                    {
+                        return Some((
+                            interner.resolve(&p.segments[0].ident.symbol).to_string(),
+                            true,
+                        ));
                     }
                     None
                 }

@@ -10,9 +10,19 @@ use yelang_proc_macro_bridge::protocol::{
     serialize::{read_response, write_request},
     token::{WireDiagnostic, WireLevel, WireTokenTree},
 };
+use yelang_proc_macro_bridge::sandbox::Limits;
 
 fn server_path() -> &'static str {
     env!("CARGO_BIN_EXE_yelang-proc-macro-server")
+}
+
+fn default_call_site() -> yelang_proc_macro_bridge::protocol::token::WireSpan {
+    yelang_proc_macro_bridge::protocol::token::WireSpan {
+        lo: 0,
+        hi: 0,
+        file: 0,
+        syntax_context: 0,
+    }
 }
 
 /// Return the path to the compiled `test_macro` dylib fixture.
@@ -57,6 +67,10 @@ impl ServerHandle {
 
     fn stdout(&mut self) -> &mut std::process::ChildStdout {
         self.child.stdout.as_mut().unwrap()
+    }
+
+    fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     fn handshake(&mut self) {
@@ -158,37 +172,23 @@ fn load_fixture_library_returns_descriptors() {
     server.handshake();
 
     let (_handle, macros) = server.load_library(dylib.to_string_lossy().to_string());
-    assert_eq!(macros.len(), 6);
-    assert!(
-        macros
-            .iter()
-            .any(|m| m.name == "make_answer" && m.kind == ProcMacroKind::FunctionLike)
-    );
-    assert!(
-        macros
-            .iter()
-            .any(|m| m.name == "trace" && m.kind == ProcMacroKind::Attribute)
-    );
-    assert!(
-        macros
-            .iter()
-            .any(|m| m.name == "answer" && m.kind == ProcMacroKind::Derive)
-    );
-    assert!(
-        macros
-            .iter()
-            .any(|m| m.name == "generate_const" && m.kind == ProcMacroKind::Derive)
-    );
-    assert!(
-        macros
-            .iter()
-            .any(|m| m.name == "emit_warning" && m.kind == ProcMacroKind::FunctionLike)
-    );
-    assert!(
-        macros
-            .iter()
-            .any(|m| m.name == "explode" && m.kind == ProcMacroKind::FunctionLike)
-    );
+    assert_eq!(macros.len(), 9);
+    for (name, kind) in [
+        ("make_answer", ProcMacroKind::FunctionLike),
+        ("trace", ProcMacroKind::Attribute),
+        ("answer", ProcMacroKind::Derive),
+        ("generate_const", ProcMacroKind::Derive),
+        ("emit_warning", ProcMacroKind::FunctionLike),
+        ("explode", ProcMacroKind::FunctionLike),
+        ("slow_macro", ProcMacroKind::FunctionLike),
+        ("huge_macro", ProcMacroKind::FunctionLike),
+        ("exit_macro", ProcMacroKind::FunctionLike),
+    ] {
+        assert!(
+            macros.iter().any(|m| m.name == name && m.kind == kind),
+            "missing macro {name:?} of kind {kind:?}"
+        );
+    }
 }
 
 #[test]
@@ -210,6 +210,8 @@ fn expand_fn_like_macro() {
             library: handle,
             macro_index: 0,
             input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -254,6 +256,8 @@ fn expand_attribute_macro() {
             macro_index: 1,
             args: empty_stream(),
             item: item.clone(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -286,6 +290,8 @@ fn expand_derive_macro() {
             library: handle,
             macro_index: 2,
             item: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -328,6 +334,8 @@ fn panic_in_macro_returns_error_diagnostic() {
             library: handle,
             macro_index: 5,
             input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -371,6 +379,8 @@ fn macro_index_out_of_bounds_returns_error() {
             library: handle,
             macro_index: 99,
             input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -409,6 +419,8 @@ fn wrong_macro_kind_returns_error() {
             library: handle,
             macro_index: 0,
             item: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -446,6 +458,8 @@ fn expand_generate_const_derive_macro() {
             library: handle,
             macro_index: 3,
             item: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -478,6 +492,8 @@ fn expand_emit_warning_macro_returns_diagnostic() {
             library: handle,
             macro_index: 4,
             input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -525,6 +541,8 @@ fn unload_library_removes_handle() {
             library: handle,
             macro_index: 0,
             input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits::default(),
         },
     )
     .unwrap();
@@ -539,6 +557,101 @@ fn unload_library_removes_handle() {
             }
         ),
         "expected LibraryNotFound after unload, got {:?}",
+        response
+    );
+}
+
+#[test]
+fn fn_like_macro_times_out() {
+    let dylib = fixture_dylib_path();
+    if !dylib.exists() {
+        eprintln!("fixture dylib not found at {}; skipping", dylib.display());
+        return;
+    }
+
+    let mut server = ServerHandle::spawn();
+    server.handshake();
+
+    let (handle, _macros) = server.load_library(dylib.to_string_lossy().to_string());
+
+    write_request(
+        server.stdin(),
+        &Request::ExpandFnLike {
+            library: handle,
+            macro_index: 6,
+            input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits {
+                max_cpu_seconds: 1,
+                ..Limits::default()
+            },
+        },
+    )
+    .unwrap();
+
+    let response = read_response(server.stdout()).unwrap();
+    assert!(
+        matches!(
+            response,
+            Response::Error {
+                code: ErrorCode::ExpansionTimeout,
+                ..
+            }
+        ),
+        "expected ExpansionTimeout, got {:?}",
+        response
+    );
+
+    // The server exits after a timeout so the runaway worker cannot starve
+    // future requests. Give it a moment and confirm the process is gone.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if !server.is_alive() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("server process survived a timeout");
+}
+
+#[test]
+fn fn_like_macro_output_limit() {
+    let dylib = fixture_dylib_path();
+    if !dylib.exists() {
+        eprintln!("fixture dylib not found at {}; skipping", dylib.display());
+        return;
+    }
+
+    let mut server = ServerHandle::spawn();
+    server.handshake();
+
+    let (handle, _macros) = server.load_library(dylib.to_string_lossy().to_string());
+
+    write_request(
+        server.stdin(),
+        &Request::ExpandFnLike {
+            library: handle,
+            macro_index: 7,
+            input: empty_stream(),
+            call_site: default_call_site(),
+            limits: Limits {
+                max_output_tokens: 100,
+                ..Limits::default()
+            },
+        },
+    )
+    .unwrap();
+
+    let response = read_response(server.stdout()).unwrap();
+    assert!(
+        matches!(
+            response,
+            Response::Error {
+                code: ErrorCode::ExpansionTooLarge,
+                ..
+            }
+        ),
+        "expected ExpansionTooLarge, got {:?}",
         response
     );
 }

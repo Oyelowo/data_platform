@@ -49,6 +49,7 @@ impl<'a> Cursor<'a> {
     }
 
     /// Consume and return the current token.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<TokenTree> {
         let result = self.trees.get(self.pos).cloned();
         if result.is_some() {

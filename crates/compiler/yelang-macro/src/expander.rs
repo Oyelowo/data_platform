@@ -28,8 +28,10 @@ use yelang_macro_core::{
     CrateId, ExpnData, ExpnKind, HygieneData, MacroDefId, TokenStream, Transparency,
 };
 use yelang_proc_macro::Diagnostic;
+use yelang_proc_macro_bridge::sandbox::Limits;
 
 const MAX_EXPANSIONS: usize = 1000;
+const MAX_RECURSION_DEPTH: usize = 128;
 
 /// Result of expanding a program.
 pub struct ExpandResult {
@@ -388,14 +390,12 @@ impl<'a> MacroExpander<'a> {
                 ) {
                     Ok(items) => {
                         let mut expanded = vec![];
-                        let mut changed = false;
                         for it in items {
-                            let (es, c) = self.expand_item_deep(it);
+                            let (es, _) = self.expand_item_deep(it);
                             expanded.extend(es);
-                            changed |= c;
                         }
                         self.after_expand();
-                        return (expanded, true || changed);
+                        return (expanded, true);
                     }
                     Err(reason) => {
                         self.after_expand();
@@ -629,9 +629,9 @@ impl<'a> MacroExpander<'a> {
                         &self.eager_context(),
                     ) {
                         Ok(expanded) => {
-                            let (recursed, recursed_changed) = self.expand_type(&expanded);
+                            let (recursed, _) = self.expand_type(&expanded);
                             self.after_expand();
-                            return (recursed, true || recursed_changed);
+                            return (recursed, true);
                         }
                         Err(reason) => {
                             self.errors.push(
@@ -965,9 +965,9 @@ impl<'a> MacroExpander<'a> {
                         &self.eager_context(),
                     ) {
                         Ok(expanded) => {
-                            let (recursed, recursed_changed) = self.expand_pattern(&expanded);
+                            let (recursed, _) = self.expand_pattern(&expanded);
                             self.after_expand();
-                            return (recursed, true || recursed_changed);
+                            return (recursed, true);
                         }
                         Err(reason) => {
                             self.errors.push(
@@ -1167,13 +1167,13 @@ impl<'a> MacroExpander<'a> {
                 // Built-in macros expand to expressions; place them back into
                 // statement position as a discarded expression statement.
                 if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
-                    let (recursed, recursed_changed) = self.expand_expr(&expanded);
+                    let (recursed, _) = self.expand_expr(&expanded);
                     return (
                         vec![Stmt {
                             kind: StmtKind::TermExpr(Box::new(recursed)),
                             span: stmt.span,
                         }],
-                        true || recursed_changed,
+                        true,
                     );
                 }
 
@@ -1185,14 +1185,12 @@ impl<'a> MacroExpander<'a> {
                     ) {
                         Ok(stmts) => {
                             let mut expanded = vec![];
-                            let mut changed = false;
                             for s in stmts {
-                                let (es, c) = self.expand_stmt(&s);
+                                let (es, _) = self.expand_stmt(&s);
                                 expanded.extend(es);
-                                changed |= c;
                             }
                             self.after_expand();
-                            return (expanded, true || changed);
+                            return (expanded, true);
                         }
                         Err(reason) => {
                             self.errors.push(
@@ -1301,8 +1299,8 @@ impl<'a> MacroExpander<'a> {
         match &expr.kind {
             ExprKind::MacroInvocation(inv) => {
                 if let Some(expanded) = expand_builtin_macro(inv, self.interner) {
-                    let (recursed, recursed_changed) = self.expand_expr(&expanded);
-                    return (recursed, true || recursed_changed);
+                    let (recursed, _) = self.expand_expr(&expanded);
+                    return (recursed, true);
                 }
                 match self.expand_macro_invocation(inv) {
                     Ok(stream) => match parse_expr_from_token_stream(
@@ -1311,9 +1309,9 @@ impl<'a> MacroExpander<'a> {
                         &self.eager_context(),
                     ) {
                         Ok(expanded) => {
-                            let (recursed, recursed_changed) = self.expand_expr(&expanded);
+                            let (recursed, _) = self.expand_expr(&expanded);
                             self.after_expand();
-                            return (recursed, true || recursed_changed);
+                            return (recursed, true);
                         }
                         Err(reason) => {
                             self.errors.push(
@@ -1404,7 +1402,7 @@ impl<'a> MacroExpander<'a> {
                         }
                         yelang_ast::CallArgument::Named(id, e) => {
                             let (ne, nc) = self.expand_expr(e);
-                            (yelang_ast::CallArgument::Named(id.clone(), ne), nc)
+                            (yelang_ast::CallArgument::Named(*id, ne), nc)
                         }
                     };
                     args.push(new_arg);
@@ -1571,7 +1569,7 @@ impl<'a> MacroExpander<'a> {
                 for field in &struct_expr.fields {
                     let (ne, nc) = self.expand_expr(&field.value);
                     new_fields.push(yelang_ast::FieldAssign {
-                        name: field.name.clone(),
+                        name: field.name,
                         value: ne,
                         is_shorthand: field.is_shorthand,
                         span: field.span,
@@ -1602,7 +1600,7 @@ impl<'a> MacroExpander<'a> {
                     Expr {
                         kind: ExprKind::MemberAccess(MemberAccess {
                             base: Box::new(base),
-                            member: access.member().clone(),
+                            member: *access.member(),
                         }),
                         span: expr.span,
                     },
@@ -1645,7 +1643,7 @@ impl<'a> MacroExpander<'a> {
                         }
                         yelang_ast::CallArgument::Named(id, e) => {
                             let (ne, nc) = self.expand_expr(e);
-                            (yelang_ast::CallArgument::Named(id.clone(), ne), nc)
+                            (yelang_ast::CallArgument::Named(*id, ne), nc)
                         }
                     };
                     args.push(new_arg);
@@ -1711,7 +1709,7 @@ impl<'a> MacroExpander<'a> {
                     Expr {
                         kind: ExprKind::Try(yelang_ast::TrySafeAccess {
                             base: Box::new(base),
-                            op: try_expr.op.clone(),
+                            op: try_expr.op,
                         }),
                         span: expr.span,
                     },
@@ -1887,7 +1885,7 @@ impl<'a> MacroExpander<'a> {
                     Expr {
                         kind: ExprKind::BindAt(yelang_ast::BindAtExpr {
                             base: Box::new(base),
-                            at: bind.at.clone(),
+                            at: bind.at,
                         }),
                         span: expr.span,
                     },
@@ -1911,7 +1909,7 @@ impl<'a> MacroExpander<'a> {
                 let mut changed = false;
                 for field in obj.fields() {
                     let (val, val_changed) = self.expand_expr(field.value());
-                    new_fields.push(yelang_ast::ObjectField::new(field.key().clone(), val));
+                    new_fields.push(yelang_ast::ObjectField::new(*field.key(), val));
                     changed |= val_changed;
                 }
                 (
@@ -1935,7 +1933,7 @@ impl<'a> MacroExpander<'a> {
                             let (val, val_changed) = self.expand_expr(&kv.value);
                             new_fields.push(yelang_ast::DocumentField::KeyVal(
                                 yelang_ast::KeyVal {
-                                    key: kv.key.clone(),
+                                    key: kv.key,
                                     value: val,
                                 },
                             ));
@@ -1991,10 +1989,10 @@ impl<'a> MacroExpander<'a> {
         {
             return true;
         }
-        if let Some(executor) = self.in_process_executor.clone() {
-            if let Some(mac) = executor.find(name_str) {
-                return mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute;
-            }
+        if let Some(executor) = self.in_process_executor.clone()
+            && let Some(mac) = executor.find(name_str)
+        {
+            return mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute;
         }
         if let Some(runtime) = self.proc_macro_runtime.as_ref() {
             return runtime
@@ -2026,110 +2024,102 @@ impl<'a> MacroExpander<'a> {
         let span = attr.span;
 
         // In-process procedural attribute macros take priority over declarative rules.
-        if let Some(executor) = self.in_process_executor.clone() {
-            if let Some(mac) = executor.find(&name_str) {
-                if mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute {
-                    let Some(_) = self.before_expand(
-                        &name_str,
-                        span,
-                        MacroFrameId::ProcMacro(name_str.clone()),
-                    ) else {
-                        return Some(vec![item.clone()]);
-                    };
-                    let attr_args_stream =
-                        attribute_args_to_token_stream(&attr.args, self.interner)?;
-                    let item_stream = item_to_token_stream(item, self.interner)?;
-                    let proc_args = yelang_proc_macro::TokenStream::from_core_stream(
-                        &attr_args_stream,
-                        self.interner,
-                    );
-                    let proc_item = yelang_proc_macro::TokenStream::from_core_stream(
-                        &item_stream,
-                        self.interner,
-                    );
-                    let result = self.expand_in_process_attr(mac, proc_args, proc_item, span);
-                    self.after_expand();
-                    return Some(match result {
-                        Ok(stream) => parse_items_from_token_stream(
-                            &stream,
-                            self.interner,
-                            &self.eager_context(),
+        if let Some(executor) = self.in_process_executor.clone()
+            && let Some(mac) = executor.find(&name_str)
+            && mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute
+        {
+            let Some(_) =
+                self.before_expand(&name_str, span, MacroFrameId::ProcMacro(name_str.clone()))
+            else {
+                return Some(vec![item.clone()]);
+            };
+            let attr_args_stream = attribute_args_to_token_stream(&attr.args, self.interner)?;
+            let item_stream = item_to_token_stream(item, self.interner)?;
+            let proc_args =
+                yelang_proc_macro::TokenStream::from_core_stream(&attr_args_stream, self.interner);
+            let proc_item =
+                yelang_proc_macro::TokenStream::from_core_stream(&item_stream, self.interner);
+            let result = self.expand_in_process_attr(mac, proc_args, proc_item, span);
+            self.after_expand();
+            return Some(match result {
+                Ok(stream) => parse_items_from_token_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
+                        ExpandError::malformed_macro_args(
+                            format!(
+                                "attribute macro `{}` expansion did not produce valid items: {}",
+                                name_str, reason
+                            ),
+                            span,
                         )
-                        .unwrap_or_else(|reason| {
-                            self.errors.push(
-                                ExpandError::malformed_macro_args(
-                                    format!(
-                                        "attribute macro `{}` expansion did not produce valid items: {}",
-                                        name_str, reason
-                                    ),
-                                    span,
-                                )
-                                .with_backtrace(self.backtrace()),
-                            );
-                            vec![item.clone()]
-                        }),
-                        Err(e) => {
-                            self.errors.push(e);
-                            vec![item.clone()]
-                        }
-                    });
+                        .with_backtrace(self.backtrace()),
+                    );
+                    vec![item.clone()]
+                }),
+                Err(e) => {
+                    self.errors.push(e);
+                    vec![item.clone()]
                 }
-            }
+            });
         }
 
         // Out-of-process procedural attribute macros take priority over declarative rules.
-        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
-            if let Some(result) = runtime.resolve(
+        if let Some(runtime) = self.proc_macro_runtime.as_ref()
+            && let Some(result) = runtime.resolve(
                 &name_str,
                 yelang_proc_macro_bridge::protocol::ProcMacroKind::Attribute,
-            ) {
-                let mac = match result {
-                    Ok(mac) => mac,
-                    Err(e) => {
-                        self.errors.push(
-                            ExpandError::malformed_macro_args(
-                                format!("failed to load proc macro `{}`: {}", name_str, e),
-                                span,
-                            )
-                            .with_backtrace(self.backtrace()),
-                        );
-                        return Some(vec![item.clone()]);
-                    }
-                };
-                let Some(_) =
-                    self.before_expand(&name_str, span, MacroFrameId::ProcMacro(name_str.clone()))
-                else {
+            )
+        {
+            let mac = match result {
+                Ok(mac) => mac,
+                Err(e) => {
+                    self.errors.push(
+                        ExpandError::malformed_macro_args(
+                            format!("failed to load proc macro `{}`: {}", name_str, e),
+                            span,
+                        )
+                        .with_backtrace(self.backtrace()),
+                    );
                     return Some(vec![item.clone()]);
-                };
-                let attr_args_stream = attribute_args_to_token_stream(&attr.args, self.interner)?;
-                let item_stream = item_to_token_stream(item, self.interner)?;
-                let result = self.expand_server_attr(&mac, attr_args_stream, item_stream, span);
-                self.after_expand();
-                return Some(match result {
-                    Ok(stream) => parse_items_from_token_stream(
-                        &stream,
-                        self.interner,
-                        &self.eager_context(),
-                    )
-                    .unwrap_or_else(|reason| {
-                        self.errors.push(
-                            ExpandError::malformed_macro_args(
-                                format!(
-                                    "attribute macro `{}` expansion did not produce valid items: {}",
-                                    name_str, reason
-                                ),
-                                span,
-                            )
-                            .with_backtrace(self.backtrace()),
-                        );
-                        vec![item.clone()]
-                    }),
-                    Err(e) => {
-                        self.errors.push(e);
-                        vec![item.clone()]
-                    }
-                });
-            }
+                }
+            };
+            let Some(_) =
+                self.before_expand(&name_str, span, MacroFrameId::ProcMacro(name_str.clone()))
+            else {
+                return Some(vec![item.clone()]);
+            };
+            let attr_args_stream = attribute_args_to_token_stream(&attr.args, self.interner)?;
+            let item_stream = item_to_token_stream(item, self.interner)?;
+            let result = self.expand_server_attr(&mac, attr_args_stream, item_stream, span);
+            self.after_expand();
+            return Some(match result {
+                Ok(stream) => parse_items_from_token_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
+                        ExpandError::malformed_macro_args(
+                            format!(
+                                "attribute macro `{}` expansion did not produce valid items: {}",
+                                name_str, reason
+                            ),
+                            span,
+                        )
+                        .with_backtrace(self.backtrace()),
+                    );
+                    vec![item.clone()]
+                }),
+                Err(e) => {
+                    self.errors.push(e);
+                    vec![item.clone()]
+                }
+            });
         }
 
         let mac = self.resolver.resolve(&name_str)?.clone();
@@ -2329,85 +2319,83 @@ impl<'a> MacroExpander<'a> {
         require_unsafe: bool,
     ) -> Option<Vec<Item>> {
         // In-process procedural derive macros take priority over declarative rules.
-        if let Some(executor) = self.in_process_executor.clone() {
-            if let Some(mac) = executor.find(trait_name) {
-                if mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Derive {
-                    let Some(_) = self.before_expand(
-                        trait_name,
-                        span,
-                        MacroFrameId::ProcMacro(trait_name.to_string()),
-                    ) else {
-                        return Some(vec![]);
-                    };
-                    let item_stream = item_to_token_stream(item, self.interner)?;
-                    let proc_item = yelang_proc_macro::TokenStream::from_core_stream(
-                        &item_stream,
-                        self.interner,
-                    );
-                    let result = self.expand_in_process_derive(mac, proc_item, span);
-                    self.after_expand();
-                    return Some(match result {
-                        Ok(stream) => parse_items_from_token_stream(
-                            &stream,
-                            self.interner,
-                            &self.eager_context(),
+        if let Some(executor) = self.in_process_executor.clone()
+            && let Some(mac) = executor.find(trait_name)
+            && mac.kind() == yelang_proc_macro_bridge::protocol::ProcMacroKind::Derive
+        {
+            let Some(_) = self.before_expand(
+                trait_name,
+                span,
+                MacroFrameId::ProcMacro(trait_name.to_string()),
+            ) else {
+                return Some(vec![]);
+            };
+            let item_stream = item_to_token_stream(item, self.interner)?;
+            let proc_item =
+                yelang_proc_macro::TokenStream::from_core_stream(&item_stream, self.interner);
+            let result = self.expand_in_process_derive(mac, proc_item, span);
+            self.after_expand();
+            return Some(match result {
+                Ok(stream) => parse_items_from_token_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
+                        ExpandError::malformed_macro_args(
+                            format!(
+                                "derive macro `{}` expansion did not produce valid items: {}",
+                                trait_name, reason
+                            ),
+                            span,
                         )
-                        .unwrap_or_else(|reason| {
-                            self.errors.push(
-                                ExpandError::malformed_macro_args(
-                                    format!(
-                                        "derive macro `{}` expansion did not produce valid items: {}",
-                                        trait_name, reason
-                                    ),
-                                    span,
-                                )
-                                .with_backtrace(self.backtrace()),
-                            );
-                            vec![]
-                        }),
-                        Err(e) => {
-                            self.errors.push(e);
-                            vec![]
-                        }
-                    });
+                        .with_backtrace(self.backtrace()),
+                    );
+                    vec![]
+                }),
+                Err(e) => {
+                    self.errors.push(e);
+                    vec![]
                 }
-            }
+            });
         }
 
         // Out-of-process procedural derive macros take priority over declarative rules.
-        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
-            if let Some(result) = runtime.resolve(
+        if let Some(runtime) = self.proc_macro_runtime.as_ref()
+            && let Some(result) = runtime.resolve(
                 trait_name,
                 yelang_proc_macro_bridge::protocol::ProcMacroKind::Derive,
-            ) {
-                let mac = match result {
-                    Ok(mac) => mac,
-                    Err(e) => {
-                        self.errors.push(
-                            ExpandError::malformed_macro_args(
-                                format!("failed to load proc macro `{}`: {}", trait_name, e),
-                                span,
-                            )
-                            .with_backtrace(self.backtrace()),
-                        );
-                        return Some(vec![]);
-                    }
-                };
-                let Some(_) = self.before_expand(
-                    trait_name,
-                    span,
-                    MacroFrameId::ProcMacro(trait_name.to_string()),
-                ) else {
+            )
+        {
+            let mac = match result {
+                Ok(mac) => mac,
+                Err(e) => {
+                    self.errors.push(
+                        ExpandError::malformed_macro_args(
+                            format!("failed to load proc macro `{}`: {}", trait_name, e),
+                            span,
+                        )
+                        .with_backtrace(self.backtrace()),
+                    );
                     return Some(vec![]);
-                };
-                let item_stream = item_to_token_stream(item, self.interner)?;
-                let result = self.expand_server_derive(&mac, item_stream, span);
-                self.after_expand();
-                return Some(match result {
-                    Ok(stream) => {
-                        parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
-                            .unwrap_or_else(|reason| {
-                                self.errors.push(
+                }
+            };
+            let Some(_) = self.before_expand(
+                trait_name,
+                span,
+                MacroFrameId::ProcMacro(trait_name.to_string()),
+            ) else {
+                return Some(vec![]);
+            };
+            let item_stream = item_to_token_stream(item, self.interner)?;
+            let result = self.expand_server_derive(&mac, item_stream, span);
+            self.after_expand();
+            return Some(match result {
+                Ok(stream) => {
+                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
+                        .unwrap_or_else(|reason| {
+                            self.errors.push(
                             ExpandError::malformed_macro_args(
                                 format!(
                                     "derive macro `{}` expansion did not produce valid items: {}",
@@ -2417,15 +2405,14 @@ impl<'a> MacroExpander<'a> {
                             )
                             .with_backtrace(self.backtrace()),
                         );
-                                vec![]
-                            })
-                    }
-                    Err(e) => {
-                        self.errors.push(e);
-                        vec![]
-                    }
-                });
-            }
+                            vec![]
+                        })
+                }
+                Err(e) => {
+                    self.errors.push(e);
+                    vec![]
+                }
+            });
         }
 
         let mac = self.resolver.resolve(trait_name)?.clone();
@@ -2589,6 +2576,14 @@ impl<'a> MacroExpander<'a> {
             return None;
         }
 
+        if self.expansion_stack.len() >= MAX_RECURSION_DEPTH {
+            self.errors.push(
+                ExpandError::recursion_limit(name.to_string(), span)
+                    .with_backtrace(self.backtrace()),
+            );
+            return None;
+        }
+
         // Indirect recursion detection: if this macro is already on the stack,
         // we have a cycle (a → b → a).
         if self.expansion_stack.iter().any(|f| f.frame_id == frame_id) {
@@ -2701,7 +2696,7 @@ impl<'a> MacroExpander<'a> {
         let proc_input = yelang_proc_macro::TokenStream::from_core_stream(args, self.interner);
         let (proc_output, diagnostics) = mac.expand_fn_like(proc_input);
         self.push_proc_macro_diagnostics(diagnostics, mac.name(), span);
-        self.proc_macro_output_to_core_stream(proc_output, span)
+        Ok(self.proc_macro_output_to_core_stream(proc_output, span))
     }
 
     /// Invoke an in-process attribute procedural macro.
@@ -2714,7 +2709,7 @@ impl<'a> MacroExpander<'a> {
     ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
         let (proc_output, diagnostics) = mac.expand_attr(args, item);
         self.push_proc_macro_diagnostics(diagnostics, mac.name(), span);
-        self.proc_macro_output_to_core_stream(proc_output, span)
+        Ok(self.proc_macro_output_to_core_stream(proc_output, span))
     }
 
     /// Invoke an in-process derive procedural macro.
@@ -2726,7 +2721,7 @@ impl<'a> MacroExpander<'a> {
     ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
         let (proc_output, diagnostics) = mac.expand_derive(item);
         self.push_proc_macro_diagnostics(diagnostics, mac.name(), span);
-        self.proc_macro_output_to_core_stream(proc_output, span)
+        Ok(self.proc_macro_output_to_core_stream(proc_output, span))
     }
 
     /// Invoke a server-based function-like procedural macro.
@@ -2742,7 +2737,7 @@ impl<'a> MacroExpander<'a> {
             .expect("server macro expansion requires a runtime");
         let wire_input = core_to_wire(args, self.interner);
         let (wire_output, diagnostics) =
-            runtime.expand_proc_macro(mac, Some(wire_input), None, span)?;
+            runtime.expand_proc_macro(mac, Some(wire_input), None, span, Limits::default())?;
         self.push_server_diagnostics(&diagnostics, &mac.name, span);
         wire_to_core(wire_output, self.interner, span)
     }
@@ -2761,8 +2756,13 @@ impl<'a> MacroExpander<'a> {
             .expect("server macro expansion requires a runtime");
         let wire_args = core_to_wire(&args, self.interner);
         let wire_item = core_to_wire(&item, self.interner);
-        let (wire_output, diagnostics) =
-            runtime.expand_proc_macro(mac, Some(wire_args), Some(wire_item), span)?;
+        let (wire_output, diagnostics) = runtime.expand_proc_macro(
+            mac,
+            Some(wire_args),
+            Some(wire_item),
+            span,
+            Limits::default(),
+        )?;
         self.push_server_diagnostics(&diagnostics, &mac.name, span);
         wire_to_core(wire_output, self.interner, span)
     }
@@ -2780,7 +2780,7 @@ impl<'a> MacroExpander<'a> {
             .expect("server macro expansion requires a runtime");
         let wire_item = core_to_wire(&item, self.interner);
         let (wire_output, diagnostics) =
-            runtime.expand_proc_macro(mac, None, Some(wire_item), span)?;
+            runtime.expand_proc_macro(mac, None, Some(wire_item), span, Limits::default())?;
         self.push_server_diagnostics(&diagnostics, &mac.name, span);
         wire_to_core(wire_output, self.interner, span)
     }
@@ -2797,22 +2797,14 @@ impl<'a> MacroExpander<'a> {
     }
 
     /// Convert a procedural macro output stream back into a compiler-internal
-    /// token stream, re-tokenizing through the expander's interner so symbols
-    /// remain valid in the current compilation context.
+    /// token stream, re-interning symbols in the expander's interner while
+    /// preserving spans and hygiene contexts.
     fn proc_macro_output_to_core_stream(
         &self,
         output: yelang_proc_macro::TokenStream,
-        span: yelang_lexer::Span,
-    ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
-        let rendered = output.render_source(self.interner);
-        let mut local_interner = self.interner.clone();
-        let lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
-            .map_err(|e| ExpandError::malformed_macro_args(e.to_string(), span))?;
-        let tokens: Vec<_> = lex.tokens.iter().cloned().collect();
-        Ok(yelang_ast::expr::convert::from_lexer_tokens(
-            &tokens,
-            &local_interner,
-        ))
+        _span: yelang_lexer::Span,
+    ) -> yelang_macro_core::token_tree::TokenStream {
+        output.into_core_stream_with_interner(self.interner)
     }
 
     /// Try to expand a user-defined macro invocation and return the raw expanded
@@ -2838,50 +2830,48 @@ impl<'a> MacroExpander<'a> {
         }
 
         // In-process procedural macros take priority over declarative macros.
-        if let Some(executor) = self.in_process_executor.clone() {
-            if let Some(mac) = executor.find(&name) {
-                let Some(_) =
-                    self.before_expand(&name, span, MacroFrameId::ProcMacro(name.clone()))
-                else {
-                    return Err(
-                        ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace())
-                    );
-                };
-                let macro_args = unwrap_macro_args(&inv.args);
-                let result = self.expand_in_process_fn_like(mac, &macro_args, span);
-                self.after_expand();
-                return result;
-            }
+        if let Some(executor) = self.in_process_executor.clone()
+            && let Some(mac) = executor.find(&name)
+        {
+            let Some(_) = self.before_expand(&name, span, MacroFrameId::ProcMacro(name.clone()))
+            else {
+                return Err(
+                    ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace())
+                );
+            };
+            let macro_args = unwrap_macro_args(&inv.args);
+            let result = self.expand_in_process_fn_like(mac, &macro_args, span);
+            self.after_expand();
+            return result;
         }
 
         // Out-of-process procedural macros take priority over declarative macros.
-        if let Some(runtime) = self.proc_macro_runtime.as_ref() {
-            if let Some(result) = runtime.resolve(
+        if let Some(runtime) = self.proc_macro_runtime.as_ref()
+            && let Some(result) = runtime.resolve(
                 &name,
                 yelang_proc_macro_bridge::protocol::ProcMacroKind::FunctionLike,
-            ) {
-                let mac = match result {
-                    Ok(mac) => mac,
-                    Err(e) => {
-                        return Err(ExpandError::malformed_macro_args(
-                            format!("failed to load proc macro `{}`: {}", name, e),
-                            span,
-                        )
-                        .with_backtrace(self.backtrace()));
-                    }
-                };
-                let Some(_) =
-                    self.before_expand(&name, span, MacroFrameId::ProcMacro(name.clone()))
-                else {
-                    return Err(
-                        ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace())
-                    );
-                };
-                let macro_args = unwrap_macro_args(&inv.args);
-                let result = self.expand_server_fn_like(&mac, &macro_args, span);
-                self.after_expand();
-                return result;
-            }
+            )
+        {
+            let mac = match result {
+                Ok(mac) => mac,
+                Err(e) => {
+                    return Err(ExpandError::malformed_macro_args(
+                        format!("failed to load proc macro `{}`: {}", name, e),
+                        span,
+                    )
+                    .with_backtrace(self.backtrace()));
+                }
+            };
+            let Some(_) = self.before_expand(&name, span, MacroFrameId::ProcMacro(name.clone()))
+            else {
+                return Err(
+                    ExpandError::expansion_loop(name, span).with_backtrace(self.backtrace())
+                );
+            };
+            let macro_args = unwrap_macro_args(&inv.args);
+            let result = self.expand_server_fn_like(&mac, &macro_args, span);
+            self.after_expand();
+            return result;
         }
 
         let Some(mac) = self.resolver.resolve(&name) else {
@@ -2933,7 +2923,7 @@ impl<'a> MacroExpander<'a> {
             }
         };
 
-        let expanded_stream = match self.transcribe_rule(rule, &bindings, &name, span, def_id) {
+        let expanded_stream = match self.transcribe_rule(rule, bindings, &name, span, def_id) {
             Some(stream) => stream,
             None => {
                 self.after_expand();
@@ -2973,8 +2963,8 @@ fn parse_expr_from_token_stream(
 ) -> Result<Expr, String> {
     let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
-    let mut local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+    let local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
         .map_err(|e| format!("tokenize: {}", e))?;
     let expr = lex.parse::<Expr>().map_err(|e| e.to_string())?;
     if !lex.is_eof() {
@@ -2996,9 +2986,9 @@ fn parse_items_from_token_stream(
 ) -> Result<Vec<Item>, String> {
     let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
-    let mut local_interner = interner.clone();
-    let mut lex = TokenKind::tokenize(&rendered, &mut local_interner)
-        .map_err(|e| format!("tokenize: {}", e))?;
+    let local_interner = interner.clone();
+    let mut lex =
+        TokenKind::tokenize(&rendered, &local_interner).map_err(|e| format!("tokenize: {}", e))?;
     let program = lex.parse::<Program>().map_err(|e| e.to_string())?;
     if !lex.is_eof() {
         return Err("trailing tokens after items".to_string());
@@ -3015,8 +3005,8 @@ fn parse_stmts_from_token_stream(
 ) -> Result<Vec<Stmt>, String> {
     let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
-    let mut local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+    let local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
         .map_err(|e| format!("tokenize: {}", e))?;
     let mut stmts = vec![];
     while !lex.is_eof() {
@@ -3035,8 +3025,8 @@ fn parse_type_from_token_stream(
 ) -> Result<Type, String> {
     let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
-    let mut local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+    let local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
         .map_err(|e| format!("tokenize: {}", e))?;
     let ty = lex.parse::<Type>().map_err(|e| e.to_string())?;
     if !lex.is_eof() {
@@ -3054,8 +3044,8 @@ fn parse_pattern_from_token_stream(
 ) -> Result<Pattern, String> {
     let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
     let rendered = stream.render(interner);
-    let mut local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+    let local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
         .map_err(|e| format!("tokenize: {}", e))?;
     let pat = lex.parse::<Pattern>().map_err(|e| e.to_string())?;
     if !lex.is_eof() {
@@ -3083,13 +3073,13 @@ fn peel_unsafe_attribute(attr: &Attribute, interner: &Interner) -> Option<(Attri
     let expr = exprs.first()?;
     let (name, args) = match &expr.kind {
         ExprKind::Path(path) if path.segments.len() == 1 => {
-            (path.segments[0].ident.clone(), AttributeArgs::Empty)
+            (path.segments[0].ident, AttributeArgs::Empty)
         }
         ExprKind::Call(call) => {
             let callee = &call.callee;
             match &callee.kind {
                 ExprKind::Path(path) if path.segments.len() == 1 => {
-                    let name = path.segments[0].ident.clone();
+                    let name = path.segments[0].ident;
                     let args: Vec<Expr> = call
                         .args
                         .iter()
@@ -3166,8 +3156,8 @@ fn tokenize_and_convert(
     if src.is_empty() {
         return Some(yelang_macro_core::token_tree::TokenStream::new());
     }
-    let mut local_interner = interner.clone();
-    let mut lex = TokenKind::tokenize(src, &mut local_interner).ok()?;
+    let local_interner = interner.clone();
+    let mut lex = TokenKind::tokenize(src, &local_interner).ok()?;
     let tokens: Vec<_> = std::iter::from_fn(|| lex.advance().cloned()).collect();
     Some(yelang_ast::expr::convert::from_lexer_tokens(
         &tokens, interner,
@@ -3217,10 +3207,10 @@ fn wrap_item_stream(
 fn unwrap_macro_args(
     args: &yelang_macro_core::token_tree::TokenStream,
 ) -> yelang_macro_core::token_tree::TokenStream {
-    if args.trees().len() == 1 {
-        if let Some(yelang_macro_core::token_tree::TokenTree::Group(g)) = args.trees().first() {
-            return g.stream.clone();
-        }
+    if args.trees().len() == 1
+        && let Some(yelang_macro_core::token_tree::TokenTree::Group(g)) = args.trees().first()
+    {
+        return g.stream.clone();
     }
     args.clone()
 }

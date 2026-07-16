@@ -37,29 +37,29 @@ pub fn from_expr(stream: &TokenStream, interner: &Interner) -> Result<FragmentFi
 pub fn from_ty(stream: &TokenStream, interner: &Interner) -> Result<FragmentFields, String> {
     let ty: Type = parse_fragment(stream, interner)?;
     let mut fields = FragmentFields::default();
-    if let TypeKind::Named(path) = &ty.kind {
-        if !path.segments.is_empty() {
-            let last_idx = path.segments.len() - 1;
-            let base_segments = &path.segments[..last_idx + 1];
-            let last = &path.segments[last_idx];
+    if let TypeKind::Named(path) = &ty.kind
+        && !path.segments.is_empty()
+    {
+        let last_idx = path.segments.len() - 1;
+        let base_segments = &path.segments[..last_idx + 1];
+        let last = &path.segments[last_idx];
 
-            let mut name_rendered = String::new();
-            for (i, seg) in base_segments.iter().enumerate() {
-                if i > 0 {
-                    name_rendered.push_str("::");
-                }
-                seg.ident
-                    .codegen(&mut name_rendered, interner)
-                    .map_err(|e| e.to_string())?;
+        let mut name_rendered = String::new();
+        for (i, seg) in base_segments.iter().enumerate() {
+            if i > 0 {
+                name_rendered.push_str("::");
             }
-            fields.type_name = Some(tokenize_rendered(&name_rendered, interner)?);
+            seg.ident
+                .codegen(&mut name_rendered, interner)
+                .map_err(|e| e.to_string())?;
+        }
+        fields.type_name = Some(tokenize_rendered(&name_rendered, interner)?);
 
-            if let Some(args) = &last.args {
-                let mut args_rendered = String::new();
-                args.codegen(&mut args_rendered, interner)
-                    .map_err(|e| e.to_string())?;
-                fields.type_args = Some(tokenize_rendered(&args_rendered, interner)?);
-            }
+        if let Some(args) = &last.args {
+            let mut args_rendered = String::new();
+            args.codegen(&mut args_rendered, interner)
+                .map_err(|e| e.to_string())?;
+            fields.type_args = Some(tokenize_rendered(&args_rendered, interner)?);
         }
     }
     Ok(fields)
@@ -113,8 +113,8 @@ where
     T: yelang_lexer::ParseTokenStream<yelang_ast::tokenizer::TokenKind>,
 {
     let rendered = stream.render(interner);
-    let mut local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &mut local_interner)
+    let local_interner = interner.clone();
+    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
         .map_err(|e| format!("tokenize: {}", e))?;
     let value = lex.parse::<T>().map_err(|e| e.to_string())?;
     if !lex.is_eof() {
@@ -136,8 +136,8 @@ where
 }
 
 fn tokenize_rendered(rendered: &str, interner: &Interner) -> Result<TokenStream, String> {
-    let mut local_interner = interner.clone();
-    let lex = yelang_ast::TokenKind::tokenize(rendered, &mut local_interner)
+    let local_interner = interner.clone();
+    let lex = yelang_ast::TokenKind::tokenize(rendered, &local_interner)
         .map_err(|e| format!("tokenize: {}", e))?;
     let tokens: Vec<_> = lex.tokens.iter().cloned().collect();
     let _ = local_interner;

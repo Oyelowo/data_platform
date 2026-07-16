@@ -3,11 +3,12 @@
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use thiserror::Error;
-use yelang_proc_macro_bridge::protocol::token::WireDiagnostic;
+use yelang_proc_macro_bridge::protocol::token::{WireDiagnostic, WireSpan};
 use yelang_proc_macro_bridge::protocol::{
     CURRENT_PROTOCOL_VERSION, ErrorCode, LibraryHandle, MacroDescriptor, Request, Response,
     WireTokenStream, read_response, write_request,
 };
+use yelang_proc_macro_bridge::sandbox::Limits;
 
 #[derive(Debug, Error, Clone)]
 pub enum ProcMacroClientError {
@@ -23,6 +24,8 @@ pub enum ProcMacroClientError {
     Panic(String),
     #[error("loaded library does not match its manifest: {0}")]
     Validation(String),
+    #[error("proc-macro server process died")]
+    ServerDied,
 }
 
 impl From<std::io::Error> for ProcMacroClientError {
@@ -42,7 +45,7 @@ pub struct LoadedLibrary {
 
 /// Client connection to a proc-macro server.
 pub struct ProcMacroClient {
-    #[allow(dead_code)]
+    server_path: String,
     child: Child,
     stdin: ChildStdin,
     stdout: ChildStdout,
@@ -68,6 +71,7 @@ impl ProcMacroClient {
             .ok_or_else(|| ProcMacroClientError::Spawn("no stdout".to_string()))?;
 
         let mut client = Self {
+            server_path: server_path.to_string(),
             child,
             stdin,
             stdout,
@@ -83,10 +87,10 @@ impl ProcMacroClient {
     /// 2. `yelang-proc-macro-server` (with `.exe` on Windows) next to the
     ///    current executable.
     pub fn spawn_default() -> Result<Self, ProcMacroClientError> {
-        if let Ok(path) = std::env::var("YELANG_PROC_MACRO_SERVER") {
-            if !path.trim().is_empty() {
-                return Self::spawn(&path);
-            }
+        if let Ok(path) = std::env::var("YELANG_PROC_MACRO_SERVER")
+            && !path.trim().is_empty()
+        {
+            return Self::spawn(&path);
         }
         let sibling = std::env::current_exe()
             .ok()
@@ -116,9 +120,52 @@ impl ProcMacroClient {
         }
     }
 
+    /// Returns `true` if the server process is still running.
+    pub fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Kill the current server process (if any) and spawn a fresh one.
+    ///
+    /// Any library handles previously returned by this connection are invalid
+    /// after a restart; callers must reload the libraries they intend to use.
+    pub fn restart(&mut self) -> Result<(), ProcMacroClientError> {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+
+        let mut child = Command::new(&self.server_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| ProcMacroClientError::Spawn(e.to_string()))?;
+
+        self.stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ProcMacroClientError::Spawn("no stdin".to_string()))?;
+        self.stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ProcMacroClientError::Spawn("no stdout".to_string()))?;
+        self.child = child;
+
+        self.handshake()
+    }
+
+    /// Ensure the server is alive, restarting it if it has exited.
+    pub fn ensure_alive(&mut self) -> Result<(), ProcMacroClientError> {
+        if self.is_alive() {
+            Ok(())
+        } else {
+            self.restart()
+        }
+    }
+
     /// Load a proc-macro dynamic library by path, returning its handle and
     /// the descriptors of every macro it exports.
     pub fn load_library(&mut self, path: &str) -> Result<LoadedLibrary, ProcMacroClientError> {
+        self.ensure_alive()?;
         self.send_request(&Request::LoadLibrary {
             path: path.to_string(),
         })?;
@@ -141,11 +188,16 @@ impl ProcMacroClient {
         library: LibraryHandle,
         macro_index: u32,
         input: WireTokenStream,
+        call_site: WireSpan,
+        limits: Limits,
     ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+        self.ensure_alive()?;
         self.send_request(&Request::ExpandFnLike {
             library,
             macro_index,
             input,
+            call_site,
+            limits,
         })?;
         self.read_expanded()
     }
@@ -157,12 +209,17 @@ impl ProcMacroClient {
         macro_index: u32,
         args: WireTokenStream,
         item: WireTokenStream,
+        call_site: WireSpan,
+        limits: Limits,
     ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+        self.ensure_alive()?;
         self.send_request(&Request::ExpandAttr {
             library,
             macro_index,
             args,
             item,
+            call_site,
+            limits,
         })?;
         self.read_expanded()
     }
@@ -173,11 +230,16 @@ impl ProcMacroClient {
         library: LibraryHandle,
         macro_index: u32,
         item: WireTokenStream,
+        call_site: WireSpan,
+        limits: Limits,
     ) -> Result<(WireTokenStream, Vec<WireDiagnostic>), ProcMacroClientError> {
+        self.ensure_alive()?;
         self.send_request(&Request::ExpandDerive {
             library,
             macro_index,
             item,
+            call_site,
+            limits,
         })?;
         self.read_expanded()
     }
@@ -205,12 +267,27 @@ impl ProcMacroClient {
     }
 
     fn send_request(&mut self, request: &Request) -> Result<(), ProcMacroClientError> {
-        write_request(&mut self.stdin, request)
-            .map_err(|e| ProcMacroClientError::Protocol(e.to_string()))
+        write_request(&mut self.stdin, request).map_err(|e| self.map_comm_error(e))
     }
 
     fn read_response(&mut self) -> Result<Response, ProcMacroClientError> {
-        read_response(&mut self.stdout).map_err(|e| ProcMacroClientError::Protocol(e.to_string()))
+        read_response(&mut self.stdout).map_err(|e| self.map_comm_error(e))
+    }
+
+    fn map_comm_error(
+        &mut self,
+        e: yelang_proc_macro_bridge::protocol::SerializeError,
+    ) -> ProcMacroClientError {
+        // A broken pipe or unexpected EOF almost always means the server
+        // process died. Report that explicitly so the runtime can reconnect.
+        // Parse errors and oversized frames are kept as protocol errors.
+        if matches!(e, yelang_proc_macro_bridge::protocol::SerializeError::Io(_))
+            || !self.is_alive()
+        {
+            ProcMacroClientError::ServerDied
+        } else {
+            ProcMacroClientError::Protocol(e.to_string())
+        }
     }
 }
 

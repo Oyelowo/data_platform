@@ -24,7 +24,7 @@ pub use api::{
 };
 pub use bridge::{from_wire, into_wire};
 pub use to_tokens::ToTokens;
-pub use yelang_quote::quote;
+pub use yelang_quote::{quote, quote_spanned};
 
 // Re-export the C ABI types and symbols that `#[yelang_proc_macro::macro_export]`
 // generated wrappers need, so macro authors only depend on this crate.

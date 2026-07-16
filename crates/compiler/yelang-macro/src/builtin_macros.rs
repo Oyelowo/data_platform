@@ -416,9 +416,9 @@ fn expect_paren_exprs(
 /// Parse a token stream as a comma-separated list of expressions.
 fn parse_exprs(stream: &TokenStream, interner: &Interner) -> Result<Vec<Expr>, String> {
     let src = format!("({})", stream.render(interner));
-    let mut local_interner = interner.clone();
+    let local_interner = interner.clone();
     let mut lex =
-        TokenKind::tokenize(&src, &mut local_interner).map_err(|e| format!("tokenize: {}", e))?;
+        TokenKind::tokenize(&src, &local_interner).map_err(|e| format!("tokenize: {}", e))?;
     parse_expr_list(&mut lex)
 }
 
@@ -527,10 +527,9 @@ fn expr_codegen_to_string(expr: &Expr, interner: &Interner) -> String {
 }
 
 fn tokenize_rendered(src: &str, interner: &Interner) -> TokenStream {
-    let mut local_interner = interner.clone();
-    let mut lex = TokenKind::tokenize(src, &mut local_interner).unwrap_or_default();
-    let tokens: Vec<Token<TokenKind>> =
-        std::iter::from_fn(|| lex.advance().map(|t| t.clone())).collect();
+    let local_interner = interner.clone();
+    let mut lex = TokenKind::tokenize(src, &local_interner).unwrap_or_default();
+    let tokens: Vec<Token<TokenKind>> = std::iter::from_fn(|| lex.advance().cloned()).collect();
     yelang_ast::expr::convert::from_lexer_tokens(&tokens, interner)
 }
 

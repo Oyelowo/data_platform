@@ -19,7 +19,7 @@ impl MacroContext {
 }
 
 thread_local! {
-    static CONTEXT: RefCell<Option<MacroContext>> = RefCell::new(None);
+    static CONTEXT: RefCell<Option<MacroContext>> = const { RefCell::new(None) };
 }
 
 pub fn enter<R>(f: impl FnOnce() -> R) -> (R, Vec<Diagnostic>) {

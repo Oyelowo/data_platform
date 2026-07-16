@@ -1,7 +1,9 @@
 //! Resource limits for proc-macro execution.
 
+use serde::{Deserialize, Serialize};
+
 /// Per-expansion limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     /// Maximum heap size in bytes.
     pub max_heap_bytes: usize,

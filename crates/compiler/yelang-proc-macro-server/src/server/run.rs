@@ -31,7 +31,21 @@ pub fn run() {
         }
 
         let response = handle_request(&mut session, request);
+        let is_fatal_timeout = matches!(
+            &response,
+            Response::Error {
+                code: ErrorCode::ExpansionTimeout,
+                ..
+            }
+        );
         let _ = crate::protocol::write_response_to_stdout(&response);
+        if is_fatal_timeout {
+            // The macro has exceeded its time budget and may still be running in
+            // a worker thread. The only safe way to guarantee it cannot starve
+            // future requests is to terminate the server; the client is expected
+            // to detect the process death and reconnect.
+            break;
+        }
     }
 }
 
@@ -75,23 +89,29 @@ fn handle_request(session: &mut Session, request: Request) -> Response {
             library,
             macro_index,
             input,
+            call_site,
+            limits,
         } => expand(session, library, macro_index, |lib| {
-            invoke_fn_like(lib, macro_index, input)
+            invoke_fn_like(lib, macro_index, input, call_site, limits)
         }),
         Request::ExpandAttr {
             library,
             macro_index,
             args,
             item,
+            call_site,
+            limits,
         } => expand(session, library, macro_index, |lib| {
-            invoke_attr(lib, macro_index, args, item)
+            invoke_attr(lib, macro_index, args, item, call_site, limits)
         }),
         Request::ExpandDerive {
             library,
             macro_index,
             item,
+            call_site,
+            limits,
         } => expand(session, library, macro_index, |lib| {
-            invoke_derive(lib, macro_index, item)
+            invoke_derive(lib, macro_index, item, call_site, limits)
         }),
     }
 }
@@ -125,6 +145,9 @@ fn error_code_for_invoke_error(e: &InvokeError) -> ErrorCode {
         InvokeError::InputSerialization(_)
         | InvokeError::OutputDeserialization(_)
         | InvokeError::NullOutput => ErrorCode::InvalidInput,
+        InvokeError::Timeout { .. } => ErrorCode::ExpansionTimeout,
+        InvokeError::OutputTooLarge { .. } => ErrorCode::ExpansionTooLarge,
+        InvokeError::MemoryLimitExceeded { .. } => ErrorCode::ExpansionMemoryLimit,
         InvokeError::Internal(_) => ErrorCode::Internal,
         InvokeError::Panic(_) => unreachable!("panic mapped separately"),
     }

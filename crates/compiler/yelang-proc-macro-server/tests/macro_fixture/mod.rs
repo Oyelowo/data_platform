@@ -26,6 +26,9 @@ pub const FIXTURE_MACROS: &[(&str, ProcMacroKind)] = &[
     ("generate_const", ProcMacroKind::Derive),
     ("emit_warning", ProcMacroKind::FunctionLike),
     ("explode", ProcMacroKind::FunctionLike), // renamed to avoid shadowing builtin `panic!`
+    ("slow_macro", ProcMacroKind::FunctionLike),
+    ("huge_macro", ProcMacroKind::FunctionLike),
+    ("exit_macro", ProcMacroKind::FunctionLike),
 ];
 
 pub fn server_path() -> &'static str {

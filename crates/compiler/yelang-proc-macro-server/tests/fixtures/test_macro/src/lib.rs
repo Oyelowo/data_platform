@@ -27,6 +27,9 @@ static ANSWER_NAME: &[u8] = b"answer";
 static GENERATE_CONST_NAME: &[u8] = b"generate_const";
 static EMIT_WARNING_NAME: &[u8] = b"emit_warning";
 static EXPLODE_NAME: &[u8] = b"explode";
+static SLOW_NAME: &[u8] = b"slow_macro";
+static HUGE_NAME: &[u8] = b"huge_macro";
+static EXIT_NAME: &[u8] = b"exit_macro";
 
 unsafe extern "C-unwind" fn null_fn_like(_: *const u8, _: usize, _: *mut *mut u8, _: *mut usize) {
     unreachable!("null fn-like invoke")
@@ -47,7 +50,7 @@ unsafe extern "C-unwind" fn null_derive(_: *const u8, _: usize, _: *mut *mut u8,
     unreachable!("null derive invoke")
 }
 
-static MACROS: [YelangMacroDescriptor; 6] = [
+static MACROS: [YelangMacroDescriptor; 9] = [
     YelangMacroDescriptor {
         name: MAKE_ANSWER_NAME.as_ptr(),
         name_len: MAKE_ANSWER_NAME.len(),
@@ -104,6 +107,36 @@ static MACROS: [YelangMacroDescriptor; 6] = [
         kind: YelangProcMacroKind::FunctionLike,
         invoke: YelangMacroInvoke {
             fn_like: explode_macro,
+            attr: null_attr,
+            derive: null_derive,
+        },
+    },
+    YelangMacroDescriptor {
+        name: SLOW_NAME.as_ptr(),
+        name_len: SLOW_NAME.len(),
+        kind: YelangProcMacroKind::FunctionLike,
+        invoke: YelangMacroInvoke {
+            fn_like: slow_macro,
+            attr: null_attr,
+            derive: null_derive,
+        },
+    },
+    YelangMacroDescriptor {
+        name: HUGE_NAME.as_ptr(),
+        name_len: HUGE_NAME.len(),
+        kind: YelangProcMacroKind::FunctionLike,
+        invoke: YelangMacroInvoke {
+            fn_like: huge_macro,
+            attr: null_attr,
+            derive: null_derive,
+        },
+    },
+    YelangMacroDescriptor {
+        name: EXIT_NAME.as_ptr(),
+        name_len: EXIT_NAME.len(),
+        kind: YelangProcMacroKind::FunctionLike,
+        invoke: YelangMacroInvoke {
+            fn_like: exit_macro,
             attr: null_attr,
             derive: null_derive,
         },
@@ -239,6 +272,48 @@ unsafe extern "C-unwind" fn explode_macro(
     output_len: *mut usize,
 ) {
     run_fn_like_macro(explode_body, input, input_len, output, output_len);
+}
+
+unsafe extern "C-unwind" fn slow_macro(
+    input: *const u8,
+    input_len: usize,
+    output: *mut *mut u8,
+    output_len: *mut usize,
+) {
+    let _ = deserialize_input(input, input_len);
+    // Sleep longer than any reasonable test limit.
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    let mut ts = TokenStream::new();
+    ts.push(TokenTree::Literal(Literal::integer("0", Span::call_site())));
+    serialize_output(result_into_wire(ts, Vec::new()), output, output_len);
+}
+
+unsafe extern "C-unwind" fn huge_macro(
+    input: *const u8,
+    input_len: usize,
+    output: *mut *mut u8,
+    output_len: *mut usize,
+) {
+    let _ = deserialize_input(input, input_len);
+    let mut ts = TokenStream::new();
+    for i in 0..10_000 {
+        ts.push(TokenTree::Ident(Ident::new(
+            &format!("ident_{i}"),
+            Span::call_site(),
+        )));
+    }
+    serialize_output(result_into_wire(ts, Vec::new()), output, output_len);
+}
+
+unsafe extern "C-unwind" fn exit_macro(
+    input: *const u8,
+    input_len: usize,
+    _: *mut *mut u8,
+    _: *mut usize,
+) {
+    let _ = deserialize_input(input, input_len);
+    // Simulate a fatal server crash from inside the macro.
+    std::process::exit(1);
 }
 
 fn deserialize_input(

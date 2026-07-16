@@ -25,7 +25,7 @@ pub(crate) fn with_api_interner<R>(f: impl FnOnce(&yelang_interner::Interner) ->
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Ident {
     pub(crate) inner: yelang_macro_core::Ident,
-    cached: String,
+    pub(crate) cached: String,
 }
 
 impl Ident {

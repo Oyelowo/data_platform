@@ -19,8 +19,8 @@ pub fn render_ident(ident: &Ident, interner: &Interner) -> String {
     use super::IdentOrigin;
     let name = interner.resolve(&ident.sym);
     match ident.origin {
-        IdentOrigin::Crate => format!("$crate"),
-        IdentOrigin::Package => format!("$package"),
+        IdentOrigin::Crate => "$crate".to_string(),
+        IdentOrigin::Package => "$package".to_string(),
         IdentOrigin::Plain if ident.is_raw => format!("r#{}", name),
         IdentOrigin::Plain => name.to_string(),
     }

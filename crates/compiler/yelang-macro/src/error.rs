@@ -30,6 +30,11 @@ pub enum ExpandError {
         span: yelang_lexer::Span,
         backtrace: Vec<BacktraceFrame>,
     },
+    RecursionLimit {
+        name: String,
+        span: yelang_lexer::Span,
+        backtrace: Vec<BacktraceFrame>,
+    },
     MacroDefError {
         name: String,
         reason: String,
@@ -63,6 +68,7 @@ impl ExpandError {
             | ExpandError::MalformedMacroArgs { backtrace: bt, .. }
             | ExpandError::DecoratorError { backtrace: bt, .. }
             | ExpandError::ExpansionLoop { backtrace: bt, .. }
+            | ExpandError::RecursionLimit { backtrace: bt, .. }
             | ExpandError::MacroDefError { backtrace: bt, .. }
             | ExpandError::MacroMatchError { backtrace: bt, .. }
             | ExpandError::MacroTranscribeError { backtrace: bt, .. }
@@ -79,6 +85,7 @@ impl ExpandError {
             | ExpandError::MalformedMacroArgs { span, .. }
             | ExpandError::DecoratorError { span, .. }
             | ExpandError::ExpansionLoop { span, .. }
+            | ExpandError::RecursionLimit { span, .. }
             | ExpandError::MacroDefError { span, .. }
             | ExpandError::MacroMatchError { span, .. }
             | ExpandError::MacroTranscribeError { span, .. }
@@ -97,6 +104,9 @@ impl fmt::Display for ExpandError {
             ExpandError::DecoratorError { reason, .. } => write!(f, "decorator error: {}", reason),
             ExpandError::ExpansionLoop { path, .. } => {
                 write!(f, "expansion loop detected: {}", path)
+            }
+            ExpandError::RecursionLimit { name, .. } => {
+                write!(f, "recursion limit exceeded while expanding `{}`", name)
             }
             ExpandError::MacroDefError { name, reason, .. } => {
                 write!(f, "error in macro definition `{}`: {}", name, reason)
@@ -142,6 +152,14 @@ impl ExpandError {
     pub fn expansion_loop(path: impl Into<String>, span: yelang_lexer::Span) -> Self {
         ExpandError::ExpansionLoop {
             path: path.into(),
+            span,
+            backtrace: vec![],
+        }
+    }
+
+    pub fn recursion_limit(name: impl Into<String>, span: yelang_lexer::Span) -> Self {
+        ExpandError::RecursionLimit {
+            name: name.into(),
             span,
             backtrace: vec![],
         }

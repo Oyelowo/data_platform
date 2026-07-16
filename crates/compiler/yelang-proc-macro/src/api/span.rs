@@ -1,5 +1,6 @@
 //! Source spans and hygiene contexts.
 
+use std::cell::RefCell;
 use std::fmt;
 
 /// A source region with hygiene information.
@@ -11,20 +12,24 @@ pub struct Span {
     inner: yelang_macro_core::Span,
 }
 
+thread_local! {
+    /// The span of the current macro invocation, set by the proc-macro server
+    /// before the user-provided macro body runs.
+    static CALL_SITE: RefCell<Option<Span>> = const { RefCell::new(None) };
+}
+
 impl Span {
     /// The span of the macro invocation site.
     pub fn call_site() -> Self {
-        // The call-site span is synthesized with the default hygiene context.
-        Self {
+        CALL_SITE.with(|c| *c.borrow()).unwrap_or_else(|| Self {
             inner: yelang_macro_core::Span::default(),
-        }
+        })
     }
 
     /// The span of the macro definition site.
     ///
-    /// In the current implementation this resolves to the default context;
-    /// the compiler/server integration remaps def-site identifiers through
-    /// the proper hygiene data before name resolution.
+    /// For now this resolves to the call-site span. A future refinement will
+    /// expose the true definition-site hygiene context for `def_site` spans.
     pub fn def_site() -> Self {
         Self::call_site()
     }
@@ -42,6 +47,21 @@ impl Span {
 
     pub(crate) fn into_inner(self) -> yelang_macro_core::Span {
         self.inner
+    }
+
+    /// Set the span that `Span::call_site()` will return for the current thread.
+    ///
+    /// This is used by the proc-macro server to pass the invocation site into
+    /// the macro. It is not part of the stable public API.
+    #[doc(hidden)]
+    pub fn set_call_site(span: Span) {
+        CALL_SITE.with(|c| *c.borrow_mut() = Some(span));
+    }
+
+    /// Clear the thread-local call-site span.
+    #[doc(hidden)]
+    pub fn clear_call_site() {
+        CALL_SITE.with(|c| *c.borrow_mut() = None);
     }
 
     /// Resolve this span's hygiene to another span's context.

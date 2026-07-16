@@ -59,29 +59,29 @@ impl<'a> ExportCollector<'a> {
     }
 
     fn process_item(&mut self, item: &Item) {
-        if let ItemKind::Fn(func) = &item.kind {
-            if let Some((kind, stripped_item)) = self.try_strip_export_attribute(item, func) {
-                if let Err(e) = self.validate_signature(kind, &stripped_item) {
-                    self.errors.push(e);
-                    // Keep the original item unmodified on error.
-                    self.new_items.push(item.clone());
-                    return;
-                }
-
-                let name = self.interner.resolve(&func.name.symbol).to_string();
-                self.exports.push(CollectedExport { name: name.clone() });
-
-                // Keep the user-written macro implementation.
-                self.new_items.push(stripped_item.clone());
-
-                // Generate the C ABI wrapper for this macro.
-                self.generate_wrapper(kind, &name);
-
-                // Generate the name static and descriptor static.
-                self.generate_name_static(&name);
-                self.generate_descriptor(kind, &name);
+        if let ItemKind::Fn(func) = &item.kind
+            && let Some((kind, stripped_item)) = self.try_strip_export_attribute(item, func)
+        {
+            if let Err(e) = self.validate_signature(kind, &stripped_item) {
+                self.errors.push(e);
+                // Keep the original item unmodified on error.
+                self.new_items.push(item.clone());
                 return;
             }
+
+            let name = self.interner.resolve(&func.name.symbol).to_string();
+            self.exports.push(CollectedExport { name: name.clone() });
+
+            // Keep the user-written macro implementation.
+            self.new_items.push(stripped_item.clone());
+
+            // Generate the C ABI wrapper for this macro.
+            self.generate_wrapper(kind, &name);
+
+            // Generate the name static and descriptor static.
+            self.generate_name_static(&name);
+            self.generate_descriptor(kind, &name);
+            return;
         }
 
         self.new_items.push(item.clone());
@@ -97,7 +97,7 @@ impl<'a> ExportCollector<'a> {
         let attr_idx = item
             .attributes
             .iter()
-            .position(|attr| matches!(self.classify_export_attribute(attr), Some(_)))?;
+            .position(|attr| self.classify_export_attribute(attr).is_some())?;
 
         let attr = &item.attributes[attr_idx];
         let kind = self.classify_export_attribute(attr)?;
@@ -404,9 +404,9 @@ impl ProcMacroExportKind {
 }
 
 fn parse_items_from_source(src: &str, interner: &Interner) -> Result<Vec<Item>, String> {
-    let mut local_interner = interner.clone();
+    let local_interner = interner.clone();
     let mut stream =
-        TokenKind::tokenize(src, &mut local_interner).map_err(|e| format!("tokenize: {e}"))?;
+        TokenKind::tokenize(src, &local_interner).map_err(|e| format!("tokenize: {e}"))?;
     let program = stream.parse::<Program>().map_err(|e| e.to_string())?;
     if !stream.is_eof() {
         return Err("trailing tokens after generated items".to_string());

@@ -4,6 +4,7 @@
 
 pub mod context;
 pub mod invoke;
+pub mod limits;
 pub mod panic;
 
 pub use context::MacroContext;

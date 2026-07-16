@@ -2,7 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::token::{WireDiagnostic, WireTokenStream};
+use super::token::{WireDiagnostic, WireSpan, WireTokenStream};
+use crate::sandbox::Limits;
 
 slotmap::new_key_type! {
     /// Handle to a loaded library in the server.
@@ -21,6 +22,8 @@ pub enum Request {
         library: LibraryHandle,
         macro_index: u32,
         input: WireTokenStream,
+        call_site: WireSpan,
+        limits: Limits,
     },
     /// Invoke an attribute macro.
     ExpandAttr {
@@ -28,12 +31,16 @@ pub enum Request {
         macro_index: u32,
         args: WireTokenStream,
         item: WireTokenStream,
+        call_site: WireSpan,
+        limits: Limits,
     },
     /// Invoke a derive macro.
     ExpandDerive {
         library: LibraryHandle,
         macro_index: u32,
         item: WireTokenStream,
+        call_site: WireSpan,
+        limits: Limits,
     },
     /// Unload a previously loaded library.
     UnloadLibrary { library: LibraryHandle },
@@ -85,6 +92,7 @@ pub enum ErrorCode {
     InvalidInput,
     ExpansionTimeout,
     ExpansionTooLarge,
+    ExpansionMemoryLimit,
     ProtocolMismatch,
     Internal,
 }

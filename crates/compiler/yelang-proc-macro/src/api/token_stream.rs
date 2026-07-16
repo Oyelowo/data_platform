@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{Delimiter, TokenTree};
+use super::{Delimiter, Spacing, TokenTree};
 
 /// A sequence of token trees.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -71,6 +71,22 @@ impl TokenStream {
         inner
     }
 
+    /// Convert back into a compiler-internal token stream, re-interning all
+    /// symbol-backed tokens (identifiers and literals) in the provided interner.
+    ///
+    /// This preserves spans and hygiene contexts while ensuring that the symbols
+    /// are valid in the current compilation session.
+    pub fn into_core_stream_with_interner(
+        self,
+        interner: &yelang_interner::Interner,
+    ) -> yelang_macro_core::TokenStream {
+        let mut inner = yelang_macro_core::TokenStream::new();
+        for tree in self.trees {
+            inner.push(tree_into_core(tree, interner));
+        }
+        inner
+    }
+
     /// Render this stream to source text using the provided interner for any
     /// symbol-backed tokens.
     ///
@@ -82,10 +98,10 @@ impl TokenStream {
         let mut prev: Option<String> = None;
         for tree in &self.trees {
             let s = render_tree(tree, interner);
-            if let Some(ref p) = prev {
-                if needs_space(p, &s) {
-                    out.push(' ');
-                }
+            if let Some(ref p) = prev
+                && needs_space(p, &s)
+            {
+                out.push(' ');
             }
             out.push_str(&s);
             prev = Some(s);
@@ -132,11 +148,39 @@ impl<'a> IntoIterator for &'a TokenStream {
 
 impl fmt::Display for TokenStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, tree) in self.iter().enumerate() {
-            if i > 0 {
+        let mut first = true;
+        let mut prev_punct: Option<(char, Spacing)> = None;
+        for tree in self.iter() {
+            // Insert a space between tokens unless:
+            // - this is the first token,
+            // - the previous token is `,` or `;`, which already provides visual
+            //   separation,
+            // - the previous token is a punct with `Joint` spacing (it is part
+            //   of a compound operator like `<=`), or
+            // - the current token is a punct with `Joint` spacing.
+            let mut separate = !first;
+            if let Some((_, spacing)) = prev_punct
+                && spacing == Spacing::Joint
+            {
+                separate = false;
+            }
+            if let TokenTree::Punct(p) = &tree
+                && (p.spacing() == Spacing::Joint
+                    || p.as_char() == ','
+                    || p.as_char() == ';'
+                    || p.as_char() == ':')
+            {
+                separate = false;
+            }
+            if separate {
                 write!(f, " ")?;
             }
             write!(f, "{}", tree)?;
+            first = false;
+            prev_punct = match tree {
+                TokenTree::Punct(p) => Some((p.as_char(), p.spacing())),
+                _ => None,
+            };
         }
         Ok(())
     }
@@ -278,4 +322,68 @@ fn needs_space(prev: &str, next: &str) -> bool {
     let prev_is_lonely_separator = prev == "," || prev == ";";
 
     (prev_is_word_like || prev_is_lonely_separator) && next_is_word_like
+}
+
+fn tree_into_core(
+    tree: TokenTree,
+    interner: &yelang_interner::Interner,
+) -> yelang_macro_core::TokenTree {
+    use yelang_macro_core::LitKind;
+
+    match tree {
+        TokenTree::Group(g) => yelang_macro_core::TokenTree::Group(yelang_macro_core::Group {
+            id: g.id,
+            delimiter: g.delimiter,
+            stream: g.stream.into_core_stream_with_interner(interner),
+            span: g.span.into_inner(),
+        }),
+        TokenTree::Ident(i) => {
+            let sym = interner.get_or_intern(&i.cached);
+            let mut inner = i.inner;
+            inner.sym = sym;
+            yelang_macro_core::TokenTree::Ident(inner)
+        }
+        TokenTree::Punct(p) => yelang_macro_core::TokenTree::Punct(yelang_macro_core::Punct {
+            id: p.inner.id,
+            ch: p.inner.ch,
+            spacing: p.inner.spacing,
+            span: p.inner.span,
+        }),
+        TokenTree::Literal(l) => {
+            let kind = match l.inner.kind {
+                LitKind::Int { value, suffix } => LitKind::Int {
+                    value: intern_symbol(value, interner),
+                    suffix,
+                },
+                LitKind::Float { value, suffix } => LitKind::Float {
+                    value: intern_symbol(value, interner),
+                    suffix,
+                },
+                LitKind::Str { value, kind } => LitKind::Str {
+                    value: intern_symbol(value, interner),
+                    kind,
+                },
+                LitKind::Char(c) => LitKind::Char(c),
+                LitKind::Bool(b) => LitKind::Bool(b),
+                LitKind::ByteStr { value, kind } => LitKind::ByteStr {
+                    value: intern_symbol(value, interner),
+                    kind,
+                },
+                LitKind::Byte(b) => LitKind::Byte(b),
+            };
+            yelang_macro_core::TokenTree::Literal(yelang_macro_core::Literal {
+                id: l.inner.id,
+                kind,
+                span: l.inner.span,
+            })
+        }
+    }
+}
+
+fn intern_symbol(
+    sym: yelang_interner::Symbol,
+    interner: &yelang_interner::Interner,
+) -> yelang_interner::Symbol {
+    let text = super::ident::with_api_interner(|api| api.resolve(&sym).to_string());
+    interner.get_or_intern(&text)
 }

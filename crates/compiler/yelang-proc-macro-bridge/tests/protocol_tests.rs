@@ -6,6 +6,7 @@ use yelang_proc_macro_bridge::protocol::{
     serialize::{read_request, write_request},
     token::{WireDelimiter, WireSpan, WireTokenTree},
 };
+use yelang_proc_macro_bridge::sandbox::Limits;
 
 #[test]
 fn version_negotiation_chooses_minimum() {
@@ -50,6 +51,13 @@ fn expand_fn_like_round_trip() {
                 is_raw: false,
             }],
         },
+        call_site: WireSpan {
+            lo: 10,
+            hi: 20,
+            file: 1,
+            syntax_context: 0,
+        },
+        limits: Limits::default(),
     };
     let mut buf = Vec::new();
     write_request(&mut buf, &request).unwrap();

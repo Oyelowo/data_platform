@@ -122,11 +122,8 @@ fn match_op(
             RepetitionKind::ZeroOrMore | RepetitionKind::OneOrMore => {
                 let mut iterations = Vec::new();
                 let is_plus = matches!(kind, RepetitionKind::OneOrMore);
-                loop {
-                    match match_ops(ops, cursor, interner) {
-                        Ok(iter_bindings) => iterations.push(iter_bindings),
-                        Err(_) => break,
-                    }
+                while let Ok(iter_bindings) = match_ops(ops, cursor, interner) {
+                    iterations.push(iter_bindings);
                     if let Some(sep_tree) = sep {
                         if !cursor
                             .peek()

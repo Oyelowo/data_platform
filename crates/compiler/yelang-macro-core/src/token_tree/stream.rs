@@ -34,10 +34,6 @@ impl TokenStream {
         self.trees.iter()
     }
 
-    pub fn into_iter(self) -> impl Iterator<Item = TokenTree> {
-        self.trees.into_iter()
-    }
-
     pub fn push(&mut self, tree: TokenTree) {
         self.trees.push(tree);
     }
@@ -61,15 +57,24 @@ impl TokenStream {
         let mut prev: Option<String> = None;
         for tree in &self.trees {
             let s = tree.render(interner);
-            if let Some(ref p) = prev {
-                if needs_space(p, &s) {
-                    out.push(' ');
-                }
+            if let Some(ref p) = prev
+                && needs_space(p, &s)
+            {
+                out.push(' ');
             }
             out.push_str(&s);
             prev = Some(s);
         }
         out
+    }
+}
+
+impl IntoIterator for TokenStream {
+    type Item = TokenTree;
+    type IntoIter = std::vec::IntoIter<TokenTree>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.trees.into_iter()
     }
 }
 
