@@ -13,6 +13,7 @@
  */
 
 pub mod api;
+pub mod bridge;
 pub mod introspect;
 pub mod parse;
 pub mod quote;
@@ -20,5 +21,16 @@ pub mod quote;
 pub use api::{
     Delimiter, Diagnostic, Group, Ident, Level, LineColumn, Literal, Punct, SourceFile, Spacing,
     Span, TokenStream, TokenTree,
+};
+pub use bridge::{from_wire, into_wire};
+
+// Re-export the C ABI types and symbols that `#[yelang_proc_macro::macro_export]`
+// generated wrappers need, so macro authors only depend on this crate.
+pub use bridge::{AttrMacroFn, DeriveMacroFn, FnLikeMacroFn};
+pub use bridge::{run_attr_macro, run_derive_macro, run_fn_like_macro};
+pub use yelang_proc_macro_bridge::abi::registrar::{
+    CURRENT_ABI_VERSION, YelangAllocFn, YelangAttrMacro, YelangDeriveMacro, YelangFnLikeMacro,
+    YelangFreeFn, YelangMacroDescriptor, YelangMacroInvoke, YelangProcMacroEntry,
+    YelangProcMacroExports, YelangProcMacroKind,
 };
 // `quote!` is exported at crate root via `#[macro_export]` in src/quote/mod.rs.

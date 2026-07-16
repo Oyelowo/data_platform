@@ -1,0 +1,17 @@
+[package]
+name = "yelang-proc-macro-test-fixture"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+
+[lib]
+name = "test_macro"
+crate-type = ["cdylib"]
+
+[dependencies]
+yelang-proc-macro = { path = "../../../../yelang-proc-macro" }
+yelang-proc-macro-bridge = { path = "../../../../yelang-proc-macro-bridge" }
+postcard = { workspace = true }
+serde = { workspace = true }
+libc = "0.2"

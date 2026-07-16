@@ -74,6 +74,9 @@ pub enum TypeKind {
     /// Reference types: `&T`, `&mut T`
     Ref { ty: Box<Type>, is_mut: bool },
 
+    /// Raw pointer types: `*const T`, `*mut T`
+    RawPtr { ty: Box<Type>, is_mut: bool },
+
     /// Function types: `fn(i32) -> i32`, `fn() -> bool`
     ///
     /// # Example
@@ -196,6 +199,24 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Type {
                 });
             }
             stream.restore(ref_checkpoint);
+
+            // Raw pointer types: `*const T`, `*mut T`
+            let ptr_checkpoint = stream.checkpoint();
+            if stream.parse::<Option<T![*]>>()?.is_some() {
+                let is_mut = stream.parse::<Option<T![mut]>>()?.is_some();
+                if !is_mut {
+                    stream.parse::<T![const]>()?;
+                }
+                let inner = parse_type_atom(stream)?;
+                return Ok(Type {
+                    kind: TypeKind::RawPtr {
+                        ty: Box::new(inner),
+                        is_mut,
+                    },
+                    span: stream.span_since(ptr_checkpoint),
+                });
+            }
+            stream.restore(ptr_checkpoint);
 
             // String literal types: `"a"`
             // (Other literal kinds are not valid in type position.)
@@ -328,6 +349,24 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for TypeAtom {
         }
         stream.restore(ref_checkpoint);
 
+        // Raw pointer types: `*const T`, `*mut T`
+        let ptr_checkpoint = stream.checkpoint();
+        if stream.parse::<Option<T![*]>>()?.is_some() {
+            let is_mut = stream.parse::<Option<T![mut]>>()?.is_some();
+            if !is_mut {
+                stream.parse::<T![const]>()?;
+            }
+            let inner = stream.parse::<TypeAtom>()?;
+            return Ok(TypeAtom(Type {
+                kind: TypeKind::RawPtr {
+                    ty: Box::new(inner.0),
+                    is_mut,
+                },
+                span: stream.span_since(ptr_checkpoint),
+            }));
+        }
+        stream.restore(ptr_checkpoint);
+
         // String literal types: `"a"`
         // (Other literal kinds are not valid in type position.)
         let literal_checkpoint = stream.checkpoint();
@@ -427,5 +466,33 @@ mod tests {
         }
 
         assert!(stream.is_eof());
+    }
+
+    #[test]
+    fn parses_raw_pointer_const_and_mut() {
+        let mut interner = Interner::new();
+
+        for (src, expected_mut) in [("*const i32", false), ("*mut i32", true)] {
+            let mut stream = TokenKind::tokenize(src, &mut interner).expect("tokenize");
+            let ty = stream.parse::<Type>().expect("parse type");
+            match ty.kind {
+                TypeKind::RawPtr { ty, is_mut } => {
+                    assert!(matches!(ty.kind, TypeKind::Named(_)));
+                    assert_eq!(is_mut, expected_mut, "for {src}");
+                }
+                other => panic!("expected RawPtr, got: {other:?}"),
+            }
+            assert!(stream.is_eof(), "for {src}");
+        }
+    }
+
+    #[test]
+    fn raw_pointer_codegen_renders_const_and_mut() {
+        let mut interner = Interner::new();
+        let mut stream = TokenKind::tokenize("*const *mut T", &mut interner).expect("tokenize");
+        let ty = stream.parse::<Type>().expect("parse type");
+        let mut buf = String::new();
+        crate::Codegen::codegen(&ty, &mut buf, &interner).unwrap();
+        assert_eq!(buf, "*const *mut T");
     }
 }

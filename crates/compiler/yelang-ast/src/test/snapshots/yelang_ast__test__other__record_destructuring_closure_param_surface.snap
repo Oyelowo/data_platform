@@ -282,6 +282,7 @@ Stmt {
                                             ),
                                             is_async: false,
                                             is_variadic: false,
+                                            abi: None,
                                         },
                                         body: Expr {
                                             kind: MemberAccess(

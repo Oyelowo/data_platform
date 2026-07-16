@@ -1,5 +1,7 @@
 //! Main server request loop.
 
+use std::path::Path;
+
 use yelang_proc_macro_bridge::{
     ErrorCode,
     protocol::{
@@ -9,7 +11,7 @@ use yelang_proc_macro_bridge::{
 };
 
 use super::{library::LoadedLibrary, session::Session};
-use crate::executor::{invoke_attr, invoke_derive, invoke_fn_like};
+use crate::executor::{InvokeError, invoke_attr, invoke_derive, invoke_fn_like};
 
 /// Run the server until shutdown.
 pub fn run() {
@@ -44,12 +46,23 @@ fn handle_request(session: &mut Session, request: Request) -> Response {
             }
         }
         Request::LoadLibrary { path } => {
-            // TODO: implement real dylib loading. For now, report that no library
-            // was found so the integration can fall back to in-process macros.
-            error(
-                ErrorCode::LibraryNotFound,
-                format!("dylib loading not yet implemented: {path}"),
-            )
+            if !Path::new(&path).exists() {
+                return error(
+                    ErrorCode::LibraryNotFound,
+                    format!("library not found: {path}"),
+                );
+            }
+            match LoadedLibrary::load(&path) {
+                Ok(lib) => {
+                    let descriptors = lib.descriptors.clone();
+                    let handle = session.insert_library(lib);
+                    Response::LibraryLoaded {
+                        library: handle,
+                        macros: descriptors,
+                    }
+                }
+                Err(e) => error(ErrorCode::LibraryLoadFailed, e.to_string()),
+            }
         }
         Request::UnloadLibrary { library } => {
             session.remove_library(library);
@@ -85,7 +98,7 @@ fn handle_request(session: &mut Session, request: Request) -> Response {
 
 fn expand<F>(session: &Session, library: LibraryHandle, _macro_index: u32, f: F) -> Response
 where
-    F: FnOnce(&LoadedLibrary) -> Result<(WireTokenStream, Vec<WireDiagnostic>), String>,
+    F: FnOnce(&LoadedLibrary) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError>,
 {
     match session.get_library(library) {
         Some(lib) => match f(lib) {
@@ -97,9 +110,23 @@ where
                 }
                 Response::Expanded { output }
             }
-            Err(message) => error(ErrorCode::Internal, message),
+            Err(InvokeError::Panic(message)) => Response::Panic { message },
+            Err(e) => error(error_code_for_invoke_error(&e), e.to_string()),
         },
         None => error(ErrorCode::LibraryNotFound, "library handle invalid"),
+    }
+}
+
+fn error_code_for_invoke_error(e: &InvokeError) -> ErrorCode {
+    match e {
+        InvokeError::MacroIndexOutOfBounds | InvokeError::WrongKind { .. } => {
+            ErrorCode::MacroNotFound
+        }
+        InvokeError::InputSerialization(_)
+        | InvokeError::OutputDeserialization(_)
+        | InvokeError::NullOutput => ErrorCode::InvalidInput,
+        InvokeError::Internal(_) => ErrorCode::Internal,
+        InvokeError::Panic(_) => unreachable!("panic mapped separately"),
     }
 }
 

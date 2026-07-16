@@ -19,6 +19,9 @@ impl Codegen for FnRefType {
 
 impl Codegen for FnSig {
     fn codegen(&self, f: &mut dyn Write, interner: &Interner) -> fmt::Result {
+        if let Some(abi) = &self.abi {
+            write!(f, "extern \"{}\" ", abi)?;
+        }
         write!(f, "(")?;
         for (i, param) in self.params.iter().enumerate() {
             if i > 0 {
@@ -89,6 +92,9 @@ impl Codegen for Enum {
 
 impl Codegen for FnDef {
     fn codegen(&self, f: &mut dyn Write, interner: &Interner) -> fmt::Result {
+        if let Some(abi) = &self.sig.abi {
+            write!(f, "extern \"{}\" ", abi)?;
+        }
         if self.is_const {
             write!(f, "const ")?;
         }

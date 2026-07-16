@@ -176,8 +176,13 @@ pub fn fold_type<F: Folder + ?Sized>(f: &mut F, ty: Type) -> Type {
             ty: Box::new(f.fold_type(*ty)),
             is_mut,
         },
+        TypeKind::RawPtr { ty, is_mut } => TypeKind::RawPtr {
+            ty: Box::new(f.fold_type(*ty)),
+            is_mut,
+        },
         TypeKind::Named(path) => TypeKind::Named(f.fold_path(path)),
         TypeKind::Function(func_ty) => TypeKind::Function(crate::FunctionType {
+            abi: func_ty.abi,
             is_async: func_ty.is_async,
             params: func_ty.params.into_iter().map(|p| f.fold_type(p)).collect(),
             return_type: Box::new(f.fold_type(*func_ty.return_type)),
@@ -473,6 +478,7 @@ pub fn fold_fn_sig<F: Folder + ?Sized>(f: &mut F, sig: item::FnSig) -> item::FnS
         },
         is_async: sig.is_async,
         is_variadic: sig.is_variadic,
+        abi: sig.abi,
     }
 }
 

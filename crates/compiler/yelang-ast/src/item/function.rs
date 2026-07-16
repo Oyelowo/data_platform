@@ -8,10 +8,32 @@
 use super::generics::GenericParamsParser;
 use crate::pattern::RestrictedPattern;
 use crate::tokenizer::tokens::TokenKind;
-use crate::{BlockExpr, Generics, Ident, Pattern, T, Type, WhereClause};
+use crate::{BlockExpr, Generics, Ident, Literal, Pattern, T, Type, WhereClause};
 use yelang_lexer::{
     ArrayCreator, Either, ParseTokenStream, SeparatedList, Span, TokenResult, TokenStream,
 };
+
+/// Parse an optional `extern "ABI"` prefix and return the ABI string.
+///
+/// If `extern` is present but not followed by a string literal, returns an
+/// error. If `extern` is absent, returns `Ok(None)`.
+fn parse_optional_abi(stream: &mut TokenStream<TokenKind>) -> TokenResult<Option<String>> {
+    let checkpoint = stream.checkpoint();
+    if stream.parse::<Option<T![extern]>>()?.is_none() {
+        return Ok(None);
+    }
+
+    let lit = stream.parse::<Literal>()?;
+    if let Literal::Str(s) = lit {
+        Ok(Some(stream.interner().resolve(&s.value).to_string()))
+    } else {
+        Err(yelang_lexer::TokenError::UnexpectedToken {
+            expected: "string literal ABI".into(),
+            found: "non-string literal".into(),
+            span: stream.span_since(checkpoint),
+        })
+    }
+}
 
 /// Function definition
 ///
@@ -62,6 +84,8 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for FnDef {
             }
         }
 
+        let abi = parse_optional_abi(stream)?;
+
         let (_fn, name, gen_params, mut sig, where_clause, body) = stream.parse::<(
             T![fn],
             Ident,
@@ -79,6 +103,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for FnDef {
         };
 
         sig.is_async = is_async;
+        sig.abi = abi;
 
         Ok(FnDef {
             name,
@@ -137,6 +162,8 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Method {
             }
         }
 
+        let abi = parse_optional_abi(stream)?;
+
         let (_fn, segment, gen_params, mut sig, where_clause, body) = stream.parse::<(
             T![fn],
             Ident,
@@ -154,6 +181,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Method {
         };
 
         sig.is_async = is_async;
+        sig.abi = abi;
 
         Ok(Method {
             segment,
@@ -171,6 +199,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Method {
 /// ```
 /// fn add(x: i32, y: i32) -> i32
 /// async fn fetch() -> Result<string, Error>
+/// extern "C" fn call_c()
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnSig {
@@ -182,6 +211,8 @@ pub struct FnSig {
     pub is_async: bool,
     /// Whether function accepts variable arguments
     pub is_variadic: bool,
+    /// Optional ABI string for `extern "ABI" fn` items and function pointer types.
+    pub abi: Option<String>,
 }
 
 impl ParseTokenStream<crate::tokenizer::TokenKind> for FnSig {
@@ -199,6 +230,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for FnSig {
                 .unwrap_or(FnRefType::Default(stream.span())),
             is_async: false,
             is_variadic: false,
+            abi: None,
         })
     }
 }
@@ -391,5 +423,27 @@ where
         let parsed = stream.parse::<FnDef>();
         assert!(parsed.is_ok(), "parse error: {:?}", parsed.err());
         assert!(stream.is_eof(), "expected EOF after parsing FnDef");
+    }
+
+    #[test]
+    fn parses_extern_abi_function() {
+        let src = r#"extern "C-unwind" fn foo(x: i32) -> i32 { x }"#;
+        let mut interner = Interner::new();
+        let mut stream = TokenKind::tokenize(src, &mut interner).expect("tokenize");
+        let func = stream.parse::<FnDef>().expect("parse fn");
+        assert_eq!(func.sig.abi.as_deref(), Some("C-unwind"));
+        assert!(stream.is_eof());
+    }
+
+    #[test]
+    fn extern_abi_codegen_renders() {
+        let src = r#"extern "C" fn foo(x: i32) -> i32 { x }"#;
+        let mut interner = Interner::new();
+        let mut stream = TokenKind::tokenize(src, &mut interner).expect("tokenize");
+        let func = stream.parse::<FnDef>().expect("parse fn");
+        let mut buf = String::new();
+        crate::Codegen::codegen(&func, &mut buf, &interner).unwrap();
+        assert!(buf.contains("extern \"C\" "), "rendered: {buf}");
+        assert!(buf.contains("fn foo"), "rendered: {buf}");
     }
 }

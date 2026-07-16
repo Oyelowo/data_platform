@@ -192,6 +192,7 @@ pub fn walk_type<V: Visitor>(v: &mut V, ty: &Type) -> ControlFlow<()> {
         }
         TypeKind::Slice(t) => v.visit_type(t),
         TypeKind::Ref { ty, .. } => v.visit_type(ty),
+        TypeKind::RawPtr { ty, .. } => v.visit_type(ty),
         TypeKind::Named(path) => {
             // Generics are in path.segments[].args and will be visited via visit_path
             v.visit_path(path)

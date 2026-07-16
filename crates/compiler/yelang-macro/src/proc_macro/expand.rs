@@ -120,6 +120,6 @@ fn ast_span_to_wire(span: yelang_macro_core::Span) -> WireSpan {
         lo: span.lo,
         hi: span.hi,
         file: span.file.raw(),
-        syntax_context: 0,
+        syntax_context: span.ctx.raw(),
     }
 }

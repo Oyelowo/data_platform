@@ -691,6 +691,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             TypeKind::Ref { ty, .. } => {
                 self.resolve_type(ty);
             }
+            TypeKind::RawPtr { ty, .. } => {
+                self.resolve_type(ty);
+            }
             TypeKind::Function(func_ty) => {
                 for param in &func_ty.params {
                     self.resolve_type(param);

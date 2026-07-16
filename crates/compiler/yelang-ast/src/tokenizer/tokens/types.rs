@@ -72,6 +72,7 @@ pub enum TokenKind {
     While,
     Loop,
     Async,
+    Extern,
     Gen,
     Await,
     Continue,

@@ -218,3 +218,135 @@ fn derive_proc_macro_generates_item() {
     // Should have Foo, Bar, and the generated const.
     assert_eq!(result.program.items.len(), 3);
 }
+
+#[test]
+fn macro_export_generates_fn_like_wrapper_and_entry_point() {
+    let (program, interner) = parse_program(
+        r#"
+        @yelang_proc_macro::macro_export
+        fn echo(input: TokenStream) -> TokenStream {
+            input
+        }
+    "#,
+    );
+    let mut expander = MacroExpander::new(&interner);
+    let result = expander.expand(&program);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+
+    let names: Vec<&str> = result
+        .program
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Fn(f) => Some(interner.resolve(&f.name.symbol)),
+            _ => None,
+        })
+        .collect();
+
+    // Original macro implementation is preserved.
+    assert!(names.contains(&"echo"), "missing echo: {names:?}");
+    // Generated wrapper, allocator, and entry point.
+    assert!(
+        names.contains(&"yelang_macro_echo"),
+        "missing wrapper: {names:?}"
+    );
+    assert!(names.contains(&"yelang_alloc"), "missing alloc: {names:?}");
+    assert!(names.contains(&"yelang_free"), "missing free: {names:?}");
+    assert!(
+        names.contains(&"yelang_proc_macro_entry"),
+        "missing entry: {names:?}"
+    );
+
+    // The export attribute should be stripped from the original function.
+    let echo_item = result
+        .program
+        .items
+        .iter()
+        .find(|item| matches!(&item.kind, ItemKind::Fn(f) if interner.resolve(&f.name.symbol) == "echo"))
+        .unwrap();
+    assert!(echo_item.attributes.is_empty());
+}
+
+#[test]
+fn macro_export_attribute_generates_wrapper() {
+    let (program, interner) = parse_program(
+        r#"
+        @yelang_proc_macro::macro_export_attribute
+        fn strip(args: TokenStream, item: TokenStream) -> TokenStream {
+            item
+        }
+    "#,
+    );
+    let mut expander = MacroExpander::new(&interner);
+    let result = expander.expand(&program);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+
+    let names: Vec<&str> = result
+        .program
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Fn(f) => Some(interner.resolve(&f.name.symbol)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(names.contains(&"strip"), "missing strip: {names:?}");
+    assert!(
+        names.contains(&"yelang_macro_strip"),
+        "missing wrapper: {names:?}"
+    );
+}
+
+#[test]
+fn macro_export_derive_generates_wrapper() {
+    let (program, interner) = parse_program(
+        r#"
+        @yelang_proc_macro::macro_export_derive
+        fn generate(item: TokenStream) -> TokenStream {
+            item
+        }
+    "#,
+    );
+    let mut expander = MacroExpander::new(&interner);
+    let result = expander.expand(&program);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+
+    let names: Vec<&str> = result
+        .program
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::Fn(f) => Some(interner.resolve(&f.name.symbol)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(names.contains(&"generate"), "missing generate: {names:?}");
+    assert!(
+        names.contains(&"yelang_macro_generate"),
+        "missing wrapper: {names:?}"
+    );
+}
+
+#[test]
+fn macro_export_reports_signature_mismatch() {
+    let (program, interner) = parse_program(
+        r#"
+        @yelang_proc_macro::macro_export
+        fn bad(x: i32) -> i32 {
+            x
+        }
+    "#,
+    );
+    let mut expander = MacroExpander::new(&interner);
+    let result = expander.expand(&program);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("TokenStream")),
+        "expected TokenStream error, got: {:?}",
+        result.errors
+    );
+}

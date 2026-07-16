@@ -84,6 +84,10 @@ pub mod tags {
     /// Tag for `Id<TagCrate>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagCrate;
+
+    /// Tag for `Id<TagSyntaxContext>`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct TagSyntaxContext;
 }
 
 /// Type-safe crate ID.

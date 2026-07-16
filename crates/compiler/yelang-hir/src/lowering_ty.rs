@@ -42,13 +42,22 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
             },
             ty: Box::new(lower_ty(ctx, inner)),
         },
+        yelang_ast::TypeKind::RawPtr { ty: inner, is_mut } => TyKind::RawPtr {
+            mutability: if *is_mut {
+                yelang_ast::Mutability::Mutable
+            } else {
+                yelang_ast::Mutability::Immutable
+            },
+            ty: Box::new(lower_ty(ctx, inner)),
+        },
         yelang_ast::TypeKind::Function(fn_ty) => TyKind::FnPtr {
             sig: Box::new(crate::hir::FnSig {
                 inputs: fn_ty.params.iter().map(|p| lower_ty(ctx, p)).collect(),
                 output: lower_ty(ctx, &fn_ty.return_type),
-                is_async: false,
+                is_async: fn_ty.is_async,
                 is_const: false,
-                is_variadic: false,
+                is_variadic: fn_ty.is_variadic,
+                abi: fn_ty.abi.clone(),
                 bound_vars: vec![],
             }),
         },

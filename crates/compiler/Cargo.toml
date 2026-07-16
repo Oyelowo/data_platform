@@ -9,6 +9,7 @@ members = [
     "yelang-proc-macro",
     "yelang-proc-macro-bridge",
     "yelang-proc-macro-server",
+    "yelang-proc-macro-server/tests/fixtures/test_macro",
     "yelang-resolve",
     "yelang-hir",
     "yelang-ty",
@@ -34,6 +35,7 @@ fxhash = "0.2"
 futures = "0.3"
 indexmap = "2"
 insta = "1"
+libc = "0.2"
 lasso = { version = "0.7", features = ["multi-threaded"] }
 lexical = "7"
 lexical-core = "1"

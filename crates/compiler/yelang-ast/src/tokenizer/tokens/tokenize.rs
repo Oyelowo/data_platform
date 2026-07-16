@@ -762,6 +762,7 @@ impl TokenKind {
                 "loop" => TokenKind::Loop,
                 "while" => TokenKind::While,
                 "async" => TokenKind::Async,
+                "extern" => TokenKind::Extern,
                 "await" => TokenKind::Await,
                 "gen" => TokenKind::Gen,
                 "yield" => TokenKind::Yield,

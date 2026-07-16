@@ -131,6 +131,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for LambdaExpr {
                 }),
             is_async,
             is_variadic: false,
+            abi: None,
         };
 
         Ok(Self {

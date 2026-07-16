@@ -589,6 +589,7 @@ fn method_def(
                 },
                 is_async: false,
                 is_variadic: false,
+                abi: None,
             },
             body,
             is_const: false,
@@ -828,6 +829,7 @@ mod tests {
                     return_type: yelang_ast::FnRefType::Default(Span::default()),
                     is_async: false,
                     is_variadic: false,
+                    abi: None,
                 },
                 body: yelang_ast::BlockExpr {
                     label: None,

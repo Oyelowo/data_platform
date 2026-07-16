@@ -13,6 +13,9 @@ doctest = false
 yelang-macro-core = { path = "../yelang-macro-core" }
 yelang-interner = { path = "../yelang-interner" }
 yelang-lexer = { path = "../yelang-lexer" }
+yelang-proc-macro-bridge = { path = "../yelang-proc-macro-bridge" }
+libc = { workspace = true }
+postcard = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -1009,11 +1009,14 @@ dependencies = [
 name = "yelang-proc-macro"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "postcard",
  "rstest",
  "thiserror 1.0.69",
  "yelang-interner",
  "yelang-lexer",
  "yelang-macro-core",
+ "yelang-proc-macro-bridge",
 ]
 
 [[package]]
@@ -1042,6 +1045,18 @@ dependencies = [
  "yelang-interner",
  "yelang-lexer",
  "yelang-macro-core",
+ "yelang-proc-macro",
+ "yelang-proc-macro-bridge",
+ "yelang-proc-macro-test-fixture",
+]
+
+[[package]]
+name = "yelang-proc-macro-test-fixture"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "postcard",
+ "serde",
  "yelang-proc-macro",
  "yelang-proc-macro-bridge",
 ]

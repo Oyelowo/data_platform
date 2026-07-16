@@ -109,6 +109,7 @@ fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig) -> FnSig {
         is_async: sig.is_async,
         is_const: false,
         is_variadic: sig.is_variadic,
+        abi: sig.abi.clone(),
         bound_vars: vec![],
     }
 }

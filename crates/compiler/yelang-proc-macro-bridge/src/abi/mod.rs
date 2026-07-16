@@ -7,8 +7,9 @@ pub mod signature;
 pub mod symbols;
 
 pub use registrar::{
-    YelangAttrMacro, YelangDeriveMacro, YelangFnLikeMacro, YelangMacroDescriptor,
-    YelangMacroInvoke, YelangProcMacroEntry, YelangProcMacroExports, YelangTokenStream,
+    CURRENT_ABI_VERSION, YelangAllocFn, YelangAttrMacro, YelangDeriveMacro, YelangFnLikeMacro,
+    YelangFreeFn, YelangMacroDescriptor, YelangMacroInvoke, YelangProcMacroEntry,
+    YelangProcMacroExports, YelangProcMacroKind,
 };
 pub use signature::ProcMacroKind;
-pub use symbols::ENTRY_SYMBOL;
+pub use symbols::{ALLOC_SYMBOL, ENTRY_SYMBOL, FREE_SYMBOL};

@@ -97,6 +97,7 @@ pub struct FnSig {
     pub is_async: bool,
     pub is_const: bool,
     pub is_variadic: bool,
+    pub abi: Option<String>,
     pub bound_vars: Vec<BoundVarKind>,
 }
 

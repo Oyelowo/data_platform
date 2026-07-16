@@ -231,11 +231,27 @@ impl<'a> MacroExpander<'a> {
             }
         }
 
+        let mut program = Program {
+            items,
+            span: yelang_lexer::Span::default(),
+        };
+
+        // Generate C ABI wrappers and the export table for functions annotated
+        // with `#[yelang_proc_macro::macro_export]` (and friends). This pass
+        // runs after all other macro expansion so that the signatures it sees
+        // are final.
+        let export_result =
+            crate::proc_macro::export::expand_proc_macro_exports(&program, self.interner);
+        program = export_result.program;
+        for e in export_result.errors {
+            self.errors.push(ExpandError::decorator_error(
+                e,
+                yelang_lexer::Span::default(),
+            ));
+        }
+
         ExpandResult {
-            program: Program {
-                items,
-                span: yelang_lexer::Span::default(),
-            },
+            program,
             errors: self.errors.clone(),
         }
     }
@@ -636,6 +652,19 @@ impl<'a> MacroExpander<'a> {
                     changed,
                 )
             }
+            TypeKind::RawPtr { ty: inner, is_mut } => {
+                let (new_inner, changed) = self.expand_type(inner);
+                (
+                    Type {
+                        kind: TypeKind::RawPtr {
+                            ty: Box::new(new_inner),
+                            is_mut: *is_mut,
+                        },
+                        span: ty.span,
+                    },
+                    changed,
+                )
+            }
             TypeKind::Tuple(types) => {
                 let mut new_types = vec![];
                 let mut changed = false;
@@ -686,6 +715,7 @@ impl<'a> MacroExpander<'a> {
                 (
                     Type {
                         kind: TypeKind::Function(yelang_ast::FunctionType {
+                            abi: func.abi.clone(),
                             is_async: func.is_async,
                             params: new_params,
                             return_type: Box::new(new_ret),

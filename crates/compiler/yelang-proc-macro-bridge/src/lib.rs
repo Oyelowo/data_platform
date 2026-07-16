@@ -11,9 +11,9 @@ pub mod protocol;
 pub mod sandbox;
 
 pub use abi::{
-    ENTRY_SYMBOL, ProcMacroKind, YelangAttrMacro, YelangDeriveMacro, YelangFnLikeMacro,
-    YelangMacroDescriptor, YelangMacroInvoke, YelangProcMacroEntry, YelangProcMacroExports,
-    YelangTokenStream,
+    ALLOC_SYMBOL, CURRENT_ABI_VERSION, ENTRY_SYMBOL, FREE_SYMBOL, ProcMacroKind, YelangAllocFn,
+    YelangAttrMacro, YelangDeriveMacro, YelangFnLikeMacro, YelangFreeFn, YelangMacroDescriptor,
+    YelangMacroInvoke, YelangProcMacroEntry, YelangProcMacroExports,
 };
 pub use protocol::{ErrorCode, Request, Response, WireTokenStream};
 pub use sandbox::{Limits, SandboxError};

@@ -40,6 +40,15 @@ impl Codegen for Type {
                 }
                 ty.codegen(f, interner)
             }
+            TypeKind::RawPtr { ty, is_mut } => {
+                write!(f, "*")?;
+                if *is_mut {
+                    write!(f, "mut ")?;
+                } else {
+                    write!(f, "const ")?;
+                }
+                ty.codegen(f, interner)
+            }
             TypeKind::Function(func) => func.codegen(f, interner),
             TypeKind::ForAll { params, ty } => {
                 write!(f, "for<")?;
@@ -113,6 +122,9 @@ impl Codegen for Type {
 
 impl Codegen for FunctionType {
     fn codegen(&self, f: &mut dyn Write, interner: &Interner) -> fmt::Result {
+        if let Some(abi) = &self.abi {
+            write!(f, "extern \"{}\" ", abi)?;
+        }
         if self.is_async {
             write!(f, "async ")?;
         }

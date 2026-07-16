@@ -112,6 +112,24 @@ impl FromIterator<TokenTree> for TokenStream {
     }
 }
 
+impl IntoIterator for TokenStream {
+    type Item = TokenTree;
+    type IntoIter = std::vec::IntoIter<TokenTree>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.trees.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TokenStream {
+    type Item = TokenTree;
+    type IntoIter = Iter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl fmt::Display for TokenStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, tree) in self.iter().enumerate() {

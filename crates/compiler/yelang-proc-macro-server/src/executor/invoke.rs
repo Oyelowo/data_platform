@@ -1,129 +1,189 @@
-//! Invoke proc-macro functions.
+//! Invoke proc-macro functions across the stable serialized dylib ABI.
 
-use yelang_proc_macro_bridge::protocol::{ProcMacroKind, token::WireDiagnostic};
+use yelang_proc_macro_bridge::protocol::token::{
+    WireDiagnostic, WireExpansionResult, WireTokenStream,
+};
 
-use super::context::enter;
-use super::convert::{core_to_wire, wire_to_core};
-use crate::server::library::{LoadedLibrary, MacroResult, ProcMacro};
+use super::panic::payload_to_message;
+use crate::server::library::{LoadedLibrary, LoadedMacro};
+
+/// Failure during a single macro invocation.
+#[derive(Debug, thiserror::Error)]
+pub enum InvokeError {
+    #[error("macro index out of bounds")]
+    MacroIndexOutOfBounds,
+
+    #[error("macro is not {expected}")]
+    WrongKind { expected: &'static str },
+
+    #[error("failed to serialize input: {0}")]
+    InputSerialization(#[source] postcard::Error),
+
+    #[error("macro returned null output")]
+    NullOutput,
+
+    #[error("failed to deserialize macro output: {0}")]
+    OutputDeserialization(#[source] postcard::Error),
+
+    #[error("macro panicked: {0}")]
+    Panic(String),
+
+    #[error("internal error: {0}")]
+    Internal(String),
+}
 
 /// Invoke a function-like macro by index in a loaded library.
 pub fn invoke_fn_like(
     library: &LoadedLibrary,
     macro_index: u32,
-    input: yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-) -> Result<
-    (
-        yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-        Vec<WireDiagnostic>,
-    ),
-    String,
-> {
+    input: WireTokenStream,
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
     let mac = library
         .get_macro(macro_index as usize)
-        .ok_or_else(|| "macro index out of bounds".to_string())?;
-    if mac.kind() != ProcMacroKind::FunctionLike {
-        return Err("macro is not function-like".to_string());
-    }
-    let input_ctx = wire_to_core(input);
-    invoke(mac.as_ref(), |m| m.expand_fn_like(input_ctx.clone()))
+        .ok_or(InvokeError::MacroIndexOutOfBounds)?;
+
+    let LoadedMacro::FunctionLike(fn_ptr) = mac else {
+        return Err(InvokeError::WrongKind {
+            expected: "function-like",
+        });
+    };
+
+    let input_bytes = postcard::to_allocvec(&input).map_err(InvokeError::InputSerialization)?;
+
+    let (output_ptr, output_len) = invoke_ffi(|| {
+        let mut output_ptr: *mut u8 = std::ptr::null_mut();
+        let mut output_len: usize = 0;
+        unsafe {
+            fn_ptr(
+                input_bytes.as_ptr(),
+                input_bytes.len(),
+                &mut output_ptr,
+                &mut output_len,
+            );
+        }
+        (output_ptr, output_len)
+    })?;
+
+    decode_result(library, output_ptr, output_len)
 }
 
 /// Invoke an attribute macro.
 pub fn invoke_attr(
     library: &LoadedLibrary,
     macro_index: u32,
-    args: yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-    item: yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-) -> Result<
-    (
-        yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-        Vec<WireDiagnostic>,
-    ),
-    String,
-> {
+    args: WireTokenStream,
+    item: WireTokenStream,
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
     let mac = library
         .get_macro(macro_index as usize)
-        .ok_or_else(|| "macro index out of bounds".to_string())?;
-    if mac.kind() != ProcMacroKind::Attribute {
-        return Err("macro is not an attribute macro".to_string());
-    }
-    let args_ctx = wire_to_core(args);
-    let item_ctx = wire_to_core(item);
-    invoke(mac.as_ref(), |m| {
-        m.expand_attr(args_ctx.clone(), item_ctx.clone())
-    })
+        .ok_or(InvokeError::MacroIndexOutOfBounds)?;
+
+    let LoadedMacro::Attribute(fn_ptr) = mac else {
+        return Err(InvokeError::WrongKind {
+            expected: "attribute",
+        });
+    };
+
+    let args_bytes = postcard::to_allocvec(&args).map_err(InvokeError::InputSerialization)?;
+    let item_bytes = postcard::to_allocvec(&item).map_err(InvokeError::InputSerialization)?;
+
+    let (output_ptr, output_len) = invoke_ffi(|| {
+        let mut output_ptr: *mut u8 = std::ptr::null_mut();
+        let mut output_len: usize = 0;
+        unsafe {
+            fn_ptr(
+                args_bytes.as_ptr(),
+                args_bytes.len(),
+                item_bytes.as_ptr(),
+                item_bytes.len(),
+                &mut output_ptr,
+                &mut output_len,
+            );
+        }
+        (output_ptr, output_len)
+    })?;
+
+    decode_result(library, output_ptr, output_len)
 }
 
 /// Invoke a derive macro.
 pub fn invoke_derive(
     library: &LoadedLibrary,
     macro_index: u32,
-    item: yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-) -> Result<
-    (
-        yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-        Vec<WireDiagnostic>,
-    ),
-    String,
-> {
+    item: WireTokenStream,
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
     let mac = library
         .get_macro(macro_index as usize)
-        .ok_or_else(|| "macro index out of bounds".to_string())?;
-    if mac.kind() != ProcMacroKind::Derive {
-        return Err("macro is not a derive macro".to_string());
-    }
-    let item_ctx = wire_to_core(item);
-    invoke(mac.as_ref(), |m| m.expand_derive(item_ctx.clone()))
+        .ok_or(InvokeError::MacroIndexOutOfBounds)?;
+
+    let LoadedMacro::Derive(fn_ptr) = mac else {
+        return Err(InvokeError::WrongKind { expected: "derive" });
+    };
+
+    let item_bytes = postcard::to_allocvec(&item).map_err(InvokeError::InputSerialization)?;
+
+    let (output_ptr, output_len) = invoke_ffi(|| {
+        let mut output_ptr: *mut u8 = std::ptr::null_mut();
+        let mut output_len: usize = 0;
+        unsafe {
+            fn_ptr(
+                item_bytes.as_ptr(),
+                item_bytes.len(),
+                &mut output_ptr,
+                &mut output_len,
+            );
+        }
+        (output_ptr, output_len)
+    })?;
+
+    decode_result(library, output_ptr, output_len)
 }
 
-fn invoke<F>(
-    mac: &dyn ProcMacro,
-    f: F,
-) -> Result<
-    (
-        yelang_proc_macro_bridge::protocol::token::WireTokenStream,
-        Vec<WireDiagnostic>,
-    ),
-    String,
->
+/// Call an FFI function and convert any panic into a clean `InvokeError::Panic`.
+fn invoke_ffi<F>(f: F) -> Result<(*mut u8, usize), InvokeError>
 where
-    F: FnOnce(&dyn ProcMacro) -> MacroResult,
+    F: FnOnce() -> (*mut u8, usize),
 {
-    let (result, diagnostics) = enter(|| f(mac));
-    let output = result?;
-    let wire_diagnostics = diagnostics
-        .into_iter()
-        .map(|d| diagnostic_to_wire(d))
-        .collect();
-    Ok((core_to_wire(output), wire_diagnostics))
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok((ptr, len)) => Ok((ptr, len)),
+        Err(payload) => Err(InvokeError::Panic(payload_to_message(&payload))),
+    }
 }
 
-fn diagnostic_to_wire(d: yelang_proc_macro::Diagnostic) -> WireDiagnostic {
-    WireDiagnostic {
-        level: match d.level {
-            yelang_proc_macro::Level::Error => {
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Error
-            }
-            yelang_proc_macro::Level::Warning => {
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Warning
-            }
-            yelang_proc_macro::Level::Note => {
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Note
-            }
-            yelang_proc_macro::Level::Help => {
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Help
-            }
-        },
-        message: d.message,
-        spans: d
-            .spans
-            .into_iter()
-            .map(
-                |s| yelang_proc_macro_bridge::protocol::token::WireDiagnosticSpan {
-                    span: super::convert::core_span_to_wire(s.span.into()),
-                    label: s.label,
-                },
-            )
-            .collect(),
+/// Deserialize the buffer returned by a proc macro and free it with the dylib's
+/// exported deallocator.
+fn decode_result(
+    library: &LoadedLibrary,
+    output_ptr: *mut u8,
+    output_len: usize,
+) -> Result<(WireTokenStream, Vec<WireDiagnostic>), InvokeError> {
+    if output_ptr.is_null() {
+        return Err(InvokeError::NullOutput);
     }
+
+    struct BufferGuard {
+        ptr: *mut u8,
+        free: yelang_proc_macro_bridge::abi::YelangFreeFn,
+    }
+
+    impl Drop for BufferGuard {
+        fn drop(&mut self) {
+            if !self.ptr.is_null() {
+                unsafe {
+                    (self.free)(self.ptr);
+                }
+            }
+        }
+    }
+
+    let _guard = BufferGuard {
+        ptr: output_ptr,
+        free: library.free_fn(),
+    };
+
+    let output_bytes = unsafe { std::slice::from_raw_parts(output_ptr, output_len) };
+    let result: WireExpansionResult =
+        postcard::from_bytes(output_bytes).map_err(InvokeError::OutputDeserialization)?;
+
+    Ok((result.output, result.diagnostics))
 }

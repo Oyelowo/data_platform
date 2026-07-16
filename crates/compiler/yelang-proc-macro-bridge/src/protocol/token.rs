@@ -86,3 +86,14 @@ pub enum WireLevel {
     Note,
     Help,
 }
+
+/// Result of a single macro expansion returned across the dylib boundary.
+///
+/// The C ABI functions return a serialized `WireExpansionResult` rather than a
+/// bare `WireTokenStream` so that procedural macros can emit structured
+/// diagnostics alongside their output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WireExpansionResult {
+    pub output: WireTokenStream,
+    pub diagnostics: Vec<WireDiagnostic>,
+}

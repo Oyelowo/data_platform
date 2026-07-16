@@ -17,18 +17,11 @@ impl ExpnId {
 }
 
 /// A hygiene context: a chain of macro expansion marks.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SyntaxContextId(ArenaKey);
-
-impl SyntaxContextId {
-    pub fn from_arena_key(key: ArenaKey) -> Self {
-        Self(key)
-    }
-
-    pub fn as_arena_key(self) -> ArenaKey {
-        self.0
-    }
-}
+///
+/// Uses a raw integer ID so it can be serialized across the proc-macro server
+/// boundary and reconstructed on the other side without depending on a shared
+/// arena allocator.
+pub type SyntaxContextId = yelang_arena::Id<yelang_arena::tags::TagSyntaxContext>;
 
 /// A declared macro definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

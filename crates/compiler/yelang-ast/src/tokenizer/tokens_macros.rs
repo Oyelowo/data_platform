@@ -150,6 +150,7 @@ define_tokens! {
     Enum => enum,
     Trait => trait,
     Async => async,
+    Extern => extern,
     Mut => mut,
     Mod => mod,
     Gen => gen,

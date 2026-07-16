@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::id::{
-    ExpnArena, ExpnData, ExpnId, ExpnKind, SyntaxContextArena, SyntaxContextData, SyntaxContextId,
-    Transparency,
+    ExpnArena, ExpnData, ExpnId, ExpnKind, SyntaxContextData, SyntaxContextId, Transparency,
 };
 
 /// Global hygiene data for the current compilation session.
@@ -12,7 +13,8 @@ use crate::id::{
 #[derive(Debug)]
 pub struct HygieneData {
     expn_arena: Mutex<ExpnArena>,
-    syntax_context_arena: Mutex<SyntaxContextArena>,
+    syntax_contexts: Mutex<HashMap<SyntaxContextId, SyntaxContextData>>,
+    next_syntax_context_id: AtomicU32,
     root_expn: ExpnId,
     root_syntax_context: SyntaxContextId,
 }
@@ -29,13 +31,14 @@ impl HygieneData {
         });
         let root_expn = ExpnId::from_arena_key(root_expn_key);
 
-        let mut syntax_context_arena = SyntaxContextArena::new();
-        let root_ctx_key = syntax_context_arena.insert(SyntaxContextData::root());
-        let root_syntax_context = SyntaxContextId::from_arena_key(root_ctx_key);
+        let root_syntax_context = SyntaxContextId::new(1);
+        let mut syntax_contexts = HashMap::new();
+        syntax_contexts.insert(root_syntax_context, SyntaxContextData::root());
 
         Self {
             expn_arena: Mutex::new(expn_arena),
-            syntax_context_arena: Mutex::new(syntax_context_arena),
+            syntax_contexts: Mutex::new(syntax_contexts),
+            next_syntax_context_id: AtomicU32::new(2),
             root_expn,
             root_syntax_context,
         }
@@ -72,15 +75,32 @@ impl HygieneData {
             outer_expn: Some(expn),
             transparency,
         };
-        SyntaxContextId::from_arena_key(self.syntax_context_arena.lock().unwrap().insert(data))
+        let id = self.fresh_syntax_context_id();
+        self.syntax_contexts.lock().unwrap().insert(id, data);
+        id
+    }
+
+    /// Create a syntax context with a specific ID and data.
+    ///
+    /// Used when deserializing hygiene data from the proc-macro server. If the
+    /// ID already exists, its data is overwritten.
+    pub fn insert_syntax_context(&self, id: SyntaxContextId, data: SyntaxContextData) {
+        let mut contexts = self.syntax_contexts.lock().unwrap();
+        contexts.insert(id, data);
+        let current_next = self.next_syntax_context_id.load(Ordering::SeqCst);
+        let needed = id.raw().saturating_add(1);
+        if needed > current_next {
+            self.next_syntax_context_id.store(needed, Ordering::SeqCst);
+        }
     }
 
     pub fn syntax_context_data(&self, id: SyntaxContextId) -> Option<SyntaxContextData> {
-        self.syntax_context_arena
-            .lock()
-            .unwrap()
-            .get(id.as_arena_key())
-            .cloned()
+        self.syntax_contexts.lock().unwrap().get(&id).cloned()
+    }
+
+    fn fresh_syntax_context_id(&self) -> SyntaxContextId {
+        let raw = self.next_syntax_context_id.fetch_add(1, Ordering::SeqCst);
+        SyntaxContextId::new(raw)
     }
 }
 

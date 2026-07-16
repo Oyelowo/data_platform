@@ -112,6 +112,36 @@ fn lower_mut_ref_type() {
     }
 }
 
+#[test]
+fn lower_const_raw_ptr_type() {
+    let src = "fn foo(x: *const i32) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::RawPtr { mutability, .. } => {
+            assert!(matches!(mutability, yelang_ast::Mutability::Immutable));
+        }
+        other => panic!("expected raw pointer type, got {:?}", other),
+    }
+}
+
+#[test]
+fn lower_mut_raw_ptr_type() {
+    let src = "fn foo(x: *mut i32) {}";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let sig = get_fn_sig(&crate_hir);
+    match &sig.inputs[0].kind {
+        TyKind::RawPtr { mutability, .. } => {
+            assert!(matches!(mutability, yelang_ast::Mutability::Mutable));
+        }
+        other => panic!("expected raw pointer type, got {:?}", other),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Function pointer
 // ---------------------------------------------------------------------------

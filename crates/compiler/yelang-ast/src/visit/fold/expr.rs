@@ -298,6 +298,7 @@ pub fn fold_lambda_expr<F: Folder + ?Sized>(f: &mut F, node: LambdaExpr) -> Lamb
             },
             is_async: node.fn_sig.is_async,
             is_variadic: node.fn_sig.is_variadic,
+            abi: node.fn_sig.abi,
         },
         body: Box::new(f.fold_expr(*node.body)),
     }

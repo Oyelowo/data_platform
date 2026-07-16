@@ -8,6 +8,7 @@ pub mod client;
 pub mod discovery;
 pub mod executor;
 pub mod expand;
+pub mod export;
 pub mod registry;
 pub mod resolver;
 
