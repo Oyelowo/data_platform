@@ -12,3 +12,4 @@ rand = "0.8"
 
 [dev-dependencies]
 loom = "0.7"
+proptest = "1.6"
