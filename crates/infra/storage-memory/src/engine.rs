@@ -103,6 +103,7 @@ impl Engine for MemoryEngine {
             disk_bytes: 0,
             memory_bytes,
             num_keys: Some(entries.len() as u64),
+            metrics: std::collections::HashMap::new(),
         })
     }
 

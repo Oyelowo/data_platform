@@ -8,7 +8,7 @@ pub mod index;
 pub mod reader;
 
 pub use builder::{SSTableBuilder, SSTableBuilderOptions};
-pub use reader::{SSTableReader, SSTableIterator};
+pub use reader::{SSTableIterator, SSTableReader};
 
 /// The maximum user key size supported by the SSTable format.
 pub const MAX_KEY_SIZE: usize = 16 * 1024 * 1024;

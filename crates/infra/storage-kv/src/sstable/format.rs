@@ -5,11 +5,21 @@ use bytes::{Buf, BufMut};
 /// Magic number at the end of every SSTable footer.
 pub const TABLE_MAGIC: u64 = 0x53_54_41_42_4C_45_30_30;
 
+/// Current on-disk SSTable format version.
+pub const TABLE_FORMAT_VERSION: u64 = 1;
+
 /// Footer size in bytes.
 pub const FOOTER_SIZE: usize = 48;
 
 /// Block trailer size: compression type (1) + CRC32C (4).
 pub const BLOCK_TRAILER_SIZE: usize = 5;
+
+/// Maximum allowed block size for untrusted SSTable files.
+///
+/// This is a guard against corrupted handles pointing at multi-gigabyte
+/// regions.  It is intentionally larger than any reasonable production
+/// block size.
+pub const MAX_BLOCK_SIZE: u64 = 128 * 1024 * 1024;
 
 /// Compression type stored in block trailer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,12 +27,23 @@ pub const BLOCK_TRAILER_SIZE: usize = 5;
 pub enum CompressionType {
     /// No compression.
     None = 0,
+    /// LZ4 block format, prefixed with a 4-byte little-endian uncompressed
+    /// length.  Fast; the default for all levels above the bottommost.
+    Lz4 = 1,
+    /// ZSTD frame, prefixed with a 4-byte little-endian uncompressed length.
+    /// Better ratio; used for the bottommost level.
+    Zstd = 2,
+    /// Snappy block format (uncompressed length embedded in the stream).
+    Snappy = 3,
 }
 
 impl CompressionType {
     pub fn from_u8(v: u8) -> Option<Self> {
         match v {
             0 => Some(CompressionType::None),
+            1 => Some(CompressionType::Lz4),
+            2 => Some(CompressionType::Zstd),
+            3 => Some(CompressionType::Snappy),
             _ => None,
         }
     }
@@ -60,7 +81,7 @@ impl Footer {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         self.metaindex_handle.encode(buf);
         self.index_handle.encode(buf);
-        buf.put_u64_le(0); // padding / version
+        buf.put_u64_le(TABLE_FORMAT_VERSION);
         buf.put_u64_le(TABLE_MAGIC);
     }
 
@@ -71,7 +92,12 @@ impl Footer {
         let (metaindex_handle, consumed1) = BlockHandle::decode(buf);
         let (index_handle, _consumed2) = BlockHandle::decode(&buf[consumed1..]);
         let mut cursor = &buf[32..];
-        let _version = cursor.get_u64_le();
+        let version = cursor.get_u64_le();
+        if version != TABLE_FORMAT_VERSION {
+            return Err(crate::Error::Sstable(format!(
+                "unsupported sstable version {version}"
+            )));
+        }
         let magic = cursor.get_u64_le();
         if magic != TABLE_MAGIC {
             return Err(crate::Error::Sstable("bad table magic".into()));
@@ -93,10 +119,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn compression_type_roundtrip() {
+        for ty in [
+            CompressionType::None,
+            CompressionType::Lz4,
+            CompressionType::Zstd,
+            CompressionType::Snappy,
+        ] {
+            assert_eq!(CompressionType::from_u8(ty as u8), Some(ty));
+        }
+        assert_eq!(CompressionType::from_u8(4), None);
+        assert_eq!(CompressionType::from_u8(255), None);
+    }
+
+    #[test]
     fn footer_roundtrip() {
         let footer = Footer {
-            metaindex_handle: BlockHandle { offset: 100, size: 200 },
-            index_handle: BlockHandle { offset: 300, size: 400 },
+            metaindex_handle: BlockHandle {
+                offset: 100,
+                size: 200,
+            },
+            index_handle: BlockHandle {
+                offset: 300,
+                size: 400,
+            },
         };
         let mut buf = Vec::new();
         footer.encode(&mut buf);

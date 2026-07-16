@@ -22,7 +22,11 @@ impl BloomFilterBuilder {
 
     pub fn finish(&self) -> Vec<u8> {
         let num_keys = self.keys.len();
-        let total_bits = (num_keys * self.bits_per_key).max(64);
+        // Round up to a whole number of bytes so that the reader reconstructs
+        // a BitVec with exactly the same bit count we used during construction.
+        // Otherwise the partial final byte exposes zero padding bits and can
+        // cause false negatives.
+        let total_bits = ((num_keys * self.bits_per_key).div_ceil(8) * 8).max(64);
         let num_probes = ((self.bits_per_key as f64) * 0.693) as usize + 1;
         let mut bits = bitvec![u8, Msb0; 0; total_bits];
 
@@ -115,5 +119,28 @@ mod tests {
             }
         }
         assert!(false_positives < 5, "false positives = {}", false_positives);
+    }
+
+    /// Regression: total_bits must be a multiple of 8 so the reader does not
+    /// see zero padding bits in the final byte. 82 keys * 10 bits/key = 820
+    /// bits, which used to leave 4 zero padding bits and produce false
+    /// negatives.
+    #[test]
+    fn bloom_no_false_negatives_with_partial_final_byte() {
+        let mut builder = BloomFilterBuilder::new(10);
+        for i in 0..82u32 {
+            builder.add_key(format!("t{}-k{}", i % 2, i / 2).as_bytes());
+        }
+        let data = builder.finish();
+        let reader = BloomFilterReader::new(&data, 10);
+
+        for i in 0..82u32 {
+            let key = format!("t{}-k{}", i % 2, i / 2);
+            assert!(
+                reader.may_contain(key.as_bytes()),
+                "false negative for key {}",
+                key
+            );
+        }
     }
 }

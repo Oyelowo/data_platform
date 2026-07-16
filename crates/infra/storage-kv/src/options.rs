@@ -1,7 +1,12 @@
 //! Configuration options for the LSM engine.
 
+use std::sync::Arc;
+
+use crate::logger::{Logger, noop_logger};
+use crate::sstable::format::CompressionType;
+
 /// Configuration for `LsmEngine`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LsmOptions {
     /// Mutable MemTable size limit.
     pub write_buffer_size: usize,
@@ -33,6 +38,11 @@ pub struct LsmOptions {
     /// Maximum number of levels.
     pub num_levels: usize,
 
+    /// When an output file's range overlaps more than this many files in the
+    /// next-next level, force a new output file.  Bounds the size of future
+    /// compactions.
+    pub compaction_max_overlap_files: usize,
+
     /// SST data block size.
     pub block_size: usize,
 
@@ -44,6 +54,44 @@ pub struct LsmOptions {
 
     /// WAL segment size.
     pub wal_segment_size: u64,
+
+    /// Total capacity of the SSTable block cache in bytes.
+    pub block_cache_size: usize,
+
+    /// Capacity of the optional cold tier caching blocks as stored on disk
+    /// (compressed bytes).  `0` disables it — the default, because the OS
+    /// page cache already caches the compressed file contents; enable it for
+    /// direct-I/O deployments where the page cache is bypassed.
+    pub compressed_block_cache_size: usize,
+
+    /// Compression for SSTable blocks in levels above the bottommost.
+    /// LZ4 by default: reads happen on every level, so decompression speed
+    /// matters more than ratio.
+    pub compression: CompressionType,
+
+    /// Compression for blocks written to the bottommost level.  ZSTD by
+    /// default: bottommost blocks are read rarely, so the better ratio pays
+    /// for slower decompression.
+    pub bottommost_compression: CompressionType,
+
+    /// Optional logger for engine diagnostics.  If `None`, a no-op logger is
+    /// used and internal events are silently discarded.
+    pub logger: Option<Arc<dyn Logger>>,
+
+    /// Values larger than this are written to the blob log instead of inline.
+    /// `0` disables blob separation (all values are inline).
+    pub min_blob_value_size: usize,
+
+    /// Maximum size of a single blob file before rotating to a new one.
+    pub blob_file_size: u64,
+
+    /// Minimum ratio of live bytes to total bytes that triggers blob GC for an
+    /// old blob file.  Values in `(0, 1]`; `0` disables GC.
+    pub blob_gc_ratio: f64,
+
+    /// Interval between automatic blob GC passes in milliseconds.  `0` disables
+    /// the background worker; explicit `schedule()` calls still run GC.
+    pub blob_gc_interval_ms: u64,
 }
 
 impl LsmOptions {
@@ -69,6 +117,21 @@ impl LsmOptions {
                 "level0_stop_writes_trigger must be > level0_slowdown_writes_trigger".into(),
             ));
         }
+        if self.block_cache_size == 0 {
+            return Err(crate::Error::InvalidArgument(
+                "block_cache_size must be > 0".into(),
+            ));
+        }
+        if self.compaction_max_overlap_files == 0 {
+            return Err(crate::Error::InvalidArgument(
+                "compaction_max_overlap_files must be > 0".into(),
+            ));
+        }
+        if self.blob_gc_ratio < 0.0 || self.blob_gc_ratio > 1.0 {
+            return Err(crate::Error::InvalidArgument(
+                "blob_gc_ratio must be in [0, 1]".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -86,10 +149,27 @@ impl Default for LsmOptions {
             target_file_size_base: 64 * 1024 * 1024,
             target_file_size_multiplier: 1,
             num_levels: 7,
+            compaction_max_overlap_files: 10,
             block_size: 4 * 1024,
             block_restart_interval: 16,
             bloom_bits_per_key: 10,
             wal_segment_size: 64 * 1024 * 1024,
+            block_cache_size: 8 * 1024 * 1024,
+            compressed_block_cache_size: 0,
+            compression: CompressionType::Lz4,
+            bottommost_compression: CompressionType::Zstd,
+            logger: None,
+            min_blob_value_size: 4 * 1024,
+            blob_file_size: 64 * 1024 * 1024,
+            blob_gc_ratio: 0.5,
+            blob_gc_interval_ms: 30_000,
         }
+    }
+}
+
+impl LsmOptions {
+    /// Return the configured logger, or a shared no-op logger if none was set.
+    pub(crate) fn logger(&self) -> Arc<dyn Logger> {
+        self.logger.clone().unwrap_or_else(noop_logger)
     }
 }

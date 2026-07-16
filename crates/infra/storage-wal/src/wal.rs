@@ -114,13 +114,25 @@ impl Wal {
     }
 
     /// Gracefully close the WAL, waiting for the commit worker to finish.
-    pub fn close(self) -> Result<()> {
+    ///
+    /// Idempotent: safe to call from a shared reference and safe to call more
+    /// than once.
+    pub fn close(&self) -> Result<()> {
         self.committer.shutdown()
     }
 
     /// Directory containing the segment files.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+}
+
+impl Drop for Wal {
+    fn drop(&mut self) {
+        // Ensure the fsync worker is joined even when the caller does not call
+        // `close` explicitly. This is required when `Wal` is held inside an
+        // `Arc` and dropped from the last reference.
+        let _ = self.close();
     }
 }
 

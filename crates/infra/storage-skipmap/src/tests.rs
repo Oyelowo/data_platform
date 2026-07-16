@@ -138,6 +138,19 @@ mod unit {
     }
 
     #[test]
+    fn floor_finds_exact_or_predecessor() {
+        let map = SkipMap::new();
+        assert_eq!(map.floor(&2), None);
+        map.insert(1, 10);
+        assert_eq!(map.floor(&2), Some((1, 10)));
+        assert_eq!(map.floor(&1), Some((1, 10)));
+        map.insert(3, 30);
+        assert_eq!(map.floor(&2), Some((1, 10)));
+        assert_eq!(map.floor(&3), Some((3, 30)));
+        assert_eq!(map.floor(&4), Some((3, 30)));
+    }
+
+    #[test]
     fn concurrent_insert_remove() {
         let map = Arc::new(SkipMap::new());
 

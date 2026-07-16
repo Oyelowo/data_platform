@@ -7,7 +7,7 @@
 //! concurrent writers.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
 
@@ -30,15 +30,15 @@ struct CommitRequest {
 
 /// Handle to the group commit worker.
 pub struct Committer {
-    sender: Option<Sender<CommitRequest>>,
+    sender: Mutex<Option<Sender<CommitRequest>>>,
     shutdown: Arc<AtomicBool>,
-    handle: Option<std::thread::JoinHandle<Result<()>>>,
+    handle: Mutex<Option<std::thread::JoinHandle<Result<()>>>>,
 }
 
 impl std::fmt::Debug for Committer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Committer")
-            .field("open", &self.sender.is_some())
+            .field("open", &self.sender.lock().unwrap().is_some())
             .field("shutting_down", &self.shutdown.load(Ordering::Relaxed))
             .finish()
     }
@@ -55,9 +55,9 @@ impl Committer {
             std::thread::spawn(move || worker_loop(dir, segment_size, receiver, shutdown_clone));
 
         Ok(Self {
-            sender: Some(sender),
+            sender: Mutex::new(Some(sender)),
             shutdown,
-            handle: Some(handle),
+            handle: Mutex::new(Some(handle)),
         })
     }
 
@@ -68,7 +68,8 @@ impl Committer {
             return Err(Error::Closed);
         }
         let (tx, rx) = bounded(1);
-        self.sender
+        let sender = self.sender.lock().unwrap();
+        sender
             .as_ref()
             .ok_or(Error::Closed)?
             .send(CommitRequest { record, reply: tx })
@@ -77,10 +78,14 @@ impl Committer {
     }
 
     /// Request a graceful shutdown and wait for the worker to finish.
-    pub fn shutdown(mut self) -> Result<()> {
+    ///
+    /// Idempotent: may be called more than once; subsequent calls return `Ok(())`.
+    pub fn shutdown(&self) -> Result<()> {
         self.shutdown.store(true, Ordering::Release);
-        drop(self.sender.take());
-        if let Some(handle) = self.handle.take() {
+        let sender = self.sender.lock().unwrap().take();
+        drop(sender);
+        let handle = self.handle.lock().unwrap().take();
+        if let Some(handle) = handle {
             handle.join().map_err(|_| Error::Closed)??;
         }
         Ok(())
@@ -89,10 +94,9 @@ impl Committer {
 
 impl Drop for Committer {
     fn drop(&mut self) {
-        if self.handle.is_some() {
-            self.shutdown.store(true, Ordering::Release);
-            drop(self.sender.take());
-        }
+        // Join the worker so the directory is left in a quiesced state and we do
+        // not leak a detached thread. `shutdown` is idempotent.
+        let _ = self.shutdown();
     }
 }
 

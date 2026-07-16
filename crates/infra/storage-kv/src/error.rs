@@ -24,6 +24,9 @@ pub enum Error {
     #[error("sstable error: {0}")]
     Sstable(String),
 
+    #[error("blob error: {0}")]
+    Blob(String),
+
     #[error("transaction already committed or rolled back")]
     TxnFinished,
 
@@ -35,4 +38,7 @@ pub enum Error {
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("database busy: {0}")]
+    Busy(String),
 }

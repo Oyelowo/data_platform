@@ -1,6 +1,6 @@
 //! Block-based data block builder and iterator.
 
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, Bytes};
 
 /// Builder for a data block with prefix compression restart points.
 pub struct BlockBuilder {
@@ -91,26 +91,26 @@ fn shared_prefix_len(a: &[u8], b: &[u8]) -> usize {
 }
 
 /// Iterator over entries in a data block.
-pub struct BlockIterator<'a> {
-    data: &'a [u8],
+pub struct BlockIterator {
+    data: Bytes,
     restarts_offset: usize,
     num_restarts: u32,
     current: usize,
     current_key: Vec<u8>,
-    current_value: &'a [u8],
+    current_value: Bytes,
     valid: bool,
 }
 
-impl<'a> BlockIterator<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
-        let (num_restarts, restarts_offset) = read_num_restarts(data);
+impl BlockIterator {
+    pub fn new(data: Bytes) -> Self {
+        let (num_restarts, restarts_offset) = read_num_restarts(&data);
         Self {
             data,
             restarts_offset,
             num_restarts,
-            current: data.len(), // invalid initially
+            current: usize::MAX, // invalid initially
             current_key: Vec::new(),
-            current_value: &[],
+            current_value: Bytes::new(),
             valid: false,
         }
     }
@@ -179,7 +179,7 @@ impl<'a> BlockIterator<'a> {
         self.current_key.truncate(shared);
         self.current_key.extend_from_slice(&cursor[..non_shared]);
         let value_start = self.current + 12 + non_shared;
-        self.current_value = &self.data[value_start..value_start + value_len];
+        self.current_value = self.data.slice(value_start..value_start + value_len);
         self.current = value_start + value_len;
         self.valid = true;
     }
@@ -189,7 +189,11 @@ impl<'a> BlockIterator<'a> {
     }
 
     pub fn value(&self) -> &[u8] {
-        self.current_value
+        &self.current_value
+    }
+
+    pub fn value_bytes(&self) -> Bytes {
+        self.current_value.clone()
     }
 
     pub fn valid(&self) -> bool {
@@ -221,9 +225,9 @@ mod tests {
         builder.add(b"apple", b"1");
         builder.add(b"application", b"2");
         builder.add(b"banana", b"3");
-        let data = builder.finish().to_vec();
+        let data = Bytes::copy_from_slice(builder.finish());
 
-        let mut iter = BlockIterator::new(&data);
+        let mut iter = BlockIterator::new(data);
         iter.seek_to_first();
         assert_eq!(iter.key(), b"apple");
         assert_eq!(iter.value(), b"1");
@@ -243,9 +247,9 @@ mod tests {
         builder.add(b"a", b"1");
         builder.add(b"b", b"2");
         builder.add(b"d", b"3");
-        let data = builder.finish().to_vec();
+        let data = Bytes::copy_from_slice(builder.finish());
 
-        let mut iter = BlockIterator::new(&data);
+        let mut iter = BlockIterator::new(data);
         iter.seek(b"c");
         assert!(iter.valid());
         assert_eq!(iter.key(), b"d");

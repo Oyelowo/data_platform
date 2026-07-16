@@ -6,16 +6,15 @@
 //! The implementation is a safe doubly-linked LRU list per shard. Sharding
 //! reduces contention on the hot read path.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::rc::{Rc, Weak};
+use std::hash::Hash;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
 
 use crate::FileNumber;
+use crate::metrics::Metrics;
 
 /// Number of shards. Must be a power of two so we can use `& (SHARD_COUNT - 1)`.
 const SHARD_COUNT: usize = 16;
@@ -26,6 +25,47 @@ const SHARD_MASK: usize = SHARD_COUNT - 1;
 pub struct BlockCacheKey {
     pub file_number: FileNumber,
     pub offset: u64,
+}
+
+/// The two block-cache tiers shared by all SSTable readers.
+///
+/// * The **hot tier** holds decompressed blocks; serving a hit costs nothing
+///   but a lookup.
+/// * The optional **cold tier** holds blocks exactly as stored on disk
+///   (compressed payload plus trailer); a hit still needs decompression but
+///   avoids disk I/O.  The cold tier is usually disabled because the OS page
+///   cache already caches the compressed file contents — it exists for
+///   direct-I/O deployments where the page cache is bypassed.
+///
+/// Both tiers use the same sharded-LRU [`BlockCache`] implementation; only
+/// the stored values differ.
+#[derive(Clone)]
+pub struct BlockCaches {
+    hot: Arc<BlockCache>,
+    cold: Option<Arc<BlockCache>>,
+    metrics: Arc<Metrics>,
+}
+
+impl BlockCaches {
+    /// Create a tier pair.  `cold` of `None` disables the cold tier.
+    pub fn new(hot: Arc<BlockCache>, cold: Option<Arc<BlockCache>>, metrics: Arc<Metrics>) -> Self {
+        Self { hot, cold, metrics }
+    }
+
+    /// Hot tier (decompressed blocks).
+    pub fn hot(&self) -> &BlockCache {
+        &self.hot
+    }
+
+    /// Cold tier (stored bytes), if enabled.
+    pub fn cold(&self) -> Option<&BlockCache> {
+        self.cold.as_deref()
+    }
+
+    /// Metrics shared by all readers using these caches.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
 }
 
 /// A sharded LRU cache for fixed-size blocks.
@@ -60,10 +100,11 @@ impl BlockCache {
     /// Insert a block into the cache. Evicts old entries if the new entry would
     /// exceed the capacity.
     pub fn insert(&self, key: BlockCacheKey, value: Bytes) {
-        let weight = value.len();
+        let total = self.max_weight.load(Ordering::Relaxed);
+        let per_shard = total / SHARD_COUNT;
         let shard = &self.shards[self.shard_index(&key)];
         let mut shard = shard.lock().unwrap();
-        shard.insert(key, value, self.max_weight.load(Ordering::Relaxed));
+        shard.insert(key, value, per_shard);
     }
 
     /// Total capacity in bytes.
@@ -77,25 +118,43 @@ impl BlockCache {
         self.max_weight.store(capacity, Ordering::Relaxed);
     }
 
+    /// Total weight currently cached across all shards. Exposed for tests.
+    #[cfg(test)]
+    pub fn total_weight(&self) -> usize {
+        self.shards.iter().map(|s| s.lock().unwrap().weight).sum()
+    }
+
     fn shard_index(&self, key: &BlockCacheKey) -> usize {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        (hasher.finish() as usize) & SHARD_MASK
+        shard_index(key)
     }
 }
 
+fn shard_index(key: &BlockCacheKey) -> usize {
+    // Deterministic splitmix64-style hash. We avoid DefaultHasher because
+    // its behaviour can vary between HashMap instances, and we need the
+    // same key to land in the same shard for every call.
+    let mut x = key
+        .file_number
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add(key.offset);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x = x ^ (x >> 31);
+    (x as usize) & SHARD_MASK
+}
+
 struct Shard {
-    map: HashMap<BlockCacheKey, Rc<RefCell<Node>>>,
-    head: Option<Rc<RefCell<Node>>>,
-    tail: Option<Rc<RefCell<Node>>>,
+    map: HashMap<BlockCacheKey, Arc<Mutex<Node>>>,
+    head: Option<Arc<Mutex<Node>>>,
+    tail: Option<Arc<Mutex<Node>>>,
     weight: usize,
 }
 
 struct Node {
     key: BlockCacheKey,
     value: Bytes,
-    prev: Option<Weak<RefCell<Node>>>,
-    next: Option<Rc<RefCell<Node>>>,
+    prev: Option<Weak<Mutex<Node>>>,
+    next: Option<Arc<Mutex<Node>>>,
 }
 
 impl Shard {
@@ -110,7 +169,7 @@ impl Shard {
 
     fn get(&mut self, key: BlockCacheKey) -> Option<Bytes> {
         let node = self.map.get(&key)?.clone();
-        let value = node.borrow().value.clone();
+        let value = node.lock().unwrap().value.clone();
         self.move_to_front(&node);
         Some(value)
     }
@@ -121,7 +180,7 @@ impl Shard {
         // Update in place if the key already exists.
         if let Some(node) = self.map.get(&key).cloned() {
             {
-                let mut n = node.borrow_mut();
+                let mut n = node.lock().unwrap();
                 self.weight = self.weight.saturating_sub(n.value.len());
                 n.value = value;
             }
@@ -131,9 +190,7 @@ impl Shard {
         }
 
         // Evict until we have room for the new block.
-        eprintln!("DEBUG insert key={:?} weight={} total_weight={} max_weight={}", key, weight, self.weight, max_weight);
         while self.weight + weight > max_weight && self.tail.is_some() {
-            eprintln!("DEBUG evict loop");
             self.evict_lru();
         }
 
@@ -142,7 +199,7 @@ impl Shard {
             return;
         }
 
-        let node = Rc::new(RefCell::new(Node {
+        let node = Arc::new(Mutex::new(Node {
             key,
             value,
             prev: None,
@@ -150,7 +207,7 @@ impl Shard {
         }));
 
         if let Some(head) = self.head.as_ref() {
-            head.borrow_mut().prev = Some(Rc::downgrade(&node));
+            head.lock().unwrap().prev = Some(Arc::downgrade(&node));
         } else {
             // First node: it is both head and tail.
             self.tail = Some(node.clone());
@@ -161,12 +218,12 @@ impl Shard {
         self.weight += weight;
     }
 
-    fn move_to_front(&mut self, node: &Rc<RefCell<Node>>) {
+    fn move_to_front(&mut self, node: &Arc<Mutex<Node>>) {
         // If already at the front, nothing to do.
         if self
             .head
             .as_ref()
-            .map(|h| Rc::ptr_eq(h, node))
+            .map(|h| Arc::ptr_eq(h, node))
             .unwrap_or(false)
         {
             return;
@@ -174,15 +231,15 @@ impl Shard {
 
         // Detach from current position.
         {
-            let n = node.borrow();
+            let n = node.lock().unwrap();
             if let Some(prev) = n.prev.as_ref().and_then(|w| w.upgrade()) {
-                prev.borrow_mut().next = n.next.clone();
+                prev.lock().unwrap().next = n.next.clone();
             } else {
                 // This node was the head; moving it forward is a no-op.
                 return;
             }
             if let Some(next) = n.next.as_ref() {
-                next.borrow_mut().prev = n.prev.clone();
+                next.lock().unwrap().prev = n.prev.clone();
             } else {
                 // This node was the tail.
                 self.tail = n.prev.as_ref().and_then(|w| w.upgrade());
@@ -191,12 +248,12 @@ impl Shard {
 
         // Attach to front.
         {
-            let mut n = node.borrow_mut();
+            let mut n = node.lock().unwrap();
             n.prev = None;
             n.next = self.head.clone();
         }
         if let Some(head) = self.head.as_ref() {
-            head.borrow_mut().prev = Some(Rc::downgrade(node));
+            head.lock().unwrap().prev = Some(Arc::downgrade(node));
         }
         self.head = Some(node.clone());
     }
@@ -208,10 +265,9 @@ impl Shard {
         };
 
         {
-            let n = tail.borrow();
-            eprintln!("DEBUG evict key={:?} weight={} total_weight={}", n.key, n.value.len(), self.weight);
+            let n = tail.lock().unwrap();
             if let Some(prev) = n.prev.as_ref().and_then(|w| w.upgrade()) {
-                prev.borrow_mut().next = None;
+                prev.lock().unwrap().next = None;
                 self.tail = Some(prev);
             } else {
                 // Only node in the list.
@@ -228,6 +284,24 @@ impl Shard {
 mod tests {
     use super::*;
 
+    /// Return `count` distinct keys that all hash to `target_shard`.
+    fn keys_in_shard(target_shard: usize, count: usize) -> Vec<BlockCacheKey> {
+        let mut keys = Vec::with_capacity(count);
+        for offset in 0..10_000u64 {
+            let key = BlockCacheKey {
+                file_number: 1,
+                offset,
+            };
+            if shard_index(&key) == target_shard {
+                keys.push(key);
+                if keys.len() == count {
+                    return keys;
+                }
+            }
+        }
+        panic!("could not find {} keys for shard {}", count, target_shard);
+    }
+
     #[test]
     fn basic_get_insert() {
         let cache = BlockCache::with_capacity(1024);
@@ -242,90 +316,45 @@ mod tests {
 
     #[test]
     fn eviction_by_weight() {
-        let cache = BlockCache::with_capacity(10);
-        for i in 0..5u8 {
-            cache.insert(
-                BlockCacheKey {
-                    file_number: 1,
-                    offset: u64::from(i),
-                },
-                Bytes::from(vec![i; 3]),
-            );
+        // Target a single shard so the eviction order is deterministic.
+        // Capacity is 3 * block_size * shard_count so each shard can hold
+        // exactly three 3-byte blocks.
+        let cache = BlockCache::with_capacity(3 * 3 * SHARD_COUNT);
+        let keys = keys_in_shard(0, 5);
+        for (i, key) in keys.iter().enumerate() {
+            cache.insert(*key, Bytes::from(vec![i as u8; 3]));
         }
 
-        // The first two entries should have been evicted (3 * 4 = 12 > 10).
-        assert!(cache
-            .get(BlockCacheKey {
-                file_number: 1,
-                offset: 0
-            })
-            .is_none());
-        assert!(cache
-            .get(BlockCacheKey {
-                file_number: 1,
-                offset: 1
-            })
-            .is_none());
+        // The first two entries should have been evicted.
+        assert!(cache.get(keys[0]).is_none());
+        assert!(cache.get(keys[1]).is_none());
 
         // Most-recently used entries should still be present.
-        for i in 2..5u8 {
-            assert_eq!(
-                cache
-                    .get(BlockCacheKey {
-                        file_number: 1,
-                        offset: u64::from(i)
-                    })
-                    .unwrap(),
-                Bytes::from(vec![i; 3])
-            );
+        for (i, key) in keys.iter().enumerate().skip(2) {
+            assert_eq!(cache.get(*key).unwrap(), Bytes::from(vec![i as u8; 3]));
         }
     }
 
     #[test]
     fn access_moves_to_front() {
-        let cache = BlockCache::with_capacity(10);
-        for i in 0..4u8 {
-            cache.insert(
-                BlockCacheKey {
-                    file_number: 1,
-                    offset: u64::from(i),
-                },
-                Bytes::from(vec![i; 3]),
-            );
+        // Capacity is 4 * block_size * shard_count: each shard holds four
+        // 3-byte blocks. We use keys that all hit shard 0.
+        let cache = BlockCache::with_capacity(4 * 3 * SHARD_COUNT);
+        let keys = keys_in_shard(0, 4);
+        for (i, key) in keys.iter().enumerate() {
+            cache.insert(*key, Bytes::from(vec![i as u8; 3]));
         }
 
-        // Touch offset 0 so it becomes most recently used.
-        assert_eq!(
-            cache
-                .get(BlockCacheKey {
-                    file_number: 1,
-                    offset: 0
-                })
-                .unwrap(),
-            Bytes::from(vec![0u8; 3])
-        );
+        // Touch the first key so it becomes most recently used.
+        assert_eq!(cache.get(keys[0]).unwrap(), Bytes::from(vec![0u8; 3]));
 
-        // Insert one more block; this should evict offset 1, not offset 0.
-        cache.insert(
-            BlockCacheKey {
-                file_number: 1,
-                offset: 4,
-            },
-            Bytes::from(vec![4u8; 3]),
-        );
+        // Insert one more block into the same shard; this should evict the
+        // second key, not the recently touched first key.
+        let extra = keys_in_shard(0, 5)[4];
+        cache.insert(extra, Bytes::from(vec![4u8; 3]));
 
-        assert!(cache
-            .get(BlockCacheKey {
-                file_number: 1,
-                offset: 1
-            })
-            .is_none());
-        assert!(cache
-            .get(BlockCacheKey {
-                file_number: 1,
-                offset: 0
-            })
-            .is_some());
+        assert!(cache.get(keys[1]).is_none());
+        assert!(cache.get(keys[0]).is_some());
     }
 
     #[test]
@@ -338,12 +367,14 @@ mod tests {
             },
             Bytes::from(vec![0u8; 100]),
         );
-        assert!(cache
-            .get(BlockCacheKey {
-                file_number: 1,
-                offset: 0
-            })
-            .is_none());
+        assert!(
+            cache
+                .get(BlockCacheKey {
+                    file_number: 1,
+                    offset: 0
+                })
+                .is_none()
+        );
     }
 
     #[test]
@@ -356,12 +387,14 @@ mod tests {
             },
             Bytes::from_static(b"x"),
         );
-        assert!(cache
-            .get(BlockCacheKey {
-                file_number: 1,
-                offset: 0
-            })
-            .is_none());
+        assert!(
+            cache
+                .get(BlockCacheKey {
+                    file_number: 1,
+                    offset: 0
+                })
+                .is_none()
+        );
     }
 
     #[test]

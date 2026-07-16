@@ -272,6 +272,41 @@ where
     {
         self.range(None, None)
     }
+
+    /// Return the greatest entry that is less than or equal to `key`.
+    ///
+    /// This is a point lookup: it does not guarantee a consistent snapshot of
+    /// the whole map, but it returns a single entry that was present at some
+    /// point during the call.
+    pub fn floor(&self, key: &K) -> Option<(K, V)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let guard = crossbeam_epoch::pin();
+        let pos = self.search(key, &guard);
+
+        // `search` returns the first node >= `key` as succs[0]. If that node is
+        // exactly `key` (and not marked), it is the floor. Otherwise the floor
+        // is preds[0], the last node < `key`.
+        let succ = pos.succs[0];
+        if let Some(succ_node) = unsafe { succ.as_ref() }
+            && let Some(ref k) = succ_node.key
+            && k == key
+            && !succ_node.is_marked()
+        {
+            return Some((k.clone(), succ_node.value().clone()));
+        }
+
+        let pred = pos.preds[0];
+        let pred_node = unsafe { pred.as_ref() }?;
+        if pred_node.is_marked() {
+            return None;
+        }
+        // The sentinel head node has no key/value.
+        pred_node.key.as_ref()?;
+        Some((pred_node.key().clone(), pred_node.value().clone()))
+    }
 }
 
 impl<K, V> SkipMap<K, V>

@@ -32,7 +32,7 @@ fn fresh_opts() -> LsmOptions {
 fn reopen_keeps_synced_writes() {
     let dir = tempfile::tempdir().unwrap();
     let opts = fresh_opts();
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
 
     for i in 0..100u16 {
         engine.put(&i.to_be_bytes(), &i.to_le_bytes()).unwrap();
@@ -40,7 +40,7 @@ fn reopen_keeps_synced_writes() {
     engine.sync().unwrap();
     drop(engine);
 
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     for i in 0..100u16 {
         let expected = bytes::Bytes::copy_from_slice(&i.to_le_bytes());
         assert_eq!(engine.get(&i.to_be_bytes()).unwrap(), Some(expected));
@@ -54,7 +54,7 @@ proptest! {
     fn random_ops_recover_after_reopen(ops in vec(op_strategy(), 0..20)) {
         let dir = tempfile::tempdir().unwrap();
         let opts = fresh_opts();
-        let engine = LsmEngine::open(dir.path(), opts).unwrap();
+        let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
         let mut model: BTreeMap<Vec<u8>, Option<Vec<u8>>> = BTreeMap::new();
 
         for op in &ops {
@@ -72,7 +72,7 @@ proptest! {
         engine.sync().unwrap();
         drop(engine);
 
-        let engine = LsmEngine::open(dir.path(), opts).unwrap();
+        let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
         for (key, expected) in &model {
             let got = engine.get(key).unwrap();
             let want = expected.as_ref().map(|v| bytes::Bytes::copy_from_slice(v));
@@ -105,7 +105,7 @@ fn compaction_preserves_latest_values() {
         target_file_size_base: 256,
         ..Default::default()
     };
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
 
     for round in 0..10u8 {
         for i in 0..50u8 {
@@ -116,7 +116,7 @@ fn compaction_preserves_latest_values() {
     engine.sync().unwrap();
     drop(engine);
 
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     for i in 0..50u8 {
         let expected = bytes::Bytes::from(vec![9, i]);
         assert_eq!(engine.get(&[i]).unwrap(), Some(expected));

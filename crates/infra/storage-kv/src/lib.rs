@@ -10,27 +10,43 @@
 //! The public API is synchronous and runtime-agnostic, matching the
 //! `storage-traits` contract.
 
+mod backup;
+mod blob;
+mod blob_gc;
 mod cache;
 mod compaction;
+mod compaction_merge;
+mod compaction_worker;
+mod compression;
 mod cursor;
 mod engine;
 mod error;
+mod file;
+mod file_number;
 mod flush;
 mod immutable;
-mod internal_key;
+pub mod internal_key;
 mod manifest;
 mod memtable;
-mod merge_iter;
+pub mod column_family;
+pub mod merge_iter;
+mod metrics;
+mod obsolete_files;
 mod options;
 mod recovery;
+mod sequence;
+mod snapshots;
 mod transaction;
+mod txn_cursor;
 mod version;
 mod version_set;
 mod wal;
 mod worker;
+pub mod logger;
 
 pub mod sstable;
 
+pub use backup::{create_backup, create_checkpoint, delete_backup, list_backups, restore_backup, restore_checkpoint, BackupColumnFamily, BackupManifest};
 pub use engine::LsmEngine;
 pub use error::{Error, Result};
 pub use options::LsmOptions;

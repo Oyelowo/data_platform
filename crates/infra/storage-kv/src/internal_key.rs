@@ -22,6 +22,10 @@ pub enum ValueType {
     Deletion = 0,
     /// A value put.
     Value = 1,
+    /// A range-deletion tombstone.
+    RangeDeletion = 2,
+    /// A reference to a value stored in the blob log.
+    BlobRef = 3,
 }
 
 impl ValueType {
@@ -29,18 +33,77 @@ impl ValueType {
         match v {
             0 => Some(ValueType::Deletion),
             1 => Some(ValueType::Value),
+            2 => Some(ValueType::RangeDeletion),
+            3 => Some(ValueType::BlobRef),
             _ => None,
         }
     }
 }
 
+/// A range tombstone covering `[start, end)` as of `sequence`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RangeTombstone {
+    pub start: Vec<u8>,
+    pub end: Vec<u8>,
+    pub seq: SequenceNumber,
+}
+
+impl RangeTombstone {
+    /// Encode to a binary form suitable for the MemTable or SSTable meta-block.
+    /// Layout: `start_len (LE32) | start | end_len (LE32) | end | seq (BE64)`.
+    pub fn encode(&self) -> Vec<u8> {
+        use bytes::BufMut;
+        let mut buf = Vec::with_capacity(8 + 8 + self.start.len() + self.end.len());
+        buf.put_u32_le(self.start.len() as u32);
+        buf.put_slice(&self.start);
+        buf.put_u32_le(self.end.len() as u32);
+        buf.put_slice(&self.end);
+        buf.put_u64(self.seq);
+        buf
+    }
+
+    /// Decode the binary form produced by `encode`.
+    pub fn decode(mut buf: &[u8]) -> Option<Self> {
+        use bytes::Buf;
+        if buf.len() < 8 {
+            return None;
+        }
+        let start_len = buf.get_u32_le() as usize;
+        if buf.len() < start_len + 4 {
+            return None;
+        }
+        let start = buf[..start_len].to_vec();
+        buf.advance(start_len);
+        let end_len = buf.get_u32_le() as usize;
+        if buf.len() < end_len + 8 {
+            return None;
+        }
+        let end = buf[..end_len].to_vec();
+        buf.advance(end_len);
+        let seq = buf.get_u64();
+        Some(Self { start, end, seq })
+    }
+
+    /// True if `key` is covered by this tombstone (`start <= key < end`).
+    pub fn covers(&self, key: &[u8]) -> bool {
+        self.start.as_slice() <= key && key < self.end.as_slice()
+    }
+}
+
 /// Decode the trailer of an internal key.
+///
+/// The trailer is stored big-endian so that raw byte ordering of internal keys
+/// matches the desired comparator order: user key ascending, then sequence
+/// descending, then value before deletion for the same sequence.
 pub fn parse_internal_key(encoded: &[u8]) -> Option<(SequenceNumber, ValueType)> {
     if encoded.len() < 8 {
         return None;
     }
     let trailer = &encoded[encoded.len() - 8..];
-    let num = u64::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3], trailer[4], trailer[5], trailer[6], trailer[7]]);
+    let num = u64::from_be_bytes([
+        trailer[0], trailer[1], trailer[2], trailer[3], trailer[4], trailer[5], trailer[6],
+        trailer[7],
+    ]);
     let seq = num >> 8;
     let ty = ValueType::from_u8((num & 0xFF) as u8)?;
     Some((seq, ty))
@@ -52,11 +115,16 @@ pub fn extract_user_key(encoded: &[u8]) -> &[u8] {
 }
 
 /// Build an encoded internal key.
+///
+/// The 8-byte trailer is `(sequence << 8) | type` stored in big-endian byte
+/// order. This makes higher sequence numbers compare larger than lower ones for
+/// the same user key, and a value record compare larger than a deletion tombstone
+/// at the same sequence number.
 pub fn build_internal_key(user_key: &[u8], seq: SequenceNumber, ty: ValueType) -> Vec<u8> {
     let mut buf = Vec::with_capacity(user_key.len() + 8);
     buf.put_slice(user_key);
     let num = (seq << 8) | (ty as u64);
-    buf.put_u64_le(num);
+    buf.put_u64(num);
     buf
 }
 

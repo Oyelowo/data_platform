@@ -10,9 +10,12 @@ fn put_and_get() {
         write_buffer_size: 256, // tiny to force flushes
         ..Default::default()
     };
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     engine.put(b"hello", b"world").unwrap();
-    assert_eq!(engine.get(b"hello").unwrap(), Some(bytes::Bytes::from_static(b"world")));
+    assert_eq!(
+        engine.get(b"hello").unwrap(),
+        Some(bytes::Bytes::from_static(b"world"))
+    );
 }
 
 #[test]
@@ -22,10 +25,13 @@ fn overwrite_and_delete() {
         write_buffer_size: 256,
         ..Default::default()
     };
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     engine.put(b"k", b"v1").unwrap();
     engine.put(b"k", b"v2").unwrap();
-    assert_eq!(engine.get(b"k").unwrap(), Some(bytes::Bytes::from_static(b"v2")));
+    assert_eq!(
+        engine.get(b"k").unwrap(),
+        Some(bytes::Bytes::from_static(b"v2"))
+    );
     engine.delete(b"k").unwrap();
     assert_eq!(engine.get(b"k").unwrap(), None);
 }
@@ -37,7 +43,7 @@ fn scan_range() {
         write_buffer_size: 256,
         ..Default::default()
     };
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     for i in 0..10u8 {
         engine.put(&[i], &[i + 10]).unwrap();
     }
@@ -57,16 +63,19 @@ fn reopen_recovers_data() {
         ..Default::default()
     };
     {
-        let engine = LsmEngine::open(dir.path(), opts).unwrap();
+        let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
         for i in 0..50u8 {
             engine.put(&[i], &[i + 100]).unwrap();
         }
         engine.sync().unwrap();
     }
 
-    let engine = LsmEngine::open(dir.path(), opts).unwrap();
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     for i in 0..50u8 {
         let expected = vec![i + 100];
-        assert_eq!(engine.get(&[i]).unwrap(), Some(bytes::Bytes::from(expected)));
+        assert_eq!(
+            engine.get(&[i]).unwrap(),
+            Some(bytes::Bytes::from(expected))
+        );
     }
 }

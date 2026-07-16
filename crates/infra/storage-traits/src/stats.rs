@@ -11,4 +11,6 @@ pub struct EngineStats {
     pub memory_bytes: u64,
     /// Number of keys, if known cheaply.
     pub num_keys: Option<u64>,
+    /// Engine-specific counters and gauges (metric name → value).
+    pub metrics: std::collections::HashMap<String, u64>,
 }
