@@ -1,0 +1,18 @@
+[package]
+name = "storage-memory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "High-performance in-memory storage engine backed by a lock-free skip-map."
+license.workspace = true
+
+[dependencies]
+storage-traits = { path = "../storage-traits" }
+bytes = "1.10"
+thiserror = "2.0"
+rand = "0.8"
+crossbeam-skiplist = "0.1"
+
+[dev-dependencies]
+storage-testkit = { path = "../storage-testkit" }
+criterion = "0.5"

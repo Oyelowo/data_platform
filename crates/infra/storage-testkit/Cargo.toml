@@ -1,0 +1,17 @@
+[package]
+name = "storage-testkit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Conformance, property-based, and workload tests for storage engines."
+license.workspace = true
+
+[dependencies]
+storage-traits = { path = "../storage-traits" }
+bytes = "1.10"
+proptest = "1.6"
+thiserror = "2.0"
+rand = "0.8"
+
+[dev-dependencies]
+storage-memory = { path = "../storage-memory" }
