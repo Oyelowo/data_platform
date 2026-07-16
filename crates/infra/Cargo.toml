@@ -6,6 +6,7 @@ members = [
     "storage-skipmap",
     "storage-memory",
     "storage-wal",
+    "storage-kv",
     # "object_store",
     # "distributed_storages",
     # "consensus",
