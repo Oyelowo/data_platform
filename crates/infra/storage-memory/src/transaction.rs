@@ -1,7 +1,6 @@
 //! In-memory transaction implementation.
 
 use bytes::Bytes;
-use crossbeam_skiplist::SkipMap;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -16,7 +15,7 @@ use crate::engine::MemoryEngine;
 /// visible to other transactions and rollback simply discards the buffer.
 #[derive(Clone, Debug)]
 pub struct MemoryTransaction {
-    data: Arc<SkipMap<Bytes, Bytes>>,
+    data: Arc<storage_skipmap::SkipMap<Bytes, Bytes>>,
     /// Local write buffer. `None` means the key was deleted.
     local: BTreeMap<Bytes, Option<Bytes>>,
     read_only: bool,
@@ -26,7 +25,10 @@ pub struct MemoryTransaction {
 
 impl MemoryTransaction {
     /// Create a new transaction.
-    pub(crate) fn new(data: Arc<SkipMap<Bytes, Bytes>>, opts: TxnOptions) -> Self {
+    pub(crate) fn new(
+        data: Arc<storage_skipmap::SkipMap<Bytes, Bytes>>,
+        opts: TxnOptions,
+    ) -> Self {
         Self {
             data,
             local: BTreeMap::new(),
@@ -56,7 +58,8 @@ impl Transaction for MemoryTransaction {
             return Ok(value.clone());
         }
 
-        Ok(self.data.get(key).map(|e| e.value().clone()))
+        let key_bytes = Bytes::copy_from_slice(key);
+        Ok(self.data.get(&key_bytes))
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
@@ -91,11 +94,15 @@ impl Transaction for MemoryTransaction {
         self.ensure_active()?;
 
         // Merge the shared map and the local write buffer into a snapshot.
+        let start_bytes = start.map(Bytes::copy_from_slice);
+        let end_bytes = end.map(Bytes::copy_from_slice);
         let mut merged: BTreeMap<Bytes, Option<Bytes>> = self
             .data
-            .iter()
-            .map(|e| (e.key().clone(), Some(e.value().clone())))
+            .range(start_bytes.as_ref(), end_bytes.as_ref())
+            .into_iter()
+            .map(|(k, v)| (k, Some(v)))
             .collect();
+
         for (k, v) in &self.local {
             if let Some(v) = v {
                 merged.insert(k.clone(), Some(v.clone()));
@@ -104,7 +111,7 @@ impl Transaction for MemoryTransaction {
             }
         }
 
-        // Filter by range.
+        // Filter by range again after applying local writes.
         let start_bound = start.map_or(std::ops::Bound::Unbounded, |s| {
             std::ops::Bound::Included(Bytes::copy_from_slice(s))
         });

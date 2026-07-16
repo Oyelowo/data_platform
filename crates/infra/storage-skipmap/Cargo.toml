@@ -1,0 +1,14 @@
+[package]
+name = "storage-skipmap"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Owned lock-free skip-map with epoch-based memory reclamation."
+license.workspace = true
+
+[dependencies]
+crossbeam-epoch = "0.9"
+rand = "0.8"
+
+[dev-dependencies]
+loom = "0.7"

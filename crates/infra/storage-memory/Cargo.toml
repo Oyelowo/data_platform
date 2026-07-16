@@ -8,10 +8,10 @@ license.workspace = true
 
 [dependencies]
 storage-traits = { path = "../storage-traits" }
+storage-skipmap = { path = "../storage-skipmap" }
 bytes = "1.10"
 thiserror = "2.0"
 rand = "0.8"
-crossbeam-skiplist = "0.1"
 
 [dev-dependencies]
 storage-testkit = { path = "../storage-testkit" }

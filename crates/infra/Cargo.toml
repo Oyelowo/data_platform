@@ -3,6 +3,7 @@ members = [
     "storage_engines",
     "storage-traits",
     "storage-testkit",
+    "storage-skipmap",
     "storage-memory",
     # "object_store",
     # "distributed_storages",

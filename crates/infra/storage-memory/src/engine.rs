@@ -1,7 +1,6 @@
 //! In-memory storage engine implementation.
 
 use bytes::Bytes;
-use crossbeam_skiplist::SkipMap;
 use std::sync::Arc;
 
 use storage_traits::{Engine, EngineStats, Error, Result, TxnOptions};
@@ -16,19 +15,19 @@ pub const MAX_VALUE_SIZE: usize = 512 * 1024 * 1024; // 512 MiB
 
 /// A high-performance in-memory storage engine backed by a lock-free skip-map.
 ///
-/// The engine is fully thread-safe and uses `crossbeam-skiplist` for
-/// lock-free reads and writes. It is suitable for tests, caches, and as a
-/// reference implementation for the storage trait API.
+/// The engine is fully thread-safe and uses `storage-skipmap` for lock-free
+/// reads and writes. It is suitable for tests, caches, and as a reference
+/// implementation for the storage trait API.
 #[derive(Clone, Debug)]
 pub struct MemoryEngine {
-    data: Arc<SkipMap<Bytes, Bytes>>,
+    data: Arc<storage_skipmap::SkipMap<Bytes, Bytes>>,
 }
 
 impl MemoryEngine {
     /// Create a new, empty in-memory engine.
     pub fn new() -> Self {
         Self {
-            data: Arc::new(SkipMap::new()),
+            data: Arc::new(storage_skipmap::SkipMap::new()),
         }
     }
 
@@ -78,25 +77,32 @@ impl Engine for MemoryEngine {
 
     fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
         Self::check_key(key)?;
-        Ok(self.data.get(key).map(|e| e.value().clone()))
+        let key_bytes = Bytes::copy_from_slice(key);
+        Ok(self.data.get(&key_bytes))
     }
 
     fn scan(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<Self::Cursor> {
-        Ok(MemoryCursor::new(Arc::clone(&self.data), start, end))
+        let start_bytes = start.map(Bytes::copy_from_slice);
+        let end_bytes = end.map(Bytes::copy_from_slice);
+        let buffer = self
+            .data
+            .range(start_bytes.as_ref(), end_bytes.as_ref())
+            .into_iter()
+            .collect();
+        Ok(MemoryCursor::from_snapshot(buffer))
     }
 
     fn stats(&self) -> Result<EngineStats> {
+        let entries = self.data.iter();
         let mut memory_bytes = 0u64;
-        let mut num_keys = 0u64;
-        for entry in self.data.iter() {
-            memory_bytes += entry.key().len() as u64 + entry.value().len() as u64;
-            num_keys += 1;
+        for (k, v) in &entries {
+            memory_bytes += k.len() as u64 + v.len() as u64;
         }
         Ok(EngineStats {
             name: self.name(),
             disk_bytes: 0,
             memory_bytes,
-            num_keys: Some(num_keys),
+            num_keys: Some(entries.len() as u64),
         })
     }
 
