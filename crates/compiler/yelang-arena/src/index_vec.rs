@@ -193,9 +193,114 @@ impl<'a, K: Idx, V> IntoIterator for &'a mut IndexVec<K, V> {
     }
 }
 
+// ----------------------------------------------------------------------------
+// SecondaryMap
+// ----------------------------------------------------------------------------
+
+/// A dense secondary map keyed by typed indices.
+///
+/// Backed by `Vec<Option<V>>`, indexed by the same `Idx` type used for an
+/// [`IndexVec`]. This is the right tool for per-key metadata when the key space
+/// is dense: it has better cache locality and lower per-lookup overhead than
+/// `FxHashMap<Idx, V>`.
+///
+/// For sparse metadata, use `FxHashMap` or a dedicated sparse map instead.
+#[derive(Debug, Clone)]
+pub struct SecondaryMap<K: Idx, V> {
+    raw: Vec<Option<V>>,
+    _marker: PhantomData<K>,
+}
+
+impl<K: Idx, V> SecondaryMap<K, V> {
+    /// Create an empty map.
+    pub fn new() -> Self {
+        Self {
+            raw: Vec::new(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create an empty map with the given capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            raw: Vec::with_capacity(capacity),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Ensure the slot for `key` exists, growing with `None` values as needed.
+    fn ensure_slot(&mut self, key: K) -> usize {
+        let idx = key.index();
+        if idx >= self.raw.len() {
+            self.raw.resize_with(idx + 1, || None);
+        }
+        idx
+    }
+
+    /// Insert a value and return the previous value at that key, if any.
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let idx = self.ensure_slot(key);
+        self.raw[idx].replace(value)
+    }
+
+    /// Look up a value by key.
+    pub fn get(&self, key: K) -> Option<&V> {
+        self.raw.get(key.index()).and_then(|slot| slot.as_ref())
+    }
+
+    /// Look up a value by key mutably.
+    pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+        self.raw.get_mut(key.index()).and_then(|slot| slot.as_mut())
+    }
+
+    /// Returns `true` if the key has an associated value.
+    pub fn contains_key(&self, key: K) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Remove and return the value at a key, if any.
+    pub fn remove(&mut self, key: K) -> Option<V> {
+        self.raw.get_mut(key.index()).and_then(|slot| slot.take())
+    }
+
+    /// Return the number of populated entries.
+    pub fn len(&self) -> usize {
+        self.raw.iter().filter(|slot| slot.is_some()).count()
+    }
+
+    /// Return whether the map contains no populated entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Iterate over values in key order.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.raw.iter().filter_map(|slot| slot.as_ref())
+    }
+
+    /// Iterate over `(key, value)` pairs in key order.
+    pub fn iter_enumerated(&self) -> impl Iterator<Item = (K, &V)> {
+        self.raw
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, slot)| slot.as_ref().map(|value| (K::from_usize(idx), value)))
+    }
+
+    /// Clear all entries. Previously returned keys are now invalid entries.
+    pub fn clear(&mut self) {
+        self.raw.clear();
+    }
+}
+
+impl<K: Idx, V> Default for SecondaryMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Idx, IndexVec};
+    use super::{IndexVec, SecondaryMap};
     use crate::id::Id;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -268,5 +373,50 @@ mod tests {
     fn index_panics_on_invalid_key() {
         let vec: IndexVec<Key, i32> = IndexVec::new();
         let _ = vec[Key::new(5)];
+    }
+
+    #[test]
+    fn secondary_map_insert_and_get() {
+        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        assert_eq!(map.get(Key::new(1)), None);
+        assert_eq!(map.insert(Key::new(1), 10), None);
+        assert_eq!(map.get(Key::new(1)), Some(&10));
+        assert_eq!(map.insert(Key::new(1), 20), Some(10));
+        assert_eq!(map.get(Key::new(1)), Some(&20));
+    }
+
+    #[test]
+    fn secondary_map_sparse_growth() {
+        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        map.insert(Key::new(3), 42);
+        assert_eq!(map.get(Key::new(1)), None);
+        assert_eq!(map.get(Key::new(2)), None);
+        assert_eq!(map.get(Key::new(3)), Some(&42));
+        assert!(!map.contains_key(Key::new(2)));
+        assert!(map.contains_key(Key::new(3)));
+    }
+
+    #[test]
+    fn secondary_map_remove_and_len() {
+        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        map.insert(Key::new(1), 10);
+        map.insert(Key::new(3), 30);
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.remove(Key::new(1)), Some(10));
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.remove(Key::new(2)), None);
+    }
+
+    #[test]
+    fn secondary_map_iter_enumerated() {
+        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        map.insert(Key::new(1), 10);
+        map.insert(Key::new(3), 30);
+        let pairs: Vec<_> = map.iter_enumerated().collect();
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0, Key::new(1));
+        assert_eq!(*pairs[0].1, 10);
+        assert_eq!(pairs[1].0, Key::new(3));
+        assert_eq!(*pairs[1].1, 30);
     }
 }
