@@ -29,8 +29,27 @@ pub struct DiagnosticSpan {
 impl Diagnostic {
     /// Create a new error diagnostic.
     pub fn error<M: Into<String>>(message: M) -> Self {
+        Self::new(Level::Error, message)
+    }
+
+    /// Create a new warning diagnostic.
+    pub fn warning<M: Into<String>>(message: M) -> Self {
+        Self::new(Level::Warning, message)
+    }
+
+    /// Create a new note diagnostic.
+    pub fn note<M: Into<String>>(message: M) -> Self {
+        Self::new(Level::Note, message)
+    }
+
+    /// Create a new help diagnostic.
+    pub fn help<M: Into<String>>(message: M) -> Self {
+        Self::new(Level::Help, message)
+    }
+
+    fn new<M: Into<String>>(level: Level, message: M) -> Self {
         Self {
-            level: Level::Error,
+            level,
             message: message.into(),
             spans: Vec::new(),
         }
@@ -40,6 +59,11 @@ impl Diagnostic {
     pub fn with_span(mut self, span: Span) -> Self {
         self.spans.push(DiagnosticSpan { span, label: None });
         self
+    }
+
+    /// Add a primary span (alias for `with_span`).
+    pub fn span(self, span: Span) -> Self {
+        self.with_span(span)
     }
 
     /// Add a labeled span.

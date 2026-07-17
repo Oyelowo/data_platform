@@ -7,3 +7,4 @@
 pub mod memory;
 pub mod panic;
 pub mod primitives;
+pub mod proc_macro;

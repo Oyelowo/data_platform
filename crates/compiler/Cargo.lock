@@ -1154,6 +1154,12 @@ dependencies = [
 [[package]]
 name = "yelang-stdlib-core"
 version = "0.1.0"
+dependencies = [
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-macro-core",
+ "yelang-proc-macro",
+]
 
 [[package]]
 name = "yelang-trait-solver"

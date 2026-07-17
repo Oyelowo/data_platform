@@ -28,6 +28,7 @@ mod parse_macro_output;
 mod paste;
 pub mod proc_macro;
 mod quote;
+mod quote_macro;
 mod resolver;
 mod transcribe;
 

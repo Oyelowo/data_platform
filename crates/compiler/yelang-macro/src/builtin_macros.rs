@@ -8,6 +8,8 @@ use yelang_macro_core::token_tree::{
     Delimiter, Group as TokenGroup, Punct, Span as TokenSpan, TokenStream, TokenTree,
 };
 
+use crate::quote_macro::{expand::expand_quote, parse};
+
 /// Built-in macros recognized by the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinMacro {
@@ -18,6 +20,8 @@ pub enum BuiltinMacro {
     Todo,
     Unreachable,
     Format,
+    Quote,
+    QuoteSpanned,
 }
 
 impl BuiltinMacro {
@@ -35,6 +39,8 @@ impl BuiltinMacro {
             "todo" => Some(BuiltinMacro::Todo),
             "unreachable" => Some(BuiltinMacro::Unreachable),
             "format" => Some(BuiltinMacro::Format),
+            "quote" => Some(BuiltinMacro::Quote),
+            "quote_spanned" => Some(BuiltinMacro::QuoteSpanned),
             _ => None,
         }
     }
@@ -53,7 +59,52 @@ pub fn expand_builtin_macro(inv: &MacroInvocation, interner: &Interner) -> Optio
         BuiltinMacro::Todo => Some(expand_todo(inv, interner)),
         BuiltinMacro::Unreachable => Some(expand_unreachable(inv, interner)),
         BuiltinMacro::Format => Some(expand_format(inv, interner)),
+        BuiltinMacro::Quote => Some(expand_quote_macro(inv, interner)),
+        BuiltinMacro::QuoteSpanned => Some(expand_quote_spanned_macro(inv, interner)),
     }
+}
+
+/// Extract the inner token stream of a single delimiter group, returning an
+/// error expression if the macro arguments are malformed.
+fn expect_quote_args(
+    inv: &MacroInvocation,
+    interner: &Interner,
+    span: Span,
+) -> Result<TokenStream, Box<Expr>> {
+    match inv.args.trees().first() {
+        Some(TokenTree::Group(g)) => Ok(g.stream.clone()),
+        _ => Err(Box::new(panic_expr(
+            "quote! requires a single delimited template argument",
+            span,
+            interner,
+        ))),
+    }
+}
+
+fn expand_quote_macro(inv: &MacroInvocation, interner: &Interner) -> Expr {
+    let span = inv.span;
+    let template_tokens = match expect_quote_args(inv, interner, span) {
+        Ok(t) => t,
+        Err(e) => return *e,
+    };
+    let template = match parse::parse(template_tokens) {
+        Ok(t) => t,
+        Err(msg) => return panic_expr(&msg, span, interner),
+    };
+    expand_quote(&template, None, interner, span)
+}
+
+fn expand_quote_spanned_macro(inv: &MacroInvocation, interner: &Interner) -> Expr {
+    let span = inv.span;
+    let template_tokens = match expect_quote_args(inv, interner, span) {
+        Ok(t) => t,
+        Err(e) => return *e,
+    };
+    let (span_expr, template) = match parse::parse_spanned(template_tokens) {
+        Ok(t) => t,
+        Err(msg) => return panic_expr(&msg, span, interner),
+    };
+    expand_quote(&template, Some(&span_expr), interner, span)
 }
 
 /// `assert!(cond)` → `if !cond { panic!("assertion failed") }`

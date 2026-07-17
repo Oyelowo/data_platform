@@ -95,7 +95,7 @@ impl Literal {
     pub fn byte(value: u8, span: Span) -> Self {
         Self {
             inner: yelang_macro_core::Literal::byte(value, span.into_inner()),
-            cached: format!("b'{}'", value),
+            cached: format!("b'{}'", value as char),
         }
     }
 

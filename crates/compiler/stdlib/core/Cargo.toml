@@ -10,3 +10,9 @@ description = "Yelang standard library core — primitives, memory, and platform
 doctest = false
 
 [dependencies]
+yelang-proc-macro = { path = "../../yelang-proc-macro" }
+yelang-macro-core = { path = "../../yelang-macro-core" }
+yelang-interner = { path = "../../yelang-interner" }
+
+[dev-dependencies]
+yelang-lexer = { path = "../../yelang-lexer" }

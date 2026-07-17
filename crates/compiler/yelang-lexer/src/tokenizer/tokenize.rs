@@ -891,6 +891,7 @@ impl TokenKind {
             cursor.consume_char('^').map(|_| TokenKind::Caret),
             cursor.consume("|=").map(|_| TokenKind::PipeEqual),
             cursor.parse::<Char<'|'>>().map(|_| TokenKind::Pipe),
+            cursor.consume_char('#').map(|_| TokenKind::Hash),
             cursor.parse::<Any>().map(|_| TokenKind::Unknown),
         )?;
 
