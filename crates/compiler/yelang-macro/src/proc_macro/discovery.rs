@@ -258,6 +258,7 @@ fn register_all(
                 index as u32,
                 library_path.clone(),
                 crate_name.to_string(),
+                None,
             )
         })
         .collect();

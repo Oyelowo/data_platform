@@ -183,6 +183,7 @@ impl ProcMacroClient {
     }
 
     /// Invoke a function-like macro.
+    #[allow(clippy::too_many_arguments)]
     pub fn expand_fn_like(
         &mut self,
         library: LibraryHandle,
@@ -208,6 +209,7 @@ impl ProcMacroClient {
     }
 
     /// Invoke an attribute macro.
+    #[allow(clippy::too_many_arguments)]
     pub fn expand_attr(
         &mut self,
         library: LibraryHandle,
@@ -235,6 +237,7 @@ impl ProcMacroClient {
     }
 
     /// Invoke a derive macro.
+    #[allow(clippy::too_many_arguments)]
     pub fn expand_derive(
         &mut self,
         library: LibraryHandle,

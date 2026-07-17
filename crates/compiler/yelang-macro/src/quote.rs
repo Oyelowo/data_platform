@@ -179,4 +179,89 @@ mod tests {
         let stream = if_expr(cond, then_body, span, &interner);
         assert_eq!(stream.render(&interner), "if!x{panic();}");
     }
+
+    #[test]
+    fn quote_str_lit_renders() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let stream =
+            TokenStream::from_vec(vec![TokenTree::Literal(str_lit("hello", span, &interner))]);
+        assert_eq!(stream.render(&interner), "\"hello\"");
+    }
+
+    #[test]
+    fn quote_int_lit_renders() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let stream =
+            TokenStream::from_vec(vec![TokenTree::Literal(int_lit("42", span, &interner))]);
+        assert_eq!(stream.render(&interner), "42");
+    }
+
+    #[test]
+    fn quote_punct_renders() {
+        let span = Span::default();
+        let stream = TokenStream::from_vec(vec![TokenTree::Punct(punct('+', span))]);
+        let interner = Interner::new();
+        assert_eq!(stream.render(&interner), "+");
+    }
+
+    #[test]
+    fn quote_joint_punct_renders_path_separator() {
+        let span = Span::default();
+        let mut stream = TokenStream::new();
+        stream.push(TokenTree::Punct(punct_joint(':', span)));
+        stream.push(TokenTree::Punct(punct_joint(':', span)));
+        let interner = Interner::new();
+        assert_eq!(stream.render(&interner), "::");
+    }
+
+    #[test]
+    fn quote_paren_group_renders() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let inner = TokenStream::from_vec(vec![TokenTree::Ident(ident("x", span, &interner))]);
+        let stream = TokenStream::from_vec(vec![TokenTree::Group(paren(inner, span))]);
+        assert_eq!(stream.render(&interner), "(x)");
+    }
+
+    #[test]
+    fn quote_brace_group_renders() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let inner = TokenStream::from_vec(vec![TokenTree::Ident(ident("x", span, &interner))]);
+        let stream = TokenStream::from_vec(vec![TokenTree::Group(brace(inner, span))]);
+        assert_eq!(stream.render(&interner), "{x}");
+    }
+
+    #[test]
+    fn quote_concat_joins_streams() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let a = path(&["std"], span, &interner);
+        let b = path(&["option"], span, &interner);
+        let stream = concat(vec![a, b]);
+        // Adjacent identifiers are separated by a space to avoid forming a single
+        // identifier when rendered.
+        assert_eq!(stream.render(&interner), "std option");
+    }
+
+    #[test]
+    fn quote_binary_renders_operator() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let left = path(&["a"], span, &interner);
+        let right = path(&["b"], span, &interner);
+        let stream = binary(left, '+', right, span);
+        assert_eq!(stream.render(&interner), "a+b");
+    }
+
+    #[test]
+    fn quote_unary_renders_operator() {
+        let interner = Interner::new();
+        let span = Span::default();
+        let expr = path(&["x"], span, &interner);
+        let stream = unary('!', expr, span);
+        assert_eq!(stream.render(&interner), "!x");
+    }
 }

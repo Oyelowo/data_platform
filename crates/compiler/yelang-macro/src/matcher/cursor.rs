@@ -19,6 +19,10 @@ impl TokenCursor {
         self.trees.get(self.pos)
     }
 
+    pub fn peek_ahead(&self, offset: usize) -> Option<&TokenTree> {
+        self.trees.get(self.pos + offset)
+    }
+
     pub fn advance(&mut self) -> Option<TokenTree> {
         let tree = self.trees.get(self.pos).cloned()?;
         self.pos += 1;

@@ -695,4 +695,34 @@ mod tests {
         };
         assert_eq!(ident.span.ctx, captured_ctx);
     }
+
+    #[test]
+    fn transcribe_dollar_crate_resolves_to_defining_crate() {
+        let interner = Interner::new();
+        let defining_crate = CrateId::new(42);
+        let ops = vec![TranscriberOp::Terminal(TokenTree::Ident(
+            yelang_macro_core::token_tree::Ident::new_crate_unresolved(
+                interner.get_or_intern("crate"),
+                Span::default(),
+            ),
+        ))];
+        let out = transcribe(
+            &ops,
+            &Bindings::new(),
+            &interner,
+            SyntaxContextId::default(),
+            defining_crate,
+        )
+        .unwrap();
+        let trees: Vec<_> = out.into_iter().collect();
+        assert_eq!(trees.len(), 1);
+        let TokenTree::Ident(ident) = &trees[0] else {
+            panic!("expected ident, got {:?}", trees[0]);
+        };
+        assert_eq!(
+            ident.origin,
+            yelang_macro_core::token_tree::IdentOrigin::Crate
+        );
+        assert_eq!(ident.crate_ref, Some(defining_crate));
+    }
 }

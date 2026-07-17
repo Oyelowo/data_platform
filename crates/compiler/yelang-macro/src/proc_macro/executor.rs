@@ -11,6 +11,13 @@ pub trait InProcessProcMacro: Send + Sync {
     fn kind(&self) -> ProcMacroKind;
     fn name(&self) -> &str;
 
+    /// Optional span pointing to the macro definition. When present it is sent
+    /// to the proc-macro API as `Span::def_site()`; otherwise the call site is
+    /// used as a fallback.
+    fn def_site_span(&self) -> Option<yelang_lexer::Span> {
+        None
+    }
+
     fn expand_fn_like(&self, input: TokenStream) -> (TokenStream, Vec<Diagnostic>);
     fn expand_attr(&self, args: TokenStream, item: TokenStream) -> (TokenStream, Vec<Diagnostic>);
     fn expand_derive(&self, item: TokenStream) -> (TokenStream, Vec<Diagnostic>);

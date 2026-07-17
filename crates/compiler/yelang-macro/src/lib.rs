@@ -18,6 +18,7 @@
 
 mod builtin_decorators;
 mod builtin_macros;
+mod cfg;
 mod eager;
 mod error;
 mod expander;
@@ -34,12 +35,12 @@ pub use builtin_decorators::{BuiltinDecorator, DecoratorArgs, DecoratorResult, R
 pub use builtin_macros::{
     BuiltinMacro, expand_assert, expand_panic, expand_todo, expand_unreachable,
 };
+pub use cfg::{CfgOptions, CfgPredicate};
 pub use eager::{
-    CfgOptions, CfgPredicate, EagerBuiltin, EagerContext, EnvProvider, FileLoader,
-    MemoryEnvProvider, MemoryFileLoader, StdEnvProvider, StdFileLoader,
-    expand_eager_macros_in_stream,
+    EagerBuiltin, EagerContext, EnvProvider, FileLoader, MemoryEnvProvider, MemoryFileLoader,
+    StdEnvProvider, StdFileLoader, expand_eager_macros_in_stream,
 };
-pub use error::ExpandError;
+pub use error::{DiagnosticLevel, ExpandError};
 pub use expander::{
     ExpandResult, MacroExpander, expand_item, expand_program, expand_program_with_proc_macros,
 };

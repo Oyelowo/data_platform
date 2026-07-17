@@ -79,6 +79,10 @@ pub enum FragmentKind {
     Path,
     Item,
     Pat,
+    Vis,
+    Meta,
+    Lifetime,
+    PatParam,
 }
 
 impl FragmentKind {
@@ -94,6 +98,10 @@ impl FragmentKind {
             "path" => Some(FragmentKind::Path),
             "item" => Some(FragmentKind::Item),
             "pat" => Some(FragmentKind::Pat),
+            "vis" => Some(FragmentKind::Vis),
+            "meta" => Some(FragmentKind::Meta),
+            "lifetime" => Some(FragmentKind::Lifetime),
+            "pat_param" => Some(FragmentKind::PatParam),
             _ => None,
         }
     }

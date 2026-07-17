@@ -23,6 +23,9 @@ pub struct ResolvedProcMacro {
     pub kind: ProcMacroKind,
     pub library: LibraryHandle,
     pub macro_index: u32,
+    /// Optional span pointing to the macro definition. When present it is sent
+    /// to the proc-macro API as `Span::def_site()`.
+    pub def_site_span: Option<yelang_lexer::Span>,
 }
 
 /// Resolver for procedural macro names.
@@ -149,6 +152,7 @@ impl ProcMacroRuntime {
                     kind: def.kind,
                     library,
                     macro_index: def.macro_index,
+                    def_site_span: def.def_site_span,
                 }),
         )
     }
@@ -161,6 +165,7 @@ impl ProcMacroRuntime {
     }
 
     /// Expand a server-based procedural macro.
+    #[allow(clippy::too_many_arguments)]
     pub fn expand_proc_macro(
         &self,
         macro_def: &ResolvedProcMacro,

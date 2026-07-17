@@ -24,8 +24,33 @@ pub struct MacroDef {
 impl ParseTokenStream<crate::tokenizer::TokenKind> for MacroDef {
     fn parse(stream: &mut TokenStream<crate::tokenizer::TokenKind>) -> TokenResult<Self> {
         let start_span = stream.current_span();
-        // Consume the leading `macro` keyword.
-        stream.advance();
+
+        // Accept either the native `macro name { ... }` form or the
+        // Rust-compatible `macro_rules! name { ... }` form.
+        match stream.peek().map(|t| t.kind()) {
+            Some(TokenKind::Macro) => {
+                stream.advance();
+            }
+            Some(TokenKind::Ident(ident)) => {
+                if stream.interner().resolve(&ident.symbol) != "macro_rules" {
+                    return Err(TokenError::SyntaxError {
+                        message: "expected `macro` or `macro_rules!`".to_string(),
+                        span: stream.current_span(),
+                        source: None,
+                    });
+                }
+                stream.advance();
+                stream.consume(TokenKind::Bang)?;
+            }
+            _ => {
+                return Err(TokenError::SyntaxError {
+                    message: "expected `macro` or `macro_rules!`".to_string(),
+                    span: stream.current_span(),
+                    source: None,
+                });
+            }
+        }
+
         let name = *consume_token!(stream, TokenKind::Ident(ident) => ident);
 
         if stream.peek().map(|t| t.kind()) != Some(&TokenKind::OpenBrace) {
@@ -117,6 +142,27 @@ mod tests {
     fn macro_def_requires_brace_body() {
         let mut interner = Interner::new();
         let src = r#"macro unless;"#;
+        let mut stream = TokenKind::tokenize(src, &mut interner).unwrap();
+        assert!(stream.parse::<crate::Item>().is_err());
+    }
+
+    #[test]
+    fn parse_macro_rules_syntax() {
+        let mut interner = Interner::new();
+        let src = r#"macro_rules! unless { ($cond:expr) => { if !$cond { {} } }; }"#;
+        let mut stream = TokenKind::tokenize(src, &mut interner).unwrap();
+        let item = stream.parse::<crate::Item>().unwrap();
+        let crate::ItemKind::MacroDef(def) = item.kind else {
+            panic!("expected MacroDef, got {:?}", item.kind);
+        };
+        assert_eq!(interner.resolve(&def.name.symbol), "unless");
+        assert!(!def.body.is_empty());
+    }
+
+    #[test]
+    fn macro_rules_requires_bang() {
+        let mut interner = Interner::new();
+        let src = r#"macro_rules unless { ($cond:expr) => { if !$cond { {} } }; }"#;
         let mut stream = TokenKind::tokenize(src, &mut interner).unwrap();
         assert!(stream.parse::<crate::Item>().is_err());
     }

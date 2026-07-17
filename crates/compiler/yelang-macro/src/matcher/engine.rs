@@ -40,15 +40,32 @@ pub fn try_match_matcher(
     Ok(bindings)
 }
 
+#[derive(Clone, Default)]
+struct MatcherContext {
+    /// If this matcher sequence is the body of a repetition, the separator of
+    /// that repetition.  Fragments like `:stmt` use this to decide whether a
+    /// trailing semicolon is part of the capture or the repetition separator.
+    repeat_separator: Option<TokenTree>,
+}
+
 fn match_ops(
     ops: &[MatcherOp],
     cursor: &mut TokenCursor,
     interner: &Interner,
 ) -> Result<Bindings, MatcherError> {
+    match_ops_with_context(ops, cursor, interner, &MatcherContext::default())
+}
+
+fn match_ops_with_context(
+    ops: &[MatcherOp],
+    cursor: &mut TokenCursor,
+    interner: &Interner,
+    ctx: &MatcherContext,
+) -> Result<Bindings, MatcherError> {
     let mut bindings = Bindings::new();
 
     for op in ops {
-        let op_bindings = match_op(op, cursor, interner)?;
+        let op_bindings = match_op(op, cursor, interner, ctx)?;
         bindings.extend(op_bindings);
     }
 
@@ -59,6 +76,7 @@ fn match_op(
     op: &MatcherOp,
     cursor: &mut TokenCursor,
     interner: &Interner,
+    ctx: &MatcherContext,
 ) -> Result<Bindings, MatcherError> {
     match op {
         MatcherOp::Terminal(expected) => {
@@ -73,13 +91,15 @@ fn match_op(
             Ok(Bindings::new())
         }
         MatcherOp::Metavar { name, fragment } => {
-            let captured = consume_fragment(cursor, *fragment, interner).map_err(|e| {
-                MatcherError::InvalidMatcher(format!(
-                    "could not match fragment `{}`: {}",
-                    interner.resolve(name),
-                    e
-                ))
-            })?;
+            let captured =
+                consume_fragment(cursor, *fragment, interner, ctx.repeat_separator.as_ref())
+                    .map_err(|e| {
+                        MatcherError::InvalidMatcher(format!(
+                            "could not match fragment `{}`: {}",
+                            interner.resolve(name),
+                            e
+                        ))
+                    })?;
             let mut b = Bindings::new();
             let binding = match captured.fields {
                 Some(fields) => Binding::fragment(captured.stream, fields),
@@ -93,7 +113,7 @@ fn match_op(
             match group {
                 TokenTree::Group(g) if g.delimiter == *delimiter => {
                     let mut inner = TokenCursor::new(g.stream);
-                    let bindings = match_ops(ops, &mut inner, interner)?;
+                    let bindings = match_ops_with_context(ops, &mut inner, interner, ctx)?;
                     if !inner.is_eof() {
                         return Err(MatcherError::InvalidMatcher(
                             "trailing tokens inside group".to_string(),
@@ -108,50 +128,61 @@ fn match_op(
                 ))),
             }
         }
-        MatcherOp::Repeat { kind, sep, ops } => match kind {
-            RepetitionKind::ZeroOrOne => match match_ops(ops, cursor, interner) {
-                Ok(iter_bindings) => {
-                    let merged = Bindings::from_repeat_iterations(vec![iter_bindings]);
-                    Ok(merged)
-                }
-                Err(_) => {
-                    // Zero iterations: name is absent from bindings.
-                    Ok(Bindings::new())
-                }
-            },
-            RepetitionKind::ZeroOrMore | RepetitionKind::OneOrMore => {
-                let mut iterations = Vec::new();
-                let is_plus = matches!(kind, RepetitionKind::OneOrMore);
-                while let Ok(iter_bindings) = match_ops(ops, cursor, interner) {
-                    iterations.push(iter_bindings);
-                    if let Some(sep_tree) = sep {
-                        if !cursor
-                            .peek()
-                            .map(|t| trees_equal(t, sep_tree))
-                            .unwrap_or(false)
-                        {
-                            break;
+        MatcherOp::Repeat { kind, sep, ops } => {
+            let inner_ctx = MatcherContext {
+                repeat_separator: sep.clone(),
+            };
+            match kind {
+                RepetitionKind::ZeroOrOne => {
+                    match match_ops_with_context(ops, cursor, interner, &inner_ctx) {
+                        Ok(iter_bindings) => {
+                            let merged = Bindings::from_repeat_iterations(vec![iter_bindings]);
+                            Ok(merged)
                         }
-                        // Lookahead past the separator to see if another element
-                        // follows. If not, this is a trailing separator: consume
-                        // it and stop.
-                        let mut lookahead = cursor.clone();
-                        lookahead.advance();
-                        if match_ops(ops, &mut lookahead, interner).is_err() {
-                            cursor.advance();
-                            break;
+                        Err(_) => {
+                            // Zero iterations: name is absent from bindings.
+                            Ok(Bindings::new())
                         }
-                        cursor.advance();
                     }
                 }
-                if is_plus && iterations.is_empty() {
-                    return Err(MatcherError::InvalidMatcher(
-                        "expected at least one repetition".to_string(),
-                    ));
+                RepetitionKind::ZeroOrMore | RepetitionKind::OneOrMore => {
+                    let mut iterations = Vec::new();
+                    let is_plus = matches!(kind, RepetitionKind::OneOrMore);
+                    while let Ok(iter_bindings) =
+                        match_ops_with_context(ops, cursor, interner, &inner_ctx)
+                    {
+                        iterations.push(iter_bindings);
+                        if let Some(sep_tree) = sep {
+                            if !cursor
+                                .peek()
+                                .map(|t| trees_equal(t, sep_tree))
+                                .unwrap_or(false)
+                            {
+                                break;
+                            }
+                            // Lookahead past the separator to see if another element
+                            // follows. If not, this is a trailing separator: consume
+                            // it and stop.
+                            let mut lookahead = cursor.clone();
+                            lookahead.advance();
+                            if match_ops_with_context(ops, &mut lookahead, interner, &inner_ctx)
+                                .is_err()
+                            {
+                                cursor.advance();
+                                break;
+                            }
+                            cursor.advance();
+                        }
+                    }
+                    if is_plus && iterations.is_empty() {
+                        return Err(MatcherError::InvalidMatcher(
+                            "expected at least one repetition".to_string(),
+                        ));
+                    }
+                    Ok(Bindings::from_repeat_iterations(iterations))
                 }
-                Ok(Bindings::from_repeat_iterations(iterations))
             }
-        },
+        }
     }
 }
 

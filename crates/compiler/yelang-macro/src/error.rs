@@ -1,5 +1,14 @@
 use std::fmt;
 
+/// Severity level of a diagnostic emitted by a procedural macro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticLevel {
+    Error,
+    Warning,
+    Note,
+    Help,
+}
+
 /// A single frame in a macro expansion backtrace.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BacktraceFrame {
@@ -58,6 +67,12 @@ pub enum ExpandError {
         span: yelang_lexer::Span,
         backtrace: Vec<BacktraceFrame>,
     },
+    ProcMacroDiagnostic {
+        level: DiagnosticLevel,
+        message: String,
+        span: yelang_lexer::Span,
+        backtrace: Vec<BacktraceFrame>,
+    },
 }
 
 impl ExpandError {
@@ -72,7 +87,8 @@ impl ExpandError {
             | ExpandError::MacroDefError { backtrace: bt, .. }
             | ExpandError::MacroMatchError { backtrace: bt, .. }
             | ExpandError::MacroTranscribeError { backtrace: bt, .. }
-            | ExpandError::AmbiguousMacro { backtrace: bt, .. } => {
+            | ExpandError::AmbiguousMacro { backtrace: bt, .. }
+            | ExpandError::ProcMacroDiagnostic { backtrace: bt, .. } => {
                 *bt = backtrace;
             }
         }
@@ -89,7 +105,8 @@ impl ExpandError {
             | ExpandError::MacroDefError { span, .. }
             | ExpandError::MacroMatchError { span, .. }
             | ExpandError::MacroTranscribeError { span, .. }
-            | ExpandError::AmbiguousMacro { span, .. } => *span,
+            | ExpandError::AmbiguousMacro { span, .. }
+            | ExpandError::ProcMacroDiagnostic { span, .. } => *span,
         }
     }
 }
@@ -119,6 +136,15 @@ impl fmt::Display for ExpandError {
             }
             ExpandError::AmbiguousMacro { name, .. } => {
                 write!(f, "macro `{}` invocation matches more than one rule", name)
+            }
+            ExpandError::ProcMacroDiagnostic { level, message, .. } => {
+                let level_str = match level {
+                    DiagnosticLevel::Error => "error",
+                    DiagnosticLevel::Warning => "warning",
+                    DiagnosticLevel::Note => "note",
+                    DiagnosticLevel::Help => "help",
+                };
+                write!(f, "proc macro {}: {}", level_str, message)
             }
         }
     }
@@ -207,6 +233,19 @@ impl ExpandError {
     pub fn ambiguous_macro(name: impl Into<String>, span: yelang_lexer::Span) -> Self {
         ExpandError::AmbiguousMacro {
             name: name.into(),
+            span,
+            backtrace: vec![],
+        }
+    }
+
+    pub fn proc_macro_diagnostic(
+        level: DiagnosticLevel,
+        message: impl Into<String>,
+        span: yelang_lexer::Span,
+    ) -> Self {
+        ExpandError::ProcMacroDiagnostic {
+            level,
+            message: message.into(),
             span,
             backtrace: vec![],
         }

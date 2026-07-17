@@ -14,6 +14,10 @@ use crate::id::{
 pub struct HygieneData {
     expn_arena: Mutex<ExpnArena>,
     syntax_contexts: Mutex<HashMap<SyntaxContextId, SyntaxContextData>>,
+    /// Canonicalization map so that identical `(parent, expansion, transparency)`
+    /// triples reuse the same syntax context. Without this, repeated macro
+    /// expansions create exponentially many equivalent contexts.
+    context_dedup: Mutex<HashMap<(SyntaxContextId, ExpnId, Transparency), SyntaxContextId>>,
     next_syntax_context_id: AtomicU32,
     root_expn: ExpnId,
     root_syntax_context: SyntaxContextId,
@@ -38,6 +42,7 @@ impl HygieneData {
         Self {
             expn_arena: Mutex::new(expn_arena),
             syntax_contexts: Mutex::new(syntax_contexts),
+            context_dedup: Mutex::new(HashMap::new()),
             next_syntax_context_id: AtomicU32::new(2),
             root_expn,
             root_syntax_context,
@@ -82,6 +87,12 @@ impl HygieneData {
         expn: ExpnId,
         transparency: Transparency,
     ) -> SyntaxContextId {
+        let key = (parent, expn, transparency);
+        let mut dedup = self.context_dedup.lock().unwrap();
+        if let Some(&id) = dedup.get(&key) {
+            return id;
+        }
+
         let data = SyntaxContextData {
             parent: Some(parent),
             outer_expn: Some(expn),
@@ -89,6 +100,7 @@ impl HygieneData {
         };
         let id = self.fresh_syntax_context_id();
         self.syntax_contexts.lock().unwrap().insert(id, data);
+        dedup.insert(key, id);
         id
     }
 
@@ -98,7 +110,18 @@ impl HygieneData {
     /// ID already exists, its data is overwritten.
     pub fn insert_syntax_context(&self, id: SyntaxContextId, data: SyntaxContextData) {
         let mut contexts = self.syntax_contexts.lock().unwrap();
-        contexts.insert(id, data);
+        contexts.insert(id, data.clone());
+        drop(contexts);
+
+        // Keep the canonicalization map in sync when contexts are materialized
+        // from an external source (e.g. the proc-macro server).
+        if let (Some(parent), Some(outer_expn)) = (data.parent, data.outer_expn) {
+            self.context_dedup
+                .lock()
+                .unwrap()
+                .insert((parent, outer_expn, data.transparency), id);
+        }
+
         let current_next = self.next_syntax_context_id.load(Ordering::SeqCst);
         let needed = id.raw().saturating_add(1);
         if needed > current_next {
@@ -147,6 +170,38 @@ mod tests {
         });
         let ctx = data.apply_mark(data.root_syntax_context(), expn, Transparency::Opaque);
         assert_ne!(ctx, data.root_syntax_context());
+    }
+
+    #[test]
+    fn apply_mark_reuses_equivalent_contexts() {
+        let data = HygieneData::new();
+        let expn = data.fresh_expn(ExpnData {
+            parent: data.root_expn(),
+            call_site: yelang_lexer::Span::default(),
+            def_site: yelang_lexer::Span::default(),
+            kind: ExpnKind::Macro,
+            desc: "test".to_string(),
+        });
+        let root = data.root_syntax_context();
+        let ctx1 = data.apply_mark(root, expn, Transparency::Opaque);
+        let ctx2 = data.apply_mark(root, expn, Transparency::Opaque);
+        assert_eq!(ctx1, ctx2, "identical marks should be deduplicated");
+    }
+
+    #[test]
+    fn apply_mark_distinct_for_different_transparency() {
+        let data = HygieneData::new();
+        let expn = data.fresh_expn(ExpnData {
+            parent: data.root_expn(),
+            call_site: yelang_lexer::Span::default(),
+            def_site: yelang_lexer::Span::default(),
+            kind: ExpnKind::Macro,
+            desc: "test".to_string(),
+        });
+        let root = data.root_syntax_context();
+        let opaque = data.apply_mark(root, expn, Transparency::Opaque);
+        let transparent = data.apply_mark(root, expn, Transparency::Transparent);
+        assert_ne!(opaque, transparent);
     }
 
     #[test]

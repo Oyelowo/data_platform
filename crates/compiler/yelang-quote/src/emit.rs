@@ -1,6 +1,6 @@
 //! Code generation for the `quote!` macro.
 
-use proc_macro::{Delimiter, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 
 use crate::parse::{Node, RepKind, Template};
 
@@ -350,9 +350,9 @@ fn error_stream(message: &str) -> TokenStream {
         .collect();
 
     let group: TokenStream = [
-        TokenTree::Ident(proc_macro::Ident::new("compile_error", Span::call_site())),
+        TokenTree::Ident(Ident::new("compile_error", Span::call_site())),
         TokenTree::Punct(Punct::new('!', Spacing::Alone)),
-        TokenTree::Group(proc_macro::Group::new(Delimiter::Parenthesis, body)),
+        TokenTree::Group(Group::new(Delimiter::Parenthesis, body)),
         TokenTree::Punct(Punct::new(';', Spacing::Alone)),
     ]
     .into_iter()

@@ -50,7 +50,7 @@ impl MacroDefId {
 }
 
 /// Controls how identifiers in a given hygiene context resolve.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Transparency {
     /// Fully hygienic: resolves only in the macro definition scope.
     #[default]

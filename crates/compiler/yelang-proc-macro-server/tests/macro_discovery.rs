@@ -334,6 +334,7 @@ fn duplicate_name_and_kind_is_rejected_at_registry_level() {
         0,
         "/lib/a.dylib".to_string(),
         "crate_a".to_string(),
+        None,
     );
     let err = {
         let registry = runtime.resolver_mut().registry_mut();
@@ -404,6 +405,7 @@ fn same_name_in_different_kind_namespaces_coexists() {
         0,
         "/lib/a.dylib".to_string(),
         "crate_a".to_string(),
+        None,
     );
     registry.register(
         "make_answer".to_string(),
@@ -411,6 +413,7 @@ fn same_name_in_different_kind_namespaces_coexists() {
         0,
         "/lib/b.dylib".to_string(),
         "crate_b".to_string(),
+        None,
     );
 
     let resolver = runtime.resolver();

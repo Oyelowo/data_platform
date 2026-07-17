@@ -15,7 +15,7 @@
 //! - A simple path parser supports both unqualified (`concat!`) and qualified
 //!   (`std::concat!`) invocations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use yelang_interner::Interner;
@@ -24,6 +24,7 @@ use yelang_macro_core::token_tree::{
     TokenTree,
 };
 
+use crate::cfg::{CfgOptions, parse_cfg_predicate};
 use crate::error::ExpandError;
 use yelang_ast::expr::convert::from_lexer_tokens;
 use yelang_lexer::Span as LexerSpan;
@@ -152,53 +153,6 @@ impl EnvProvider for MemoryEnvProvider {
     }
 }
 
-/// A predicate accepted by `cfg!`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CfgPredicate {
-    Name(String),
-    KeyValue(String, String),
-    All(Vec<CfgPredicate>),
-    Any(Vec<CfgPredicate>),
-    Not(Box<CfgPredicate>),
-}
-
-/// Active `cfg` options used to evaluate `cfg!` predicates.
-#[derive(Debug, Clone, Default)]
-pub struct CfgOptions {
-    pub names: HashSet<String>,
-    pub key_values: HashMap<String, String>,
-}
-
-impl CfgOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.names.insert(name.into());
-        self
-    }
-
-    pub fn with_key_value(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.key_values.insert(key.into(), value.into());
-        self
-    }
-
-    pub fn check(&self, predicate: &CfgPredicate) -> bool {
-        match predicate {
-            CfgPredicate::Name(name) => self.names.contains(name),
-            CfgPredicate::KeyValue(key, value) => self
-                .key_values
-                .get(key)
-                .map(|v| v == value)
-                .unwrap_or(false),
-            CfgPredicate::All(preds) => preds.iter().all(|p| self.check(p)),
-            CfgPredicate::Any(preds) => preds.iter().any(|p| self.check(p)),
-            CfgPredicate::Not(pred) => !self.check(pred),
-        }
-    }
-}
-
 /// Context required to execute eager builtins.
 #[derive(Debug)]
 pub struct EagerContext<'a> {
@@ -254,6 +208,7 @@ pub enum EagerBuiltin {
     OptionEnv,
     CompileError,
     Cfg,
+    Paste,
 }
 
 impl EagerBuiltin {
@@ -270,6 +225,7 @@ impl EagerBuiltin {
             "option_env" => Some(Self::OptionEnv),
             "compile_error" => Some(Self::CompileError),
             "cfg" => Some(Self::Cfg),
+            "paste" => Some(Self::Paste),
             _ => None,
         }
     }
@@ -405,6 +361,7 @@ pub(crate) fn expand_eager_builtin(
         EagerBuiltin::OptionEnv => expand_option_env(args, ctx, span),
         EagerBuiltin::CompileError => expand_compile_error(args, ctx, span),
         EagerBuiltin::Cfg => expand_cfg(args, ctx, span),
+        EagerBuiltin::Paste => expand_paste(args, ctx, span),
     }
 }
 
@@ -877,121 +834,18 @@ fn expand_cfg(
     )]))
 }
 
-fn parse_cfg_predicate(
+// -----------------------------------------------------------------------------
+// paste!
+// -----------------------------------------------------------------------------
+
+fn expand_paste(
     args: &TokenStream,
     ctx: &EagerContext<'_>,
     span: LexerSpan,
-) -> Result<CfgPredicate, ExpandError> {
-    let mut iter = args.iter().peekable();
-    parse_cfg_predicate_from_iter(&mut iter, ctx, span)
-}
-
-fn parse_cfg_predicate_from_iter<'a>(
-    iter: &mut std::iter::Peekable<impl Iterator<Item = &'a TokenTree>>,
-    ctx: &EagerContext<'_>,
-    span: LexerSpan,
-) -> Result<CfgPredicate, ExpandError> {
-    let tree = iter.next().ok_or_else(|| {
-        ExpandError::malformed_macro_args("cfg! predicate expected".to_string(), span)
-    })?;
-
-    match tree {
-        TokenTree::Ident(ident) => {
-            let name = ctx.interner.resolve(&ident.sym);
-            match name {
-                "all" | "any" => {
-                    let open = iter.next().ok_or_else(|| {
-                        ExpandError::malformed_macro_args(format!("{}! expected `(`", name), span)
-                    })?;
-                    let TokenTree::Group(group) = open else {
-                        return Err(ExpandError::malformed_macro_args(
-                            format!("{}! expected `(`", name),
-                            span,
-                        ));
-                    };
-                    if group.delimiter != Delimiter::Parenthesis {
-                        return Err(ExpandError::malformed_macro_args(
-                            format!("{}! expected `(`", name),
-                            span,
-                        ));
-                    }
-                    let mut inner = group.stream.iter().peekable();
-                    let mut preds = Vec::new();
-                    while inner.peek().is_some() {
-                        preds.push(parse_cfg_predicate_from_iter(&mut inner, ctx, span)?);
-                        if let Some(comma) = inner.peek() {
-                            if is_punct(comma, ',') {
-                                inner.next();
-                            } else {
-                                return Err(ExpandError::malformed_macro_args(
-                                    "expected `,` in cfg! predicate".to_string(),
-                                    span,
-                                ));
-                            }
-                        }
-                    }
-                    if name == "all" {
-                        Ok(CfgPredicate::All(preds))
-                    } else {
-                        Ok(CfgPredicate::Any(preds))
-                    }
-                }
-                "not" => {
-                    let open = iter.next().ok_or_else(|| {
-                        ExpandError::malformed_macro_args("not! expected `(`".to_string(), span)
-                    })?;
-                    let TokenTree::Group(group) = open else {
-                        return Err(ExpandError::malformed_macro_args(
-                            "not! expected `(`".to_string(),
-                            span,
-                        ));
-                    };
-                    if group.delimiter != Delimiter::Parenthesis {
-                        return Err(ExpandError::malformed_macro_args(
-                            "not! expected `(`".to_string(),
-                            span,
-                        ));
-                    }
-                    let mut inner = group.stream.iter().peekable();
-                    let pred = parse_cfg_predicate_from_iter(&mut inner, ctx, span)?;
-                    Ok(CfgPredicate::Not(Box::new(pred)))
-                }
-                _ => {
-                    // `name` or `name = "value"`
-                    if let Some(eq) = iter.peek()
-                        && is_punct(eq, '=')
-                    {
-                        iter.next();
-                        let value_tree = iter.next().ok_or_else(|| {
-                            ExpandError::malformed_macro_args(
-                                "cfg! expected value after `=`".to_string(),
-                                span,
-                            )
-                        })?;
-                        let TokenTree::Literal(lit) = value_tree else {
-                            return Err(ExpandError::malformed_macro_args(
-                                "cfg! value must be a string literal".to_string(),
-                                span,
-                            ));
-                        };
-                        let LitKind::Str { value, .. } = &lit.kind else {
-                            return Err(ExpandError::malformed_macro_args(
-                                "cfg! value must be a string literal".to_string(),
-                                span,
-                            ));
-                        };
-                        let value = ctx.interner.resolve(value).to_string();
-                        return Ok(CfgPredicate::KeyValue(name.to_string(), value));
-                    }
-                    Ok(CfgPredicate::Name(name.to_string()))
-                }
-            }
-        }
-        _ => Err(ExpandError::malformed_macro_args(
-            "cfg! predicate must start with an identifier".to_string(),
-            span,
-        )),
-    }
+) -> Result<TokenStream, ExpandError> {
+    let token_span = TokenSpan::from(span);
+    let ident = crate::paste::expand_paste(args, token_span, ctx.interner)?;
+    Ok(TokenStream::from_vec(vec![TokenTree::Ident(ident)]))
 }
 
 // -----------------------------------------------------------------------------

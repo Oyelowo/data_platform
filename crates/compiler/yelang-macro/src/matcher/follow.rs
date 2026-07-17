@@ -403,6 +403,30 @@ fn fragment_follow_set(fragment: FragmentKind) -> Option<Vec<SimpleToken>> {
             // `block` nonterminals are also valid follows; we approximate by
             // allowing any group opener (brace already included above).
         ]),
+        // `vis` may be followed by any token that can start an item.
+        FragmentKind::Vis => None,
+        // `meta` appears inside attribute argument lists.
+        FragmentKind::Meta => Some(vec![
+            SimpleToken::Punct(','),
+            SimpleToken::GroupClose(Delimiter::Bracket),
+        ]),
+        // `lifetime` appears in generic parameter lists and where clauses.
+        FragmentKind::Lifetime => Some(vec![
+            SimpleToken::Punct(','),
+            SimpleToken::Punct('>'),
+            SimpleToken::Punct(':'),
+            SimpleToken::Punct('='),
+            SimpleToken::Punct('|'),
+            SimpleToken::Punct(';'),
+        ]),
+        // `pat_param` shares the follow set of `pat` because it is the same
+        // nonterminal with or-patterns factored out.
+        FragmentKind::PatParam => Some(vec![
+            SimpleToken::Punct('='),
+            SimpleToken::Punct(','),
+            SimpleToken::Ident("if".to_string()),
+            SimpleToken::Ident("in".to_string()),
+        ]),
         // block, ident, tt, item, literal have no restrictions.
         _ => None,
     }
@@ -493,6 +517,80 @@ mod tests {
             MatcherOp::Metavar {
                 name: interner.get_or_intern("p"),
                 fragment: FragmentKind::Pat,
+            },
+            MatcherOp::Terminal(punct(',')),
+        ]);
+        assert!(validate_rule(&rule, &interner).is_ok());
+    }
+
+    #[test]
+    fn meta_follow_allows_comma_and_closing_bracket() {
+        let interner = Interner::new();
+        let rule = rule_with_matcher(vec![
+            MatcherOp::Metavar {
+                name: interner.get_or_intern("m"),
+                fragment: FragmentKind::Meta,
+            },
+            MatcherOp::Terminal(punct(',')),
+        ]);
+        assert!(validate_rule(&rule, &interner).is_ok());
+    }
+
+    #[test]
+    fn meta_follow_rejects_ident() {
+        let interner = Interner::new();
+        let rule = rule_with_matcher(vec![
+            MatcherOp::Metavar {
+                name: interner.get_or_intern("m"),
+                fragment: FragmentKind::Meta,
+            },
+            MatcherOp::Terminal(TokenTree::Ident(yelang_macro_core::token_tree::Ident::new(
+                interner.get_or_intern("foo"),
+                Span::default(),
+            ))),
+        ]);
+        assert!(matches!(
+            validate_rule(&rule, &interner),
+            Err(MatcherError::FollowSetViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn lifetime_follow_allows_comma_and_gt() {
+        let interner = Interner::new();
+        let rule = rule_with_matcher(vec![
+            MatcherOp::Metavar {
+                name: interner.get_or_intern("l"),
+                fragment: FragmentKind::Lifetime,
+            },
+            MatcherOp::Terminal(punct('>')),
+        ]);
+        assert!(validate_rule(&rule, &interner).is_ok());
+    }
+
+    #[test]
+    fn pat_param_follow_excludes_pipe() {
+        let interner = Interner::new();
+        let rule = rule_with_matcher(vec![
+            MatcherOp::Metavar {
+                name: interner.get_or_intern("p"),
+                fragment: FragmentKind::PatParam,
+            },
+            MatcherOp::Terminal(punct('|')),
+        ]);
+        assert!(matches!(
+            validate_rule(&rule, &interner),
+            Err(MatcherError::FollowSetViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn pat_param_follow_allows_comma() {
+        let interner = Interner::new();
+        let rule = rule_with_matcher(vec![
+            MatcherOp::Metavar {
+                name: interner.get_or_intern("p"),
+                fragment: FragmentKind::PatParam,
             },
             MatcherOp::Terminal(punct(',')),
         ]);

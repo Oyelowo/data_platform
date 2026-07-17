@@ -38,14 +38,10 @@ pub fn from_ty(stream: &TokenStream, interner: &Interner) -> Result<FragmentFiel
     let ty: Type = parse_fragment(stream, interner)?;
     let mut fields = FragmentFields::default();
     if let TypeKind::Named(path) = &ty.kind
-        && !path.segments.is_empty()
+        && let Some(last) = path.segments.last()
     {
-        let last_idx = path.segments.len() - 1;
-        let base_segments = &path.segments[..last_idx + 1];
-        let last = &path.segments[last_idx];
-
         let mut name_rendered = String::new();
-        for (i, seg) in base_segments.iter().enumerate() {
+        for (i, seg) in path.segments.iter().enumerate() {
             if i > 0 {
                 name_rendered.push_str("::");
             }
@@ -179,5 +175,23 @@ mod tests {
             Some("i32".to_string())
         );
         assert!(fields.type_args.is_none());
+    }
+
+    #[test]
+    fn from_ty_extracts_qualified_generic_path() {
+        let interner = Interner::new();
+        let mut stream =
+            yelang_ast::TokenKind::tokenize("std::vec::Vec<i32>", &interner.clone()).unwrap();
+        let tokens: Vec<_> = std::iter::from_fn(|| stream.advance().cloned()).collect();
+        let tt_stream = yelang_ast::expr::convert::from_lexer_tokens(&tokens, &interner);
+        let fields = from_ty(&tt_stream, &interner).unwrap();
+        assert_eq!(
+            fields.type_name.as_ref().map(|s| s.render(&interner)),
+            Some("std::vec::Vec".to_string())
+        );
+        assert_eq!(
+            fields.type_args.as_ref().map(|s| s.render(&interner)),
+            Some("<i32>".to_string())
+        );
     }
 }

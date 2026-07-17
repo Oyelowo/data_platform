@@ -1,6 +1,6 @@
 //! Parsing for the `quote!` template syntax.
 
-use proc_macro::{Delimiter, Punct, TokenStream, TokenTree};
+use proc_macro2::{Delimiter, Punct, TokenStream, TokenTree};
 
 /// A parsed `quote!` or `quote_spanned!` template.
 pub struct Template {
@@ -100,6 +100,13 @@ fn parse_node(cursor: &mut Cursor) -> Result<Node, String> {
     match cursor.peek() {
         Some(TokenTree::Punct(p)) if p.as_char() == '#' => {
             let hash = cursor.next().unwrap();
+            // `##` escapes to a single literal `#` token.
+            if let Some(TokenTree::Punct(next)) = cursor.peek()
+                && next.as_char() == '#'
+            {
+                cursor.next();
+                return Ok(Node::Literal(hash));
+            }
             parse_after_hash(cursor, hash)
         }
         Some(TokenTree::Group(_)) => {
@@ -252,5 +259,119 @@ impl Cursor {
         let tt = self.tokens.get(self.pos).cloned()?;
         self.pos += 1;
         Some(tt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proc_macro2::{Group, Ident, Spacing, Span};
+
+    #[test]
+    fn parse_double_hash_emits_literal_hash() {
+        let mut input = TokenStream::new();
+        input.extend([
+            TokenTree::Punct(Punct::new('#', Spacing::Alone)),
+            TokenTree::Punct(Punct::new('#', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("flag", Span::call_site())),
+        ]);
+
+        let template = parse(input).expect("parse should succeed");
+        assert_eq!(template.nodes.len(), 2);
+        assert!(
+            matches!(&template.nodes[0], Node::Literal(TokenTree::Punct(p)) if p.as_char() == '#')
+        );
+        assert!(matches!(
+            &template.nodes[1],
+            Node::Literal(TokenTree::Ident(_))
+        ));
+    }
+
+    #[test]
+    fn parse_ident_interpolation() {
+        let mut input = TokenStream::new();
+        input.extend([
+            TokenTree::Punct(Punct::new('#', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("name", Span::call_site())),
+        ]);
+
+        let template = parse(input).expect("parse should succeed");
+        assert_eq!(template.nodes.len(), 1);
+        assert!(matches!(&template.nodes[0], Node::Interpolate { .. }));
+    }
+
+    #[test]
+    fn parse_empty_template() {
+        let template = parse(TokenStream::new()).expect("empty template should parse");
+        assert!(template.nodes.is_empty());
+    }
+
+    #[test]
+    fn parse_group_recursively() {
+        let inner = {
+            let mut g = TokenStream::new();
+            g.extend([
+                TokenTree::Ident(Ident::new("a", Span::call_site())),
+                TokenTree::Punct(Punct::new('+', Spacing::Alone)),
+                TokenTree::Ident(Ident::new("b", Span::call_site())),
+            ]);
+            let group = Group::new(Delimiter::Parenthesis, g);
+            TokenTree::Group(group)
+        };
+
+        let template = parse(std::iter::once(inner).collect()).expect("parse should succeed");
+        assert_eq!(template.nodes.len(), 1);
+        assert!(matches!(
+            &template.nodes[0],
+            Node::Group {
+                delimiter: Delimiter::Parenthesis,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_repetition_with_separator() {
+        let mut input = TokenStream::new();
+        // #( #items ),*
+        input.extend([
+            TokenTree::Punct(Punct::new('#', Spacing::Alone)),
+            TokenTree::Group(Group::new(Delimiter::Parenthesis, {
+                let mut b = TokenStream::new();
+                b.extend([
+                    TokenTree::Punct(Punct::new('#', Spacing::Alone)),
+                    TokenTree::Ident(Ident::new("items", Span::call_site())),
+                ]);
+                b
+            })),
+            TokenTree::Punct(Punct::new(',', Spacing::Alone)),
+            TokenTree::Punct(Punct::new('*', Spacing::Alone)),
+        ]);
+
+        let template = parse(input).expect("parse should succeed");
+        assert_eq!(template.nodes.len(), 1);
+        assert!(matches!(
+            &template.nodes[0],
+            Node::Repetition {
+                separator: Some(_),
+                kind: RepKind::Star,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_spanned_basic() {
+        let mut input = TokenStream::new();
+        input.extend([
+            TokenTree::Ident(Ident::new("span", Span::call_site())),
+            TokenTree::Punct(Punct::new('=', Spacing::Joint)),
+            TokenTree::Punct(Punct::new('>', Spacing::Alone)),
+            TokenTree::Ident(Ident::new("foo", Span::call_site())),
+        ]);
+
+        let (span_expr, template) = parse_spanned(input).expect("parse_spanned should succeed");
+        assert!(!span_expr.into_iter().collect::<Vec<_>>().is_empty());
+        assert_eq!(template.nodes.len(), 1);
     }
 }

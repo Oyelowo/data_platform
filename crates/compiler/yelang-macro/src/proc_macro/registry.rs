@@ -20,6 +20,9 @@ pub struct ProcMacroDef {
     pub library_path: String,
     /// Name of the proc-macro crate that exports this macro.
     pub crate_name: String,
+    /// Optional span pointing to the macro definition in the proc-macro crate.
+    /// When known, this is sent to the proc-macro API as `Span::def_site()`.
+    pub def_site_span: Option<yelang_lexer::Span>,
 }
 
 /// Registry of all procedural macros available to the current crate.
@@ -47,6 +50,7 @@ impl ProcMacroRegistry {
         macro_index: u32,
         library_path: String,
         crate_name: String,
+        def_site_span: Option<yelang_lexer::Span>,
     ) -> ProcMacroId {
         let canonical_path = std::fs::canonicalize(&library_path)
             .map(|p| p.to_string_lossy().into_owned())
@@ -59,6 +63,7 @@ impl ProcMacroRegistry {
             macro_index,
             library_path: canonical_path,
             crate_name,
+            def_site_span,
         });
         id
     }
@@ -107,6 +112,7 @@ mod tests {
             0,
             "/lib/a.dylib".to_string(),
             "crate_a".to_string(),
+            None,
         );
         registry.register(
             "trace".to_string(),
@@ -114,6 +120,7 @@ mod tests {
             1,
             "/lib/a.dylib".to_string(),
             "crate_a".to_string(),
+            None,
         );
         registry.register(
             "make_answer".to_string(),
@@ -121,6 +128,7 @@ mod tests {
             0,
             "/lib/b.dylib".to_string(),
             "crate_b".to_string(),
+            None,
         );
         registry
     }
@@ -160,6 +168,7 @@ mod tests {
             3,
             "/lib/c.dylib".to_string(),
             "crate_c".to_string(),
+            None,
         );
         registry.register(
             "a_first".to_string(),
@@ -167,6 +176,7 @@ mod tests {
             0,
             "/lib/c.dylib".to_string(),
             "crate_c".to_string(),
+            None,
         );
         let expected = registry.expected_descriptors("/lib/c.dylib");
         assert_eq!(

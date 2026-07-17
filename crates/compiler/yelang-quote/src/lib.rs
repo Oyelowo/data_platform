@@ -28,11 +28,10 @@ mod parse;
 /// * Repetitions may be nested.
 ///
 /// Note: `#` is reserved for interpolation. To emit a literal `#` character,
-/// construct a `Punct` and interpolate it, e.g. `quote!(#hash)` where
-/// `hash` is `Punct::new('#', Spacing::Alone, span)`.
+/// write `##`, e.g. `quote!(##flag)` renders as `#flag`.
 #[proc_macro]
 pub fn quote(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    emit::expand(input)
+    emit::expand(input.into()).into()
 }
 
 /// Same as `quote!`, but applies the given span to every token that originates
@@ -47,5 +46,5 @@ pub fn quote(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// ```
 #[proc_macro]
 pub fn quote_spanned(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    emit::expand_spanned(input)
+    emit::expand_spanned(input.into()).into()
 }

@@ -47,19 +47,11 @@ fn convert_dollar_crate(
     match second.kind() {
         AstTokenKind::Crate => {
             let sym = interner.get_or_intern("crate");
-            Some(TokenTree::Ident(Ident::new_crate(
-                sym,
-                span,
-                Default::default(),
-            )))
+            Some(TokenTree::Ident(Ident::new_crate_unresolved(sym, span)))
         }
         AstTokenKind::Pkg => {
             let sym = interner.get_or_intern("pkg");
-            Some(TokenTree::Ident(Ident::new_crate(
-                sym,
-                span,
-                Default::default(),
-            )))
+            Some(TokenTree::Ident(Ident::new_crate_unresolved(sym, span)))
         }
         AstTokenKind::Ident(ident) if interner.resolve(&ident.symbol) == "package" => {
             let sym = interner.get_or_intern("package");
@@ -101,18 +93,18 @@ fn convert_token(
             if let Some(trees) = convert_punct(other, span) {
                 Some((trees, 1))
             } else {
-                convert_keyword(other, span, interner).map(|tree| (vec![tree], 1))
+                convert_keyword(other, span, interner).map(|trees| (trees, 1))
             }
         }
     }
 }
 
-/// Convert a keyword token into a macro `Ident` token tree.
+/// Convert a keyword token into one or more macro token trees.
 ///
 /// Keywords are not represented by a dedicated token-tree variant, so we store
 /// them as identifiers.  This lets macro bodies such as `let` statements round
 /// trip through macro expansion.
-fn convert_keyword(kind: &AstTokenKind, span: Span, interner: &Interner) -> Option<TokenTree> {
+fn convert_keyword(kind: &AstTokenKind, span: Span, interner: &Interner) -> Option<Vec<TokenTree>> {
     let text = match kind {
         AstTokenKind::Select => "select",
         AstTokenKind::From_ => "from",
@@ -189,14 +181,21 @@ fn convert_keyword(kind: &AstTokenKind, span: Span, interner: &Interner) -> Opti
         AstTokenKind::Null => "null",
         AstTokenKind::Underscore => "_",
         AstTokenKind::Lifetime(sym) => {
-            return Some(TokenTree::Ident(Ident::new(*sym, span)));
+            // A lifetime is rendered as `'name`.  Preserve both tokens so that
+            // macro capture and transcription round-trip correctly.
+            let quote_span = span;
+            let name_span = span;
+            return Some(vec![
+                TokenTree::Punct(Punct::new('\'', Spacing::Joint, quote_span)),
+                TokenTree::Ident(Ident::new(*sym, name_span)),
+            ]);
         }
         _ => return None,
     };
-    Some(TokenTree::Ident(Ident::new(
+    Some(vec![TokenTree::Ident(Ident::new(
         interner.get_or_intern(text),
         span,
-    )))
+    ))])
 }
 
 fn read_delimited(

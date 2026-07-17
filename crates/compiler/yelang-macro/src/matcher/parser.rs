@@ -222,8 +222,21 @@ fn parse_transcriber_seq(
                     ops.push(TranscriberOp::DollarDollar);
                 }
                 TokenTree::Ident(ident) => {
-                    // $name.field is a fragment field access, not a substitution.
-                    if let Some(field) = parse_fragment_field(cursor, interner)? {
+                    let name = interner.resolve(&ident.sym);
+                    if name == "crate" {
+                        ops.push(TranscriberOp::Terminal(TokenTree::Ident(
+                            yelang_macro_core::token_tree::Ident::new_crate_unresolved(
+                                ident.sym, ident.span,
+                            ),
+                        )));
+                    } else if name == "package" {
+                        ops.push(TranscriberOp::Terminal(TokenTree::Ident(
+                            yelang_macro_core::token_tree::Ident::new_package(
+                                ident.sym, ident.span,
+                            ),
+                        )));
+                    } else if let Some(field) = parse_fragment_field(cursor, interner)? {
+                        // $name.field is a fragment field access, not a substitution.
                         ops.push(TranscriberOp::FragmentField {
                             name: ident.sym,
                             field,
@@ -623,5 +636,44 @@ mod tests {
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].kind, MacroKind::FunctionLike);
         assert_eq!(rules[1].kind, MacroKind::Attribute);
+    }
+
+    #[test]
+    fn parse_transcriber_dollar_crate_becomes_terminal() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body("($x:expr) => { $crate::foo }", &mut interner);
+        let rules = parse_rules(&body, &interner).unwrap();
+        let transcriber = &rules[0].transcriber;
+        // $crate :: foo => terminal, punct, punct, terminal.
+        assert_eq!(transcriber.len(), 4);
+        assert!(
+            matches!(
+                &transcriber[0],
+                TranscriberOp::Terminal(TokenTree::Ident(ident))
+                if ident.origin == yelang_macro_core::token_tree::IdentOrigin::Crate
+                    && ident.crate_ref.is_none()
+            ),
+            "expected unresolved $crate terminal, got {:?}",
+            transcriber[0]
+        );
+    }
+
+    #[test]
+    fn parse_transcriber_dollar_package_becomes_terminal() {
+        let mut interner = Interner::new();
+        let body = tokenize_macro_body("($x:expr) => { $package::foo }", &mut interner);
+        let rules = parse_rules(&body, &interner).unwrap();
+        let transcriber = &rules[0].transcriber;
+        // $package :: foo => terminal, punct, punct, terminal.
+        assert_eq!(transcriber.len(), 4);
+        assert!(
+            matches!(
+                &transcriber[0],
+                TranscriberOp::Terminal(TokenTree::Ident(ident))
+                if ident.origin == yelang_macro_core::token_tree::IdentOrigin::Package
+            ),
+            "expected $package terminal, got {:?}",
+            transcriber[0]
+        );
     }
 }

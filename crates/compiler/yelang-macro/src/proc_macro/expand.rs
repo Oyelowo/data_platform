@@ -36,6 +36,7 @@ pub fn wire_to_core(
 }
 
 /// Expand a procedural macro invocation through the server.
+#[allow(clippy::too_many_arguments)]
 pub fn expand_proc_macro(
     client: &mut super::ProcMacroClient,
     macro_def: &ResolvedProcMacro,
@@ -113,7 +114,7 @@ fn span_to_wire(span: yelang_lexer::Span) -> WireSpan {
     }
 }
 
-/// Convert server diagnostics into expansion errors.
+/// Convert server diagnostics into `ExpandError`s, preserving their severity.
 pub fn wire_diagnostics_to_errors(
     diagnostics: &[WireDiagnostic],
     macro_name: &str,
@@ -124,16 +125,22 @@ pub fn wire_diagnostics_to_errors(
         .iter()
         .map(|diag| {
             let level = match diag.level {
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Error => "error",
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Warning => "warning",
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Note => "note",
-                yelang_proc_macro_bridge::protocol::token::WireLevel::Help => "help",
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Error => {
+                    crate::error::DiagnosticLevel::Error
+                }
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Warning => {
+                    crate::error::DiagnosticLevel::Warning
+                }
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Note => {
+                    crate::error::DiagnosticLevel::Note
+                }
+                yelang_proc_macro_bridge::protocol::token::WireLevel::Help => {
+                    crate::error::DiagnosticLevel::Help
+                }
             };
-            ExpandError::malformed_macro_args(
-                format!(
-                    "proc macro `{}` emitted a diagnostic [{}]: {}",
-                    macro_name, level, diag.message
-                ),
+            ExpandError::proc_macro_diagnostic(
+                level,
+                format!("{}: {}", macro_name, diag.message),
                 span,
             )
             .with_backtrace(backtrace.clone())

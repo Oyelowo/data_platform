@@ -121,13 +121,21 @@ fn server_diagnostic_is_reported_as_expansion_error() {
 
     let mut expander = MacroExpander::new(&interner).with_proc_macro_runtime(runtime);
     let result = expander.expand(&program);
+    let diag = result
+        .errors
+        .iter()
+        .find(|e| e.to_string().contains("intentional fixture warning"))
+        .expect("expected warning diagnostic");
     assert!(
-        result
-            .errors
-            .iter()
-            .any(|e| e.to_string().contains("intentional fixture warning")),
-        "expected warning diagnostic, got {:?}",
-        result.errors
+        matches!(
+            diag,
+            yelang_macro::ExpandError::ProcMacroDiagnostic {
+                level: yelang_macro::DiagnosticLevel::Warning,
+                ..
+            }
+        ),
+        "expected warning severity, got {:?}",
+        diag
     );
 }
 
@@ -164,6 +172,7 @@ fn missing_library_path_is_reported_as_expansion_error() {
         0,
         "/nonexistent/lib.dylib".to_string(),
         "missing_crate".to_string(),
+        None,
     );
     let runtime = ProcMacroRuntime::new(client, ProcMacroResolver::new(registry));
 

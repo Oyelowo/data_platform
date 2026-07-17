@@ -243,7 +243,7 @@ fn trailing_comma_in_plus() {
 #[test]
 fn trailing_semicolon_in_star() {
     let src = r#"
-        macro stmts { ($($s:stmt);*) => ( { $($s);* } ); }
+        macro stmts { ($($s:stmt);*) => ( { $($s);*; } ); }
         fn main() { let a = stmts!(let x = 1; let y = 2;); }
     "#;
     let (program, _interner, errors) = parse_and_expand(src);

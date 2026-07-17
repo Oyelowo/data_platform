@@ -62,6 +62,19 @@ impl Ident {
         }
     }
 
+    /// Create a `$crate` token whose defining crate is not yet known. The crate
+    /// reference is filled in during macro expansion by `resolve_crate_origin`.
+    pub fn new_crate_unresolved(sym: yelang_interner::Symbol, span: Span) -> Self {
+        Self {
+            id: TokenId::fresh(),
+            sym,
+            span,
+            is_raw: false,
+            origin: IdentOrigin::Crate,
+            crate_ref: None,
+        }
+    }
+
     pub fn new_package(sym: yelang_interner::Symbol, span: Span) -> Self {
         Self {
             id: TokenId::fresh(),
