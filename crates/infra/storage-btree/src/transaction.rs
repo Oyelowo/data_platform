@@ -3,7 +3,7 @@
 use bytes::Bytes;
 
 use crate::cursor::BtreeCursor;
-use crate::engine::BtreeEngineInner;
+use crate::engine::{BtreeEngineInner, SnapshotGuard};
 use crate::error::{Error, Result};
 use crate::page::PageId;
 
@@ -19,6 +19,8 @@ pub struct BtreeTransaction {
     pub(crate) read_only: bool,
     pub(crate) finished: bool,
     pub(crate) snapshot_root: PageId,
+    /// Keeps the snapshot root pinned for the lifetime of the transaction.
+    pub(crate) _guard: SnapshotGuard,
     pub(crate) ops: Vec<WriteOp>,
 }
 
@@ -27,12 +29,14 @@ impl BtreeTransaction {
         inner: std::sync::Arc<BtreeEngineInner>,
         read_only: bool,
         snapshot_root: PageId,
+        guard: SnapshotGuard,
     ) -> Self {
         Self {
             inner,
             read_only,
             finished: false,
             snapshot_root,
+            _guard: guard,
             ops: Vec::new(),
         }
     }
@@ -94,9 +98,11 @@ impl storage_traits::Transaction for BtreeTransaction {
         start: Option<&[u8]>,
         end: Option<&[u8]>,
     ) -> Result<impl storage_traits::Cursor<Error = Self::Error>> {
+        let guard = SnapshotGuard::new(std::sync::Arc::clone(&self.inner), self.snapshot_root);
         BtreeCursor::new(
             std::sync::Arc::clone(&self.inner),
             self.snapshot_root,
+            guard,
             start.map(Bytes::copy_from_slice),
             end.map(Bytes::copy_from_slice),
         )

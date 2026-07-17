@@ -125,6 +125,22 @@ impl Wal {
         Ok(removed)
     }
 
+    /// Truncate all WAL segments that are fully before the current active
+    /// segment.
+    ///
+    /// The active (last) segment is preserved because the group-commit worker
+    /// keeps it open for appends. Truncating it would cause subsequent writes to
+    /// go to an unlinked inode and be lost on the next open. Callers that need
+    /// to reclaim the active segment must first rotate or close the WAL.
+    pub fn truncate_completed(&self) -> Result<usize> {
+        let segments = list_segments(&self.dir)?;
+        if segments.len() <= 1 {
+            return Ok(0);
+        }
+        let active_first = segments[segments.len() - 1];
+        self.truncate_before(active_first)
+    }
+
     /// Gracefully close the WAL, waiting for the commit worker to finish.
     ///
     /// Idempotent: safe to call from a shared reference and safe to call more

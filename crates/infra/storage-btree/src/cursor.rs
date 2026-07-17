@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use crate::engine::BtreeEngineInner;
+use crate::engine::{BtreeEngineInner, SnapshotGuard};
 use crate::error::{Error, Result};
 use crate::node::{Node, NodeKind, Value};
 use crate::page::{NULL_PAGE_ID, PageId};
@@ -18,6 +18,8 @@ use crate::page::{NULL_PAGE_ID, PageId};
 pub struct BtreeCursor {
     inner: Arc<BtreeEngineInner>,
     root: PageId,
+    /// Keeps the snapshot root pinned for the lifetime of the cursor.
+    _guard: SnapshotGuard,
     end: Option<Bytes>,
     /// Path of internal nodes from the root down to `current_leaf`. Each entry
     /// is `(node_page_id, child_index_in_that_node)`.
@@ -32,12 +34,14 @@ impl BtreeCursor {
     pub(crate) fn new(
         inner: Arc<BtreeEngineInner>,
         root: PageId,
+        guard: SnapshotGuard,
         start: Option<Bytes>,
         end: Option<Bytes>,
     ) -> Result<Self> {
         let mut cursor = Self {
             inner,
             root,
+            _guard: guard,
             end,
             stack: Vec::new(),
             current_leaf: NULL_PAGE_ID,

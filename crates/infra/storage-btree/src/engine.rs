@@ -1,5 +1,6 @@
 //! B+ tree engine implementation.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +16,29 @@ use crate::recovery::{self, Meta};
 use crate::transaction::{BtreeTransaction, WriteOp};
 use crate::tree::Tree;
 use crate::wal_record::WalRecord;
+
+/// RAII handle that pins a snapshot root so GC cannot reclaim pages reachable
+/// from it.
+///
+/// On creation the root's reference count in `BtreeEngineInner::active_roots` is
+/// incremented; on drop it is decremented and removed when it reaches zero.
+pub(crate) struct SnapshotGuard {
+    inner: Arc<BtreeEngineInner>,
+    root: crate::page::PageId,
+}
+
+impl SnapshotGuard {
+    pub(crate) fn new(inner: Arc<BtreeEngineInner>, root: crate::page::PageId) -> Self {
+        inner.pin_root(root);
+        Self { inner, root }
+    }
+}
+
+impl Drop for SnapshotGuard {
+    fn drop(&mut self) {
+        self.inner.unpin_root(self.root);
+    }
+}
 
 /// Persistent B+ tree key-value engine.
 pub struct BtreeEngine {
@@ -52,6 +76,7 @@ impl BtreeEngine {
                 root: AtomicU64::new(root),
                 write_lock: Mutex::new(()),
                 wal,
+                active_roots: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -67,8 +92,17 @@ impl BtreeEngine {
     /// overflow chain integrity for all pages reachable from the current root.
     /// It is intended for tests, health checks, and after crash recovery.
     pub fn check_integrity(&self) -> Result<()> {
-        let root = self.inner.root.load(Ordering::Acquire);
+        let (root, _guard) = self.inner.pin_current_root();
         self.inner.tree.check_integrity(root)
+    }
+
+    /// Run garbage collection: reclaim page ids that are no longer reachable
+    /// from the current root or any pinned snapshot.
+    ///
+    /// This is also called automatically by `sync()` after the checkpoint. The
+    /// operation is serialized with writers via the engine's writer lock.
+    pub fn compact(&self) -> Result<()> {
+        self.inner.compact()
     }
 
     /// Flush all dirty pages and write a durable checkpoint.
@@ -93,24 +127,26 @@ impl storage_traits::Engine for BtreeEngine {
         if !opts.read_only && opts.isolation != storage_traits::IsolationLevel::ReadCommitted {
             return Err(Error::Unsupported("only ReadCommitted is supported"));
         }
-        let snapshot_root = self.inner.root.load(Ordering::Acquire);
+        let (snapshot_root, guard) = self.inner.pin_current_root();
         Ok(BtreeTransaction::new(
             Arc::clone(&self.inner),
             opts.read_only,
             snapshot_root,
+            guard,
         ))
     }
 
     fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        let root = self.inner.root.load(Ordering::Acquire);
+        let (root, _guard) = self.inner.pin_current_root();
         self.inner.tree.get(root, key)
     }
 
     fn scan(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<Self::Cursor> {
-        let root = self.inner.root.load(Ordering::Acquire);
+        let (root, guard) = self.inner.pin_current_root();
         BtreeCursor::new(
             Arc::clone(&self.inner),
             root,
+            guard,
             start.map(Bytes::copy_from_slice),
             end.map(Bytes::copy_from_slice),
         )
@@ -139,6 +175,10 @@ impl storage_traits::Engine for BtreeEngine {
             "storage_btree.retired_pages".to_string(),
             self.inner.pager.retired_count() as u64,
         );
+        metrics.insert(
+            "storage_btree.freelist_pages".to_string(),
+            self.inner.pager.freelist_count() as u64,
+        );
         metrics.insert("storage_btree.cache_memory_bytes".to_string(), memory_bytes);
 
         Ok(storage_traits::EngineStats {
@@ -164,6 +204,10 @@ pub(crate) struct BtreeEngineInner {
     pub root: AtomicU64,
     pub write_lock: Mutex<()>,
     pub wal: storage_wal::Wal,
+    /// Roots currently pinned by active readers, transactions, or cursors.
+    /// A non-zero count prevents `compact()` from reclaiming pages reachable
+    /// from that root.
+    pub active_roots: Mutex<HashMap<crate::page::PageId, usize>>,
 }
 
 impl BtreeEngineInner {
@@ -219,6 +263,93 @@ impl BtreeEngineInner {
         Ok(())
     }
 
+    /// Pin a snapshot root so GC does not reclaim pages reachable from it.
+    pub(crate) fn pin_root(&self, root: crate::page::PageId) {
+        if root == crate::page::NULL_PAGE_ID {
+            return;
+        }
+        *self.active_roots.lock().entry(root).or_insert(0) += 1;
+    }
+
+    /// Unpin a snapshot root previously pinned by `pin_root`.
+    pub(crate) fn unpin_root(&self, root: crate::page::PageId) {
+        if root == crate::page::NULL_PAGE_ID {
+            return;
+        }
+        let mut roots = self.active_roots.lock();
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = roots.entry(root) {
+            *entry.get_mut() -= 1;
+            if *entry.get() == 0 {
+                entry.remove();
+            }
+        }
+    }
+
+    /// Observe the current root, pin it, and verify the pin succeeded.
+    ///
+    /// See `GC_DESIGN.md` for the correctness argument for the optimistic
+    /// load-pin-verify loop.
+    pub(crate) fn pin_current_root(self: &Arc<Self>) -> (crate::page::PageId, SnapshotGuard) {
+        loop {
+            let root = self.root.load(Ordering::Acquire);
+            let guard = SnapshotGuard::new(Arc::clone(self), root);
+            let current = self.root.load(Ordering::Acquire);
+            if current == root {
+                return (root, guard);
+            }
+        }
+    }
+
+    /// Reclaim page ids that are no longer reachable from the current root or
+    /// any pinned snapshot.
+    ///
+    /// This method is serialized with writers via `write_lock`. It briefly holds
+    /// `active_roots` during the reclamation phase so that no reader can pin a
+    /// newly discovered old root while ids are being moved to the freelist.
+    fn compact(&self) -> Result<()> {
+        let _writer_guard = self.write_lock.lock();
+        let current_root = self.root.load(Ordering::Acquire);
+
+        // Collect pinned roots without holding the lock for the expensive walk.
+        let pinned: Vec<crate::page::PageId> = {
+            let roots = self.active_roots.lock();
+            roots.keys().copied().collect()
+        };
+
+        let mut live = std::collections::HashSet::new();
+        if current_root != crate::page::NULL_PAGE_ID {
+            live.extend(self.tree.reachable_pages(current_root)?);
+        }
+        for root in pinned {
+            if root != current_root && root != crate::page::NULL_PAGE_ID && !live.contains(&root) {
+                live.extend(self.tree.reachable_pages(root)?);
+            }
+        }
+
+        // Reclaim unreachable retired pages. Hold active_roots so readers cannot
+        // pin a new old root between the live-set computation and the move to
+        // freelist. The loop handles roots pinned while we were walking.
+        {
+            let roots = self.active_roots.lock();
+            loop {
+                let extra: Vec<crate::page::PageId> = roots
+                    .keys()
+                    .copied()
+                    .filter(|r| *r != crate::page::NULL_PAGE_ID && !live.contains(r))
+                    .collect();
+                if extra.is_empty() {
+                    break;
+                }
+                for root in extra {
+                    live.extend(self.tree.reachable_pages(root)?);
+                }
+            }
+
+            self.pager.reclaim_retired(&live)?;
+        }
+        Ok(())
+    }
+
     /// Write a durable checkpoint (page file + META) without truncating the WAL.
     ///
     /// Used by `sync()` and by `Drop`. Keeping the WAL around on drop means a
@@ -243,7 +374,12 @@ impl BtreeEngineInner {
 
     pub(crate) fn sync(&self) -> Result<()> {
         self.checkpoint()?;
-        self.wal.truncate_before(u64::MAX)?;
+        // GC is safe after the checkpoint: the checkpoint wrote the current root,
+        // so any pages it reclaims were not reachable from that committed state.
+        self.compact()?;
+        // Remove completed WAL segments. The active segment is kept open by the
+        // committer; truncating it would lose subsequent writes.
+        self.wal.truncate_completed()?;
         Ok(())
     }
 }

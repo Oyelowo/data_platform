@@ -143,6 +143,44 @@ impl Tree {
         TreeIter::new(Arc::clone(&self.pager), root_id, start, end)
     }
 
+    /// Return every page id reachable from `root_id`, including overflow-chain
+    /// pages. Used by the garbage collector to decide which retired ids are safe
+    /// to reuse.
+    pub fn reachable_pages(&self, root_id: PageId) -> Result<HashSet<PageId>> {
+        if root_id == NULL_PAGE_ID {
+            return Ok(HashSet::new());
+        }
+
+        let mut live = HashSet::new();
+        let mut stack = vec![root_id];
+
+        while let Some(page_id) = stack.pop() {
+            if !live.insert(page_id) {
+                continue;
+            }
+            let page = self.pager.read(page_id)?;
+            let node = Node::from_page(&page)?;
+            match &node.kind {
+                NodeKind::Leaf { entries, .. } => {
+                    for (_, value) in entries {
+                        if let Value::Overflow(head) = value {
+                            for oid in self.pager.overflow_chain_ids(*head)? {
+                                live.insert(oid);
+                            }
+                        }
+                    }
+                }
+                NodeKind::Internal { entries } => {
+                    for (_, child) in entries {
+                        stack.push(*child);
+                    }
+                }
+            }
+        }
+
+        Ok(live)
+    }
+
     /// Validate the structural integrity of the tree reachable from `root_id`.
     ///
     /// Checks page decoding, key ordering, separator correctness, bounds against

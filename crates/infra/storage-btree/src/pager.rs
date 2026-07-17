@@ -53,6 +53,11 @@ impl PageCache {
         let shard = &self.shards[Self::shard_index(id)];
         shard.write().put(id, page);
     }
+
+    fn pop(&self, id: PageId) -> Option<std::sync::Arc<Page>> {
+        let shard = &self.shards[Self::shard_index(id)];
+        shard.write().pop(&id)
+    }
 }
 
 /// Manages the on-disk page file and an in-memory cache of immutable pages.
@@ -117,14 +122,15 @@ impl Pager {
     pub fn allocate(&self) -> PageId {
         // Prefer never-published freelist slots.
         if let Some(id) = self.freelist.lock().pop() {
+            // Defensive cache invalidation: a freelist id may previously have
+            // been retired, and although retire() pops the cache, a stale entry
+            // could theoretically appear if a reader loaded the old page between
+            // retirement and reuse. Since the id is unreachable from any live
+            // snapshot, this is primarily defensive.
+            self.cache.pop(id);
             return id;
         }
 
-        // Retired page ids are intentionally NOT reused here. A retired page may
-        // still be reachable from an older tree snapshot that is not currently
-        // cached, so reusing its id would corrupt readers that later traverse
-        // that snapshot. Reclamation of retired pages is deferred to a future
-        // compaction / garbage-collection phase that walks reachable pages.
         self.next_page_id.fetch_add(1, Ordering::SeqCst)
     }
 
@@ -274,6 +280,23 @@ impl Pager {
         Ok(ids[0])
     }
 
+    /// Return the page ids in an overflow chain without materialising the value.
+    pub fn overflow_chain_ids(&self, head: PageId) -> Result<Vec<PageId>> {
+        let mut ids = Vec::new();
+        let mut current = head;
+        let mut visited = std::collections::HashSet::new();
+        while current != NULL_PAGE_ID {
+            if !visited.insert(current) {
+                return Err(Error::Corruption("overflow cycle detected".into()));
+            }
+            ids.push(current);
+            let page = self.read(current)?;
+            let (next, _) = decode_overflow_page(&page)?;
+            current = next;
+        }
+        Ok(ids)
+    }
+
     /// Read a large value from a chain of overflow pages starting at `head`.
     pub fn read_overflow(&self, head: PageId) -> Result<Bytes> {
         let mut out = Vec::new();
@@ -334,6 +357,60 @@ impl Pager {
     pub fn retired_count(&self) -> usize {
         self.retired.lock().len()
     }
+
+    /// Count of page ids available for reuse in the freelist.
+    pub fn freelist_count(&self) -> usize {
+        self.freelist.lock().len()
+    }
+
+    /// Move retired page ids that are not in `live` into the freelist.
+    ///
+    /// The caller must ensure that no reader can pin a root whose pages are not
+    /// already in `live` while this method runs.
+    pub fn reclaim_retired(&self, live: &std::collections::HashSet<PageId>) -> Result<()> {
+        let mut retired = self.retired.lock();
+        let mut freelist = self.freelist.lock();
+        let reclaimable: Vec<PageId> = retired
+            .keys()
+            .copied()
+            .filter(|id| !live.contains(id))
+            .collect();
+        for id in reclaimable {
+            retired.remove(&id);
+            freelist.push(id);
+            // Defensive: retired pages were already popped from the cache by
+            // retire(), but ensure no stale entry remains.
+            self.cache.pop(id);
+        }
+        Ok(())
+    }
+
+    /// Reclaim every allocated page id that is neither reachable nor already in
+    /// the freelist.
+    ///
+    /// This is used on engine open to recover the freelist after a crash or
+    /// unclean shutdown, because the in-memory `retired` set is not persisted.
+    /// There are no active readers during recovery, so reachability from the
+    /// current root is sufficient.
+    pub fn reclaim_unreachable(&self, reachable: &std::collections::HashSet<PageId>) -> Result<()> {
+        let next = self.next_page_id.load(Ordering::SeqCst);
+        let to_reclaim: Vec<PageId> = {
+            let freelist = self.freelist.lock();
+            let freelist_set: std::collections::HashSet<PageId> =
+                freelist.iter().copied().collect();
+            (1..next)
+                .filter(|id| {
+                    *id != NULL_PAGE_ID && !reachable.contains(id) && !freelist_set.contains(id)
+                })
+                .collect()
+        };
+        let mut freelist = self.freelist.lock();
+        for id in to_reclaim {
+            freelist.push(id);
+            self.cache.pop(id);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -380,5 +457,54 @@ mod tests {
         pager.write(&page).unwrap();
         let result = pager.read_overflow(id);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn reclaim_retired_moves_unlive_ids_to_freelist() {
+        let dir = tempfile::tempdir().unwrap();
+        let pager = Pager::open(dir.path(), 512, 0).unwrap();
+
+        let live = pager.allocate();
+        let dead = pager.allocate();
+        pager.retire(dead);
+
+        let mut live_set = std::collections::HashSet::new();
+        live_set.insert(live);
+        pager.reclaim_retired(&live_set).unwrap();
+
+        assert_eq!(pager.retired_count(), 0);
+        assert_eq!(pager.freelist_count(), 1);
+        // The dead id should be reused before allocating a new id.
+        assert_eq!(pager.allocate(), dead);
+    }
+
+    #[test]
+    fn reclaim_unreachable_finds_leaked_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let pager = Pager::open(dir.path(), 512, 0).unwrap();
+
+        // Simulate a run that allocated three pages and leaked two of them.
+        let _ = pager.allocate(); // id 1, live
+        let _ = pager.allocate(); // id 2, leaked
+        let _ = pager.allocate(); // id 3, leaked
+        let reachable = {
+            let mut s = std::collections::HashSet::new();
+            s.insert(1u64);
+            s
+        };
+        pager.reclaim_unreachable(&reachable).unwrap();
+
+        assert_eq!(pager.freelist_count(), 2);
+        let mut reclaimed = std::collections::HashSet::new();
+        reclaimed.insert(pager.allocate());
+        reclaimed.insert(pager.allocate());
+        assert_eq!(reclaimed, {
+            let mut s = std::collections::HashSet::new();
+            s.insert(2u64);
+            s.insert(3u64);
+            s
+        });
+        // No new ids should be allocated while the freelist is non-empty.
+        assert_eq!(pager.allocate(), 4);
     }
 }

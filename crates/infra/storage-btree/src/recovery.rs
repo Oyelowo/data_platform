@@ -163,6 +163,13 @@ pub(crate) fn recover(
 
     // If we recovered from WAL, persist the new state and truncate WAL.
     if meta_root != root || wal.iter(0)?.next().is_some() {
+        // Reclaim any pages that were retired in a previous run but not yet
+        // moved to the freelist. The in-memory `retired` set is not persisted,
+        // so replaying the WAL recreates the tree state and lets us identify
+        // the currently unreachable pages.
+        let reachable = tree.reachable_pages(root)?;
+        pager.reclaim_unreachable(&reachable)?;
+
         let (freelist, next_page_id) = pager.freelist_snapshot();
         let new_meta = Meta {
             root,
@@ -174,7 +181,9 @@ pub(crate) fn recover(
         // while the (now truncated) WAL can no longer replay them.
         pager.sync()?;
         write_meta(dir, &new_meta)?;
-        wal.truncate_before(u64::MAX)?;
+        // Remove completed WAL segments. The active segment is kept open by the
+        // committer; truncating it would lose subsequent writes.
+        wal.truncate_completed()?;
     }
 
     Ok(root)

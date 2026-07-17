@@ -19,6 +19,7 @@
 //!   tree is updated, enabling crash recovery.
 
 #![warn(missing_docs)]
+#![deny(unsafe_code)]
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
