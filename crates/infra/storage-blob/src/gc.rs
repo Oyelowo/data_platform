@@ -8,9 +8,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Cursor;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use storage_wal::{Durability, Wal};
@@ -53,7 +53,10 @@ impl GarbageCollector {
         let live_snapshot = self.index.snapshot();
         let mut by_volume: BTreeMap<u64, Vec<(Vec<u8>, BlobLocation)>> = BTreeMap::new();
         for (id, loc) in live_snapshot {
-            by_volume.entry(loc.volume_number).or_default().push((id, loc));
+            by_volume
+                .entry(loc.volume_number)
+                .or_default()
+                .push((id, loc));
         }
 
         let active_volume = self.volumes.active_volume_number();
@@ -98,11 +101,8 @@ impl GarbageCollector {
                 // Atomically update the index only if it still points to the
                 // old location.  If another write or GC moved it in the
                 // meantime, we discard our rewrite.
-                let new_location = BlobLocation::from_record(
-                    new_loc.volume_number,
-                    new_loc.offset,
-                    &new_header,
-                );
+                let new_location =
+                    BlobLocation::from_record(new_loc.volume_number, new_loc.offset, &new_header);
                 let swapped = self
                     .index
                     .compare_and_swap(&id, old_loc, new_location)
@@ -122,10 +122,8 @@ impl GarbageCollector {
                         .map_err(|e| Error::IndexWal(e.to_string()))?;
                     self.bytes_rewritten
                         .fetch_add(payload.len() as u64, Ordering::Relaxed);
-                    volume_reclaimed += crate::format::padded_record_size(
-                        id.len() as u32,
-                        payload.len() as u64,
-                    );
+                    volume_reclaimed +=
+                        crate::format::padded_record_size(id.len() as u32, payload.len() as u64);
                 }
             }
 

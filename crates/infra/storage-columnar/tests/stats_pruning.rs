@@ -26,7 +26,10 @@ fn multi_digit_integer_stats_prune_correctly() {
     // File 1: ids 1 and 2 (lexicographically smaller than "10").
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+            ),
             (
                 "payload".into(),
                 vec![Some(Bytes::from("a")), Some(Bytes::from("b"))],
@@ -63,8 +66,7 @@ fn multi_digit_integer_stats_prune_correctly() {
         1,
         "only the file containing id 10/20 should be read"
     );
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
     assert_eq!(
         map["id"],
         vec![Some(Bytes::from("10")), Some(Bytes::from("20"))]
@@ -128,8 +130,7 @@ fn float_stats_prune_by_numeric_value() {
 
     let result = engine.scan(&["value", "label"], &predicate).unwrap();
     assert_eq!(engine.file_reads(), 1);
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
     assert_eq!(
         map["value"],
         vec![Some(Bytes::from("9.9")), Some(Bytes::from("10.1"))]

@@ -13,11 +13,15 @@ use crate::page::{NULL_PAGE_ID, PageId};
 ///
 /// The cursor captures the root page id at creation time and traverses immutable
 /// pages, so it presents a stable snapshot even if the engine is modified
-/// concurrently.
+/// concurrently. Forward leaf advancement uses a parent stack rather than leaf
+/// sibling pointers, avoiding stale-sibling hazards after splits or merges.
 pub struct BtreeCursor {
     inner: Arc<BtreeEngineInner>,
     root: PageId,
     end: Option<Bytes>,
+    /// Path of internal nodes from the root down to `current_leaf`. Each entry
+    /// is `(node_page_id, child_index_in_that_node)`.
+    stack: Vec<(PageId, usize)>,
     current_leaf: PageId,
     current_entries: Vec<(Bytes, Value)>,
     pos: usize,
@@ -35,6 +39,7 @@ impl BtreeCursor {
             inner,
             root,
             end,
+            stack: Vec::new(),
             current_leaf: NULL_PAGE_ID,
             current_entries: Vec::new(),
             pos: 0,
@@ -47,71 +52,93 @@ impl BtreeCursor {
     }
 
     fn seek_to(&mut self, root: PageId, target: Option<&[u8]>) -> Result<()> {
+        self.stack.clear();
         let mut current_id = root;
         loop {
             let page = self.inner.pager.read(current_id)?;
             let node = Node::from_page(&page)?;
             match node.kind {
-                NodeKind::Leaf { entries, next_leaf } => {
+                NodeKind::Leaf { entries, .. } => {
                     let idx =
                         target.map_or(0, |t| entries.partition_point(|(k, _)| k.as_ref() < t));
                     self.current_leaf = current_id;
                     self.current_entries = entries;
                     self.pos = idx;
-                    self.exhausted =
-                        next_leaf == NULL_PAGE_ID && self.pos >= self.current_entries.len();
+                    self.exhausted = self.pos >= self.current_entries.len();
                     return Ok(());
                 }
                 NodeKind::Internal { entries } => {
-                    current_id = self.child_for_key(&entries, target);
+                    let (child_idx, child_id) = self.pick_child(&entries, target);
+                    self.stack.push((current_id, child_idx));
+                    current_id = child_id;
                 }
             }
         }
     }
 
-    fn child_for_key(&self, entries: &[(Bytes, PageId)], key: Option<&[u8]>) -> PageId {
+    fn pick_child(&self, entries: &[(Bytes, PageId)], key: Option<&[u8]>) -> (usize, PageId) {
         match key {
-            None => entries[0].1,
+            None => (0, entries[0].1),
             Some(key) => {
+                let mut idx = 0;
                 let mut child = entries[0].1;
-                for (sep, cid) in entries.iter().skip(1) {
+                for (i, (sep, cid)) in entries.iter().enumerate().skip(1) {
                     if key < sep.as_ref() {
-                        return child;
+                        return (idx, child);
                     }
+                    idx = i;
                     child = *cid;
                 }
-                child
+                (idx, child)
             }
         }
     }
 
     fn advance_leaf(&mut self) -> Result<bool> {
         if self.current_leaf == NULL_PAGE_ID {
+            self.exhausted = true;
             return Ok(false);
         }
-        let page = self.inner.pager.read(self.current_leaf)?;
-        let node = Node::from_page(&page)?;
-        if let NodeKind::Leaf { next_leaf, .. } = node.kind {
-            if next_leaf == NULL_PAGE_ID {
-                self.exhausted = true;
-                return Ok(false);
+        // Ascend the parent stack until we find an ancestor with a right sibling.
+        while let Some((parent_id, child_idx)) = self.stack.pop() {
+            let parent_page = self.inner.pager.read(parent_id)?;
+            let parent_node = Node::from_page(&parent_page)?;
+            if let NodeKind::Internal { entries } = &parent_node.kind {
+                if child_idx + 1 < entries.len() {
+                    let next_child = entries[child_idx + 1].1;
+                    self.stack.push((parent_id, child_idx + 1));
+                    self.descend_to_leftmost_leaf(next_child)?;
+                    return Ok(true);
+                }
+            } else {
+                return Err(Error::Corruption(
+                    "cursor stack contains a non-internal node".into(),
+                ));
             }
-            let next_page = self.inner.pager.read(next_leaf)?;
-            let next_node = Node::from_page(&next_page)?;
-            if let NodeKind::Leaf {
-                entries,
-                next_leaf: nn,
-            } = next_node.kind
-            {
-                self.current_leaf = next_leaf;
-                self.current_entries = entries;
-                self.pos = 0;
-                self.exhausted = nn == NULL_PAGE_ID && self.current_entries.is_empty();
-                return Ok(true);
-            }
-            return Err(Error::Corruption("next_leaf is not a leaf".into()));
         }
-        Err(Error::Corruption("current node is not a leaf".into()))
+        self.exhausted = true;
+        Ok(false)
+    }
+
+    fn descend_to_leftmost_leaf(&mut self, mut current_id: PageId) -> Result<()> {
+        loop {
+            let page = self.inner.pager.read(current_id)?;
+            let node = Node::from_page(&page)?;
+            match node.kind {
+                NodeKind::Leaf { entries, .. } => {
+                    self.current_leaf = current_id;
+                    self.current_entries = entries;
+                    self.pos = 0;
+                    self.exhausted = self.current_entries.is_empty();
+                    return Ok(());
+                }
+                NodeKind::Internal { entries } => {
+                    let child_id = entries[0].1;
+                    self.stack.push((current_id, 0));
+                    current_id = child_id;
+                }
+            }
+        }
     }
 }
 

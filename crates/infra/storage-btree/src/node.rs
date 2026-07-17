@@ -84,21 +84,55 @@ impl Node {
         let mut view = &page.data[PageHeader::SIZE..];
         let kind = match header.page_type {
             PageType::Leaf => {
+                if view.len() < 8 {
+                    return Err(Error::Corruption("leaf next_leaf truncated".into()));
+                }
                 let next_leaf = view.get_u64_le();
                 let mut entries = Vec::with_capacity(header.entry_count as usize);
-                for _ in 0..header.entry_count {
+                for i in 0..header.entry_count {
+                    if view.len() < 2 {
+                        return Err(Error::Corruption(format!(
+                            "leaf entry {i} key length truncated"
+                        )));
+                    }
                     let key_len = view.get_u16_le() as usize;
+                    if view.len() < key_len {
+                        return Err(Error::Corruption(format!(
+                            "leaf entry {i} key truncated: expected {key_len}, got {}",
+                            view.len()
+                        )));
+                    }
                     let key = Bytes::copy_from_slice(&view[..key_len]);
                     view.advance(key_len);
+                    if view.is_empty() {
+                        return Err(Error::Corruption(format!(
+                            "leaf entry {i} value type truncated"
+                        )));
+                    }
                     let value_type = view.get_u8();
                     let value = match value_type {
                         0 => {
+                            if view.len() < 4 {
+                                return Err(Error::Corruption(format!(
+                                    "leaf entry {i} inline value length truncated"
+                                )));
+                            }
                             let value_len = view.get_u32_le() as usize;
+                            if view.len() < value_len {
+                                return Err(Error::Corruption(format!(
+                                    "leaf entry {i} inline value truncated"
+                                )));
+                            }
                             let bytes = Bytes::copy_from_slice(&view[..value_len]);
                             view.advance(value_len);
                             Value::Inline(bytes)
                         }
                         1 => {
+                            if view.len() < 12 {
+                                return Err(Error::Corruption(format!(
+                                    "leaf entry {i} overflow header truncated"
+                                )));
+                            }
                             let _padding = view.get_u32_le();
                             let head = view.get_u64_le();
                             Value::Overflow(head)
@@ -115,10 +149,25 @@ impl Node {
             }
             PageType::Internal => {
                 let mut entries = Vec::with_capacity(header.entry_count as usize);
-                for _ in 0..header.entry_count {
+                for i in 0..header.entry_count {
+                    if view.len() < 2 {
+                        return Err(Error::Corruption(format!(
+                            "internal entry {i} key length truncated"
+                        )));
+                    }
                     let key_len = view.get_u16_le() as usize;
+                    if view.len() < key_len {
+                        return Err(Error::Corruption(format!(
+                            "internal entry {i} key truncated"
+                        )));
+                    }
                     let key = Bytes::copy_from_slice(&view[..key_len]);
                     view.advance(key_len);
+                    if view.len() < 8 {
+                        return Err(Error::Corruption(format!(
+                            "internal entry {i} child truncated"
+                        )));
+                    }
                     let child = view.get_u64_le();
                     entries.push((key, child));
                 }
@@ -254,8 +303,17 @@ pub(crate) fn decode_overflow_page(page: &Page) -> Result<(PageId, Bytes)> {
         return Err(Error::Corruption("expected overflow page".into()));
     }
     let mut view = &page.data[PageHeader::SIZE..];
+    if view.len() < 12 {
+        return Err(Error::Corruption("overflow header truncated".into()));
+    }
     let next = view.get_u64_le();
     let data_len = view.get_u32_le() as usize;
+    if view.len() < data_len {
+        return Err(Error::Corruption(format!(
+            "overflow payload truncated: expected {data_len}, got {}",
+            view.len()
+        )));
+    }
     let payload = Bytes::copy_from_slice(&view[..data_len]);
     Ok((next, payload))
 }

@@ -109,12 +109,20 @@ impl VolumeManager {
 
     /// Current active volume number, if any.
     pub fn active_volume_number(&self) -> Option<u64> {
-        self.active_writer.lock().unwrap().as_ref().map(|w| w.number())
+        self.active_writer
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|w| w.number())
     }
 }
 
 fn volume_path(volumes_dir: &Path, number: u64) -> PathBuf {
-    volumes_dir.join(format!("{:0width$}.blob", number, width = VOLUME_FILENAME_WIDTH))
+    volumes_dir.join(format!(
+        "{:0width$}.blob",
+        number,
+        width = VOLUME_FILENAME_WIDTH
+    ))
 }
 
 fn list_existing_volume_numbers(volumes_dir: &Path) -> Result<u64> {
@@ -149,7 +157,9 @@ mod tests {
     fn append_and_reader_cache() {
         let dir = TempDir::new().unwrap();
         let mgr = mgr(&dir);
-        let (loc, _header) = mgr.append_record(b"a", &mut Cursor::new(&b"data"[..])).unwrap();
+        let (loc, _header) = mgr
+            .append_record(b"a", &mut Cursor::new(&b"data"[..]))
+            .unwrap();
         assert_eq!(loc.volume_number, 1);
 
         let reader = mgr.reader(loc.volume_number).unwrap();

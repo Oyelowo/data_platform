@@ -31,9 +31,18 @@ fn projection_returns_only_requested_columns() {
 
     engine
         .ingest(vec![
-            ("a".into(), vec![Some(Bytes::from("x")), Some(Bytes::from("y"))]),
-            ("b".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
-            ("c".into(), vec![Some(Bytes::from("9.9")), Some(Bytes::from("8.8"))]),
+            (
+                "a".into(),
+                vec![Some(Bytes::from("x")), Some(Bytes::from("y"))],
+            ),
+            (
+                "b".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+            ),
+            (
+                "c".into(),
+                vec![Some(Bytes::from("9.9")), Some(Bytes::from("8.8"))],
+            ),
         ])
         .unwrap();
 

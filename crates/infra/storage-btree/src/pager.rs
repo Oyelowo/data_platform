@@ -44,7 +44,9 @@ impl PageCache {
 
     fn get(&self, id: PageId) -> Option<std::sync::Arc<Page>> {
         let shard = &self.shards[Self::shard_index(id)];
-        shard.read().peek(&id).cloned()
+        // `get` (not `peek`) updates LRU recency so read-heavy workloads do not
+        // evict hot pages. The LRU shard is write-locked only briefly.
+        shard.write().get(&id).cloned()
     }
 
     fn put(&self, id: PageId, page: std::sync::Arc<Page>) {
@@ -204,9 +206,8 @@ impl Pager {
         file.sync_all()?;
         drop(file);
         // Sync the directory so the file's existence and size are durable.
-        if let Ok(dir) = File::open(&self.dir) {
-            let _ = dir.sync_all();
-        }
+        let dir = File::open(&self.dir)?;
+        dir.sync_all()?;
         Ok(())
     }
 
@@ -296,6 +297,42 @@ impl Pager {
             Value::Inline(bytes) => Ok(bytes.clone()),
             Value::Overflow(head) => self.read_overflow(*head),
         }
+    }
+
+    /// Validate an overflow chain without materialising the full value.
+    ///
+    /// Returns the number of pages in the chain. Detects cycles and malformed
+    /// overflow pages.
+    pub fn validate_overflow(&self, head: PageId) -> Result<usize> {
+        let mut current = head;
+        let mut visited = std::collections::HashSet::new();
+        let mut count = 0;
+        while current != NULL_PAGE_ID {
+            if !visited.insert(current) {
+                return Err(Error::Corruption("overflow cycle detected".into()));
+            }
+            let page = self.read(current)?;
+            let (next, _) = decode_overflow_page(&page)?;
+            current = next;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Approximate number of bytes held by the page cache.
+    pub fn approx_memory_bytes(&self) -> u64 {
+        let entries: usize = self
+            .cache
+            .shards
+            .iter()
+            .map(|shard| shard.read().len())
+            .sum();
+        (entries * self.page_size) as u64
+    }
+
+    /// Count of retired page ids that are waiting for reclamation.
+    pub fn retired_count(&self) -> usize {
+        self.retired.lock().len()
     }
 }
 

@@ -7,6 +7,7 @@
 
 pub use storage_blob::{BlobStoreImpl, BlobStoreOptions};
 pub use storage_btree::{BtreeEngine, BtreeOptions};
+pub use storage_bwtree::{BwTreeEngine, BwTreeOptions};
 pub use storage_columnar::{ColumnarEngineImpl, ColumnarOptions};
 pub use storage_memory::{MemoryEngine, MemoryTransaction};
 pub use storage_traits::*;

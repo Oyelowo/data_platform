@@ -11,7 +11,12 @@
 //!   the full ∆abort protocol from the literature. This is simpler and correct
 //!   but limits concurrency under split/merge-heavy workloads.
 //! * The WAL is never truncated in the first version because there is no
-//!   mapping-table checkpoint. Recovery replays the full WAL from the start.
+//!   durable page checkpoint. Recovery replays the full WAL from the start.
+//!   This keeps recovery correct but makes open time grow with the write
+//!   history until checkpointing is added.
+//! * Leaf merges are disabled in the first version. Deleted entries leave
+//!   underfull leaves; the tree remains correct but space is not reclaimed
+//!   through merging.
 //! * Overflow values are stored in a separate append-only file rather than a
 //!   log-structured store.
 //! * Only `ReadCommitted` transaction isolation is supported.

@@ -25,6 +25,16 @@ pub struct BtreeOptions {
     ///
     /// A value of zero means unlimited. The default is 64 MiB.
     pub cache_size: usize,
+
+    /// Maximum size of a single value in bytes.
+    ///
+    /// Values larger than this are rejected. The default is 16 MiB.
+    pub max_value_size: usize,
+
+    /// Maximum number of operations in a single atomic batch.
+    ///
+    /// The default is 10,000.
+    pub max_batch_ops: usize,
 }
 
 impl BtreeOptions {
@@ -45,11 +55,23 @@ impl BtreeOptions {
                 "min_fill_percent must be in (0, 100]".into(),
             ));
         }
+        if self.max_value_size == 0 {
+            return Err(crate::Error::InvalidArgument(
+                "max_value_size must be non-zero".into(),
+            ));
+        }
+        if self.max_batch_ops == 0 {
+            return Err(crate::Error::InvalidArgument(
+                "max_batch_ops must be non-zero".into(),
+            ));
+        }
         Ok(Self {
             page_size: self.page_size,
             max_inline_value_size: self.max_inline_value_size.min(self.page_size / 4),
             min_fill_percent: self.min_fill_percent,
             cache_size: self.cache_size,
+            max_value_size: self.max_value_size,
+            max_batch_ops: self.max_batch_ops,
         })
     }
 }
@@ -61,6 +83,8 @@ impl Default for BtreeOptions {
             max_inline_value_size: 1024,
             min_fill_percent: 50,
             cache_size: 64 * 1024 * 1024,
+            max_value_size: 16 * 1024 * 1024,
+            max_batch_ops: 10_000,
         }
     }
 }

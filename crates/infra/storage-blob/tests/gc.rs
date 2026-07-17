@@ -77,10 +77,14 @@ fn readers_survive_gc_volume_deletion() {
 
     // Place two objects in the first volume.
     store.put(b"keep", &mut &vec![1u8; 1024][..]).unwrap();
-    store.put(b"delete", &mut &vec![2u8; 50 * 1024][..]).unwrap();
+    store
+        .put(b"delete", &mut &vec![2u8; 50 * 1024][..])
+        .unwrap();
 
     // Rotate to a second volume so the first one is eligible for GC.
-    store.put(b"rotate", &mut &vec![3u8; 20 * 1024][..]).unwrap();
+    store
+        .put(b"rotate", &mut &vec![3u8; 20 * 1024][..])
+        .unwrap();
 
     // Open a reader before GC deletes the original volume file.
     let mut old_reader = store.get(b"keep").unwrap();

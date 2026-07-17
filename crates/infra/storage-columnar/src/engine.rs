@@ -12,7 +12,7 @@ use arrow::array::{
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use parking_lot::{Mutex, RwLock};
-use storage_traits::{ColumnarEngine, ColumnBatch, Predicate, ScanResult};
+use storage_traits::{ColumnBatch, ColumnarEngine, Predicate, ScanResult};
 use storage_wal::{Durability, Wal, WalOptions};
 
 use crate::compaction::{self, CompactionInput};
@@ -314,11 +314,7 @@ impl ColumnarEngine for ColumnarEngineImpl {
         Ok(())
     }
 
-    fn scan(
-        &self,
-        projection: &[&str],
-        predicate: &Predicate,
-    ) -> Result<ScanResult> {
+    fn scan(&self, projection: &[&str], predicate: &Predicate) -> Result<ScanResult> {
         let manifest: Arc<Manifest> = {
             let guard = self.manifest.read();
             Arc::clone(&*guard)
@@ -348,10 +344,7 @@ fn split_by_partition(
     let partition_column = match partition_column {
         Some(c) => c,
         None => {
-            return Ok(vec![(
-                DEFAULT_PARTITION.into(),
-                columns.to_vec(),
-            )]);
+            return Ok(vec![(DEFAULT_PARTITION.into(), columns.to_vec())]);
         }
     };
 
@@ -376,10 +369,8 @@ fn split_by_partition(
         let group_columns: PartitionBatch = columns
             .iter()
             .map(|(name, values)| {
-                let selected: Vec<Option<Bytes>> = row_indices
-                    .iter()
-                    .map(|&i| values[i].clone())
-                    .collect();
+                let selected: Vec<Option<Bytes>> =
+                    row_indices.iter().map(|&i| values[i].clone()).collect();
                 (name.clone(), selected)
             })
             .collect();
@@ -576,7 +567,8 @@ fn recover(path: &Path, wal: &Wal) -> Result<(Manifest, u64, u64)> {
     for record in wal.iter(snapshot_lsn)? {
         let record = record?;
         // WAL LSN is a byte offset; the next record starts after this one.
-        next_lsn = record.lsn + storage_wal::RECORD_HEADER_SIZE as u64 + record.payload.len() as u64;
+        next_lsn =
+            record.lsn + storage_wal::RECORD_HEADER_SIZE as u64 + record.payload.len() as u64;
         let decoded = manifest_wal::ManifestRecord::decode(&record.payload)?;
         manifest_wal::apply_record(&mut manifest, decoded)?;
     }

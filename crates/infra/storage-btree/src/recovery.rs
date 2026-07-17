@@ -1,5 +1,7 @@
 //! Recovery logic for the B+ tree engine.
 
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use crate::options::BtreeOptions;
 use crate::page::NULL_PAGE_ID;
 use crate::pager::Pager;
 use crate::tree::Tree;
-use crate::wal_record::WalRecord;
+use crate::wal_record::{BatchOp, WalRecord};
 
 /// Name of the metadata file.
 const META_FILE: &str = "META";
@@ -87,11 +89,25 @@ pub(crate) fn read_meta(dir: &Path) -> Result<Option<Meta>> {
 }
 
 /// Atomically write the metadata file.
+///
+/// Durability rules: the temporary file is fsynced before the rename, and the
+/// parent directory is fsynced after the rename. This guarantees that the new
+/// `META` entry is reachable and on stable storage before we truncate the WAL.
 pub(crate) fn write_meta(dir: &Path, meta: &Meta) -> Result<()> {
     let path = meta_path(dir);
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, meta.encode())?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&tmp)?;
+    let bytes = meta.encode();
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
     std::fs::rename(&tmp, &path)?;
+    let dir_file = File::open(dir)?;
+    dir_file.sync_all()?;
     Ok(())
 }
 
@@ -111,6 +127,18 @@ pub(crate) fn replay_wal(
             }
             WalRecord::Delete { key } => {
                 root = tree.delete(root, &key)?;
+            }
+            WalRecord::Batch(ops) => {
+                for op in ops {
+                    match op {
+                        BatchOp::Put { key, value } => {
+                            root = tree.insert(root, &key, &value)?;
+                        }
+                        BatchOp::Delete { key } => {
+                            root = tree.delete(root, &key)?;
+                        }
+                    }
+                }
             }
         }
     }
@@ -141,6 +169,10 @@ pub(crate) fn recover(
             freelist,
             next_page_id,
         };
+        // The new pages must be durable before the META checkpoint becomes
+        // reachable, otherwise a crash could leave META pointing at torn pages
+        // while the (now truncated) WAL can no longer replay them.
+        pager.sync()?;
         write_meta(dir, &new_meta)?;
         wal.truncate_before(u64::MAX)?;
     }

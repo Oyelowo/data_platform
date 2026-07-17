@@ -1,8 +1,8 @@
 //! Compaction planner for the columnar engine.
 
+use crate::Result;
 use crate::manifest::{FileMeta, Manifest};
 use crate::options::ColumnarOptions;
-use crate::Result;
 
 /// Files selected for a single compaction job.
 #[derive(Debug, Clone)]
@@ -38,7 +38,9 @@ pub fn plan(
     }
 
     for (part, files) in by_partition {
-        if let Some(p) = partition && part != p {
+        if let Some(p) = partition
+            && part != p
+        {
             continue;
         }
 

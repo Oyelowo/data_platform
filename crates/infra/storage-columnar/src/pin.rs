@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::manifest::Manifest;
 use crate::Result;
+use crate::manifest::Manifest;
 
 /// Set of active scan pins and a queue of files awaiting deletion.
 #[derive(Debug, Default)]

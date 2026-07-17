@@ -76,7 +76,8 @@ fn non_nullable_column_rejects_null() {
         .ingest(vec![("id".into(), vec![Some(Bytes::from("1")), None])])
         .unwrap_err();
     assert!(
-        err.to_string().contains("non-nullable column 'id' contains null"),
+        err.to_string()
+            .contains("non-nullable column 'id' contains null"),
         "unexpected error: {err}"
     );
 }
@@ -99,7 +100,8 @@ fn non_nullable_column_rejects_missing_column() {
         .ingest(vec![("other".into(), vec![Some(Bytes::from("x"))])])
         .unwrap_err();
     assert!(
-        err.to_string().contains("non-nullable column 'id' is missing"),
+        err.to_string()
+            .contains("non-nullable column 'id' is missing"),
         "unexpected error: {err}"
     );
 }
@@ -156,9 +158,10 @@ fn null_values_round_trip_for_all_types() {
         ])
         .unwrap();
 
-    let result = engine.scan(&["b", "i", "f", "s", "bin", "ts"], &Predicate::True).unwrap();
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let result = engine
+        .scan(&["b", "i", "f", "s", "bin", "ts"], &Predicate::True)
+        .unwrap();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
     for col in ["b", "i", "f", "s", "bin", "ts"] {
         assert_eq!(map[col], vec![None], "column {col} did not round-trip null");
     }

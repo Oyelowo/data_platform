@@ -1,5 +1,6 @@
 //! Copy-on-write B+ tree operations.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -16,6 +17,7 @@ pub(crate) struct Tree {
     page_size: usize,
     min_fill_percent: usize,
     max_inline_value_size: usize,
+    max_value_size: usize,
 }
 
 /// Result of a COW deletion that may propagate a merge/redistribution upward.
@@ -37,6 +39,7 @@ impl Tree {
             page_size: options.page_size,
             min_fill_percent: options.min_fill_percent,
             max_inline_value_size: options.max_inline_value_size,
+            max_value_size: options.max_value_size,
         }
     }
 
@@ -68,6 +71,14 @@ impl Tree {
     pub fn insert(&self, root_id: PageId, key: &[u8], value: &[u8]) -> Result<PageId> {
         self.check_key_size(key)?;
         let value = self.encode_value(value)?;
+        let entry_size = Node::leaf_entry_size(key.len(), &value) + 8;
+        if entry_size > self.usable_page_size() {
+            return Err(Error::OutOfBounds {
+                kind: crate::error::BoundKind::Value,
+                limit: self.usable_page_size().saturating_sub(8),
+                got: entry_size.saturating_sub(8),
+            });
+        }
         if root_id == NULL_PAGE_ID {
             let mut leaf = Node::empty_leaf(self.pager.allocate());
             if let NodeKind::Leaf {
@@ -114,7 +125,6 @@ impl Tree {
                 && entries.len() == 1
             {
                 let child_id = entries[0].1;
-                self.retire_node(&node);
                 self.pager.retire(new_root);
                 return Ok(child_id);
             }
@@ -133,7 +143,103 @@ impl Tree {
         TreeIter::new(Arc::clone(&self.pager), root_id, start, end)
     }
 
+    /// Validate the structural integrity of the tree reachable from `root_id`.
+    ///
+    /// Checks page decoding, key ordering, separator correctness, bounds against
+    /// parent separators, overflow chain acyclicity, and the absence of shared
+    /// or cycled pages in the reachable tree. Leaf sibling pointers are not
+    /// relied on for correctness.
+    pub fn check_integrity(&self, root_id: PageId) -> Result<()> {
+        if root_id == NULL_PAGE_ID {
+            return Ok(());
+        }
+
+        let mut visited = HashSet::new();
+        let mut stack = vec![(root_id, None::<Bytes>, None::<Bytes>)];
+
+        while let Some((page_id, low, high)) = stack.pop() {
+            if !visited.insert(page_id) {
+                return Err(Error::Corruption(format!(
+                    "page {page_id} reachable via multiple paths or cycle"
+                )));
+            }
+
+            let page = self.pager.read(page_id)?;
+            let node = Node::from_page(&page)?;
+
+            match &node.kind {
+                NodeKind::Leaf { entries, .. } => {
+                    for (i, (key, value)) in entries.iter().enumerate() {
+                        if i > 0 && key.as_ref() <= entries[i - 1].0.as_ref() {
+                            return Err(Error::Corruption(format!(
+                                "leaf {page_id} keys out of order at index {i}"
+                            )));
+                        }
+                        if let Some(ref low_key) = low
+                            && key.as_ref() < low_key.as_ref()
+                        {
+                            return Err(Error::Corruption(format!(
+                                "leaf {page_id} key below lower bound at index {i}"
+                            )));
+                        }
+                        if let Some(ref high_key) = high
+                            && key.as_ref() >= high_key.as_ref()
+                        {
+                            return Err(Error::Corruption(format!(
+                                "leaf {page_id} key at/above upper bound at index {i}"
+                            )));
+                        }
+                        if let Value::Overflow(head) = value {
+                            self.pager.validate_overflow(*head)?;
+                        }
+                    }
+                }
+                NodeKind::Internal { entries } => {
+                    if entries.is_empty() {
+                        return Err(Error::Corruption(format!(
+                            "internal {page_id} has no entries"
+                        )));
+                    }
+                    if !entries[0].0.is_empty() {
+                        return Err(Error::Corruption(format!(
+                            "internal {page_id} leftmost separator is not empty"
+                        )));
+                    }
+                    for i in 1..entries.len() {
+                        if entries[i].0.as_ref() <= entries[i - 1].0.as_ref() {
+                            return Err(Error::Corruption(format!(
+                                "internal {page_id} separators out of order at index {i}"
+                            )));
+                        }
+                    }
+                    for i in 0..entries.len() {
+                        let child_low = if i == 0 {
+                            low.clone()
+                        } else {
+                            Some(entries[i].0.clone())
+                        };
+                        let child_high = if i + 1 < entries.len() {
+                            Some(entries[i + 1].0.clone())
+                        } else {
+                            high.clone()
+                        };
+                        stack.push((entries[i].1, child_low, child_high));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn encode_value(&self, value: &[u8]) -> Result<Value> {
+        if value.len() > self.max_value_size {
+            return Err(Error::OutOfBounds {
+                kind: crate::error::BoundKind::Value,
+                limit: self.max_value_size,
+                got: value.len(),
+            });
+        }
         if value.len() > self.max_inline_value_size {
             let head = self.pager.write_overflow(value)?;
             Ok(Value::Overflow(head))
@@ -206,7 +312,6 @@ impl Tree {
                 }
                 let split = self.split_leaf_if_needed(&mut new_leaf)?;
                 self.write_node(&new_leaf)?;
-                self.retire_node(&node);
                 self.pager.retire(node_id);
 
                 match split {
@@ -379,7 +484,7 @@ impl Tree {
                     return Ok((node_id, DeleteResult::Balanced));
                 }
                 if new_entries.is_empty() {
-                    self.retire_node(&node);
+                    self.free_node_values(&node);
                     self.pager.retire(node_id);
                     return Ok((NULL_PAGE_ID, DeleteResult::Empty));
                 }
@@ -394,7 +499,6 @@ impl Tree {
                     *nl = *next_leaf;
                 }
                 self.write_node(&new_leaf)?;
-                self.retire_node(&node);
                 self.pager.retire(node_id);
 
                 let result = if self.below_min_leaf(&new_leaf) {
@@ -770,16 +874,10 @@ impl Tree {
     }
 
     fn check_key_size(&self, key: &[u8]) -> Result<()> {
-        // A key must leave room for the key length, value type/value head, and
-        // the next_leaf pointer in a single-entry leaf.
-        let max_key_size = self
-            .usable_page_size()
-            .saturating_sub(8 + 2 + 1 + 4 + 8)
-            .max(1);
-        if key.len() > max_key_size {
+        if key.len() > u16::MAX as usize {
             return Err(Error::OutOfBounds {
                 kind: crate::error::BoundKind::Key,
-                limit: max_key_size,
+                limit: u16::MAX as usize,
                 got: key.len(),
             });
         }
@@ -792,7 +890,7 @@ impl Tree {
         }
     }
 
-    fn retire_node(&self, node: &Node) {
+    fn free_node_values(&self, node: &Node) {
         if let NodeKind::Leaf { entries, .. } = &node.kind {
             for (_, value) in entries {
                 self.free_value(value);
@@ -802,10 +900,16 @@ impl Tree {
 }
 
 /// Iterator over a range of entries in the B+ tree.
+///
+/// Forward advancement uses a parent stack rather than leaf sibling pointers,
+/// avoiding stale-sibling hazards after splits or merges.
 #[cfg(test)]
 pub(crate) struct TreeIter {
     pager: Arc<Pager>,
     end: Option<Bytes>,
+    /// Path of internal nodes from the root down to `current_leaf`. Each entry
+    /// is `(node_page_id, child_index_in_that_node)`.
+    stack: Vec<(PageId, usize)>,
     current_leaf: PageId,
     current_entries: Vec<(Bytes, Value)>,
     pos: usize,
@@ -823,6 +927,7 @@ impl TreeIter {
         let mut iter = Self {
             pager,
             end: end.map(Bytes::copy_from_slice),
+            stack: Vec::new(),
             current_leaf: NULL_PAGE_ID,
             current_entries: Vec::new(),
             pos: 0,
@@ -835,71 +940,93 @@ impl TreeIter {
     }
 
     fn seek(&mut self, root_id: PageId, target: Option<&[u8]>) -> Result<()> {
+        self.stack.clear();
         let mut current_id = root_id;
         loop {
             let page = self.pager.read(current_id)?;
             let node = Node::from_page(&page)?;
             match node.kind {
-                NodeKind::Leaf { entries, next_leaf } => {
+                NodeKind::Leaf { entries, .. } => {
                     let idx =
                         target.map_or(0, |t| entries.partition_point(|(k, _)| k.as_ref() < t));
                     self.current_leaf = current_id;
                     self.current_entries = entries;
                     self.pos = idx;
-                    self.exhausted =
-                        next_leaf == NULL_PAGE_ID && self.pos >= self.current_entries.len();
+                    self.exhausted = self.pos >= self.current_entries.len();
                     return Ok(());
                 }
                 NodeKind::Internal { entries } => {
-                    current_id = self.child_for_key_internal(&entries, target);
+                    let (child_idx, child_id) = self.pick_child(&entries, target);
+                    self.stack.push((current_id, child_idx));
+                    current_id = child_id;
                 }
             }
         }
     }
 
-    fn child_for_key_internal(&self, entries: &[(Bytes, PageId)], key: Option<&[u8]>) -> PageId {
+    fn pick_child(&self, entries: &[(Bytes, PageId)], key: Option<&[u8]>) -> (usize, PageId) {
         match key {
-            None => entries[0].1,
+            None => (0, entries[0].1),
             Some(key) => {
+                let mut idx = 0;
                 let mut child = entries[0].1;
-                for (sep, cid) in entries.iter().skip(1) {
+                for (i, (sep, cid)) in entries.iter().enumerate().skip(1) {
                     if key < sep.as_ref() {
-                        return child;
+                        return (idx, child);
                     }
+                    idx = i;
                     child = *cid;
                 }
-                child
+                (idx, child)
             }
         }
     }
 
     fn advance_leaf(&mut self) -> Result<bool> {
         if self.current_leaf == NULL_PAGE_ID {
+            self.exhausted = true;
             return Ok(false);
         }
-        let page = self.pager.read(self.current_leaf)?;
-        let node = Node::from_page(&page)?;
-        if let NodeKind::Leaf { next_leaf, .. } = node.kind {
-            if next_leaf == NULL_PAGE_ID {
-                self.exhausted = true;
-                return Ok(false);
+        // Ascend the parent stack until we find an ancestor with a right sibling.
+        while let Some((parent_id, child_idx)) = self.stack.pop() {
+            let parent_page = self.pager.read(parent_id)?;
+            let parent_node = Node::from_page(&parent_page)?;
+            if let NodeKind::Internal { entries } = &parent_node.kind {
+                if child_idx + 1 < entries.len() {
+                    let next_child = entries[child_idx + 1].1;
+                    self.stack.push((parent_id, child_idx + 1));
+                    self.descend_to_leftmost_leaf(next_child)?;
+                    return Ok(true);
+                }
+            } else {
+                return Err(Error::Corruption(
+                    "iterator stack contains a non-internal node".into(),
+                ));
             }
-            let next_page = self.pager.read(next_leaf)?;
-            let next_node = Node::from_page(&next_page)?;
-            if let NodeKind::Leaf {
-                entries,
-                next_leaf: nn,
-            } = next_node.kind
-            {
-                self.current_leaf = next_leaf;
-                self.current_entries = entries;
-                self.pos = 0;
-                self.exhausted = nn == NULL_PAGE_ID && self.current_entries.is_empty();
-                return Ok(true);
-            }
-            return Err(Error::Corruption("next_leaf is not a leaf".into()));
         }
-        Err(Error::Corruption("current node is not a leaf".into()))
+        self.exhausted = true;
+        Ok(false)
+    }
+
+    fn descend_to_leftmost_leaf(&mut self, mut current_id: PageId) -> Result<()> {
+        loop {
+            let page = self.pager.read(current_id)?;
+            let node = Node::from_page(&page)?;
+            match node.kind {
+                NodeKind::Leaf { entries, .. } => {
+                    self.current_leaf = current_id;
+                    self.current_entries = entries;
+                    self.pos = 0;
+                    self.exhausted = self.current_entries.is_empty();
+                    return Ok(());
+                }
+                NodeKind::Internal { entries } => {
+                    let child_id = entries[0].1;
+                    self.stack.push((current_id, 0));
+                    current_id = child_id;
+                }
+            }
+        }
     }
 }
 
@@ -949,6 +1076,8 @@ mod tests {
             max_inline_value_size: page_size / 4,
             min_fill_percent: 50,
             cache_size: 0,
+            max_value_size: 16 * 1024 * 1024,
+            max_batch_ops: 10_000,
         };
         let tree = Tree::new(pager, &options);
         (tree, dir)

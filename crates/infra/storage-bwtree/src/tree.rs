@@ -14,13 +14,14 @@ use parking_lot::Mutex;
 use crate::error::{BoundKind, Error, Result};
 use crate::mapping_table::{MappingTable, retire_chain};
 use crate::node::{
-    LeafSearchResult, child_for_key, consolidate, inner_needs_merge, leaf_needs_merge,
-    leaf_needs_split, leaf_size, logical_inner_entries, logical_leaf_entries, search_leaf_chain,
+    LeafSearchResult, child_for_key, consolidate, inner_needs_merge, inner_needs_split, inner_size,
+    leaf_needs_merge, leaf_needs_split, leaf_size, logical_inner_entries, logical_leaf_entries,
+    search_leaf_chain,
 };
 use crate::options::BwTreeOptions;
 use crate::overflow::OverflowStore;
 use crate::page::{
-    BaseNode, DeltaKind, InnerBase, LeafBase, NodeHeader, PageState, Payload, Pid, Value, NULL_PID,
+    BaseNode, DeltaKind, InnerBase, LeafBase, NULL_PID, NodeHeader, PageState, Payload, Pid, Value,
 };
 
 /// In-memory Bw-Tree.
@@ -55,6 +56,8 @@ impl Tree {
         Ok(result)
     }
 
+    // `guard` is held across recursive calls to keep the epoch pin alive.
+    #[allow(clippy::only_used_in_recursion)]
     fn get_recursive(&self, pid: Pid, key: &[u8], guard: &epoch::Guard) -> Result<Option<Bytes>> {
         if pid == NULL_PID {
             return Ok(None);
@@ -72,17 +75,18 @@ impl Tree {
 
         if state.header.depth == 0 {
             // Leaf: follow side link if the key is past the high key.
-            if !state.header.high_key.is_empty() && key >= state.header.high_key.as_ref() {
-                if let Some(right) = state.header.right_sibling {
-                    return self.get_recursive(right, key, guard);
-                }
+            if !state.header.high_key.is_empty()
+                && key >= state.header.high_key.as_ref()
+                && let Some(right) = state.header.right_sibling
+            {
+                return self.get_recursive(right, key, guard);
             }
             match search_leaf_chain(state, key) {
                 LeafSearchResult::Found(value) => Ok(Some(self.resolve_value(value)?)),
                 LeafSearchResult::Deleted => Ok(None),
-                LeafSearchResult::NeedBase => Err(Error::Corruption(format!(
-                    "leaf {pid} chain missing base"
-                ))),
+                LeafSearchResult::NeedBase => {
+                    Err(Error::Corruption(format!("leaf {pid} chain missing base")))
+                }
             }
         } else {
             let entries = logical_inner_entries(state);
@@ -98,6 +102,9 @@ impl Tree {
     pub fn insert(&self, root_pid: Pid, key: &[u8], value: &[u8], lsn: u64) -> Result<Pid> {
         self.check_key_size(key)?;
         let value = self.encode_value(value)?;
+        if root_pid == NULL_PID {
+            return self.create_root_leaf(key, value, lsn);
+        }
         let guard = epoch::pin();
         let mut current_root = root_pid;
         loop {
@@ -129,9 +136,9 @@ impl Tree {
         guard: &epoch::Guard,
     ) -> Result<Pid> {
         let path = self.find_leaf_path(root_pid, key, guard)?;
-        let (leaf_pid, leaf_ptr) = *path.last().ok_or_else(|| {
-            Error::Corruption("empty path during insert".into())
-        })?;
+        let (leaf_pid, leaf_ptr) = *path
+            .last()
+            .ok_or_else(|| Error::Corruption("empty path during insert".into()))?;
         let leaf_state = unsafe { &*leaf_ptr };
 
         // Build insert delta.
@@ -175,8 +182,34 @@ impl Tree {
         }
     }
 
+    fn create_root_leaf(&self, key: &[u8], value: Value, lsn: u64) -> Result<Pid> {
+        let pid = self.mapping_table.allocate_pid();
+        let header = NodeHeader {
+            low_key: Bytes::copy_from_slice(key),
+            high_key: Bytes::new(),
+            right_sibling: None,
+            item_count: 1,
+            depth: 0,
+            delta_chain_length: 0,
+        };
+        let state = PageState::new(
+            header,
+            Payload::Base(BaseNode::Leaf(LeafBase {
+                entries: vec![(Bytes::copy_from_slice(key), value)],
+            })),
+            std::ptr::null_mut(),
+            lsn,
+        );
+        let ptr = Box::into_raw(Box::new(state));
+        self.mapping_table.store(pid, ptr);
+        Ok(pid)
+    }
+
     /// Delete a key.
     pub fn delete(&self, root_pid: Pid, key: &[u8], lsn: u64) -> Result<Pid> {
+        if root_pid == NULL_PID {
+            return Ok(NULL_PID);
+        }
         let guard = epoch::pin();
         let mut current_root = root_pid;
         loop {
@@ -196,17 +229,11 @@ impl Tree {
         Ok(current_root)
     }
 
-    fn try_delete(
-        &self,
-        root_pid: Pid,
-        key: &[u8],
-        lsn: u64,
-        guard: &epoch::Guard,
-    ) -> Result<Pid> {
+    fn try_delete(&self, root_pid: Pid, key: &[u8], lsn: u64, guard: &epoch::Guard) -> Result<Pid> {
         let path = self.find_leaf_path(root_pid, key, guard)?;
-        let (leaf_pid, leaf_ptr) = *path.last().ok_or_else(|| {
-            Error::Corruption("empty path during delete".into())
-        })?;
+        let (leaf_pid, leaf_ptr) = *path
+            .last()
+            .ok_or_else(|| Error::Corruption("empty path during delete".into()))?;
         let leaf_state = unsafe { &*leaf_ptr };
 
         let new_header = NodeHeader {
@@ -234,9 +261,10 @@ impl Tree {
                 {
                     new_root = self.maybe_consolidate_path(&path, guard)?;
                 }
-                if leaf_needs_merge(&logical_leaf_entries(unsafe { &*delta }), &self.options) {
-                    new_root = self.merge_leaf(new_root, leaf_pid, key, guard)?;
-                }
+                // Merge is disabled in v1: the current implementation can
+                // drop entries under rare split/merge interleavings. Leaves
+                // are allowed to underflow; the tree remains correct.
+                let _ = (leaf_pid, key, guard);
                 Ok(new_root)
             }
             Err(_) => {
@@ -305,7 +333,11 @@ impl Tree {
         let state = unsafe { &*state_ptr };
         let (new_state, _old_head) = consolidate(state, &self.options);
         let new_ptr = Box::into_raw(Box::new(new_state));
-        if self.mapping_table.compare_exchange(pid, state_ptr, new_ptr).is_err() {
+        if self
+            .mapping_table
+            .compare_exchange(pid, state_ptr, new_ptr)
+            .is_err()
+        {
             let _ = unsafe { Box::from_raw(new_ptr) };
             return Ok(root_pid);
         }
@@ -313,13 +345,19 @@ impl Tree {
         Ok(root_pid)
     }
 
-    fn split_leaf(&self, root_pid: Pid, leaf_pid: Pid, key: &[u8], guard: &epoch::Guard) -> Result<Pid> {
+    fn split_leaf(
+        &self,
+        root_pid: Pid,
+        leaf_pid: Pid,
+        key: &[u8],
+        guard: &epoch::Guard,
+    ) -> Result<Pid> {
         let _lock = self.smo_lock.lock();
         // Re-traverse to get the current leaf state.
         let path = self.find_leaf_path(root_pid, key, guard)?;
-        let (current_leaf_pid, current_leaf_ptr) = *path.last().ok_or_else(|| {
-            Error::Corruption("empty path during split".into())
-        })?;
+        let (current_leaf_pid, current_leaf_ptr) = *path
+            .last()
+            .ok_or_else(|| Error::Corruption("empty path during split".into()))?;
         if current_leaf_pid != leaf_pid {
             return Ok(root_pid);
         }
@@ -346,6 +384,25 @@ impl Tree {
         let right_pid = self.mapping_table.allocate_pid();
         let old_right_sibling = leaf_state.header.right_sibling;
 
+        // Build the new left base containing only the left half.
+        let left_header = NodeHeader {
+            low_key: leaf_state.header.low_key.clone(),
+            high_key: separator.clone(),
+            right_sibling: Some(right_pid),
+            item_count: left_entries.len() as u32,
+            depth: 0,
+            delta_chain_length: 0,
+        };
+        let left_state = PageState::new(
+            left_header,
+            Payload::Base(BaseNode::Leaf(LeafBase {
+                entries: left_entries,
+            })),
+            std::ptr::null_mut(),
+            leaf_state.lsn,
+        );
+        let left_ptr = Box::into_raw(Box::new(left_state));
+
         // Build right sibling base node.
         let right_header = NodeHeader {
             low_key: separator.clone(),
@@ -366,35 +423,18 @@ impl Tree {
         let right_ptr = Box::into_raw(Box::new(right_state));
         self.mapping_table.store(right_pid, right_ptr);
 
-        // Build split delta on the left leaf.
-        let split_delta_header = NodeHeader {
-            low_key: leaf_state.header.low_key.clone(),
-            high_key: separator.clone(),
-            right_sibling: Some(right_pid),
-            item_count: left_entries.len() as u32,
-            depth: 0,
-            delta_chain_length: leaf_state.header.delta_chain_length + 1,
-        };
-        let split_delta = PageState::new(
-            split_delta_header,
-            Payload::Delta(DeltaKind::Split {
-                split_key: separator.clone(),
-                new_right_sibling: right_pid,
-            }),
-            leaf_ptr,
-            leaf_state.lsn,
-        );
-        let split_delta_ptr = Box::into_raw(Box::new(split_delta));
+        // Install the new left base atomically.
         if self
             .mapping_table
-            .compare_exchange(current_leaf_pid, leaf_ptr, split_delta_ptr)
+            .compare_exchange(current_leaf_pid, leaf_ptr, left_ptr)
             .is_err()
         {
+            let _ = unsafe { Box::from_raw(left_ptr) };
             let _ = unsafe { Box::from_raw(right_ptr) };
-            let _ = unsafe { Box::from_raw(split_delta_ptr) };
             self.mapping_table.free_pid(right_pid);
             return Ok(root_pid);
         }
+        unsafe { retire_chain(leaf_ptr, guard) };
 
         // Update parent with a separator delta.
         if path.len() == 1 {
@@ -422,62 +462,236 @@ impl Tree {
             return Ok(new_root_pid);
         }
 
-        let (parent_pid, parent_ptr) = path[path.len() - 2];
-        self.post_separator(parent_pid, parent_ptr, separator, right_pid, guard)?;
+        let (parent_pid, _parent_ptr) = path[path.len() - 2];
+        self.insert_into_parent(root_pid, parent_pid, separator, right_pid, guard)
+    }
+
+    fn insert_into_parent(
+        &self,
+        root_pid: Pid,
+        parent_pid: Pid,
+        separator: Bytes,
+        right_pid: Pid,
+        guard: &epoch::Guard,
+    ) -> Result<Pid> {
+        let parent_ptr = self
+            .mapping_table
+            .load(parent_pid)
+            .ok_or_else(|| Error::Corruption(format!("missing parent {parent_pid}")))?;
+        let parent_state = unsafe { &*parent_ptr };
+        let entries = logical_inner_entries(parent_state);
+        let mut new_entries = entries.clone();
+        let pos = new_entries
+            .partition_point(|(sep, _)| sep.as_ref() <= separator.as_ref())
+            .max(1);
+        new_entries.insert(pos, (separator, right_pid));
+
+        if !inner_needs_split(&new_entries, &self.options) {
+            return self.install_inner_base(root_pid, parent_pid, parent_ptr, new_entries, guard);
+        }
+
+        // The parent overflowed; split it. We hold the global SMO lock, so the
+        // tree structure is stable while we re-traverse to the parent.
+        let path = self.find_path_to(root_pid, parent_pid, new_entries[pos].0.as_ref(), guard)?;
+        let (current_parent_pid, current_parent_ptr) = *path
+            .last()
+            .ok_or_else(|| Error::Corruption("parent disappeared during split".into()))?;
+        if current_parent_pid != parent_pid {
+            return Ok(root_pid);
+        }
+
+        // Split the entries *including* the newly inserted separator. The
+        // re-traversal only confirms the parent is still in place; its logical
+        // entries before the insert are in `parent_state`.
+        let split_point = find_inner_split_point(&new_entries, &self.options)?;
+        let right_entries = new_entries.split_at(split_point).1.to_vec();
+        let left_entries = new_entries.split_at(split_point).0.to_vec();
+        let promoted_separator = right_entries[0].0.clone();
+        let leftmost_child = left_entries[0].1;
+
+        let new_right_pid = self.mapping_table.allocate_pid();
+        let old_right_sibling = parent_state.header.right_sibling;
+        let old_high_key = parent_state.header.high_key.clone();
+
+        let left_header = NodeHeader {
+            low_key: parent_state.header.low_key.clone(),
+            high_key: promoted_separator.clone(),
+            right_sibling: Some(new_right_pid),
+            item_count: (left_entries.len().saturating_sub(1)) as u32,
+            depth: parent_state.header.depth,
+            delta_chain_length: 0,
+        };
+        let left_state = PageState::new(
+            left_header,
+            Payload::Base(BaseNode::Inner(InnerBase {
+                entries: left_entries.into_iter().skip(1).collect(),
+                leftmost_child,
+            })),
+            std::ptr::null_mut(),
+            parent_state.lsn,
+        );
+        let left_ptr = Box::into_raw(Box::new(left_state));
+
+        let right_header = NodeHeader {
+            low_key: promoted_separator.clone(),
+            high_key: old_high_key,
+            right_sibling: old_right_sibling,
+            item_count: (right_entries.len().saturating_sub(1)) as u32,
+            depth: parent_state.header.depth,
+            delta_chain_length: 0,
+        };
+        // First entry of right half becomes the leftmost child; its separator
+        // is promoted to the parent.
+        let right_leftmost = right_entries[0].1;
+        let right_state = PageState::new(
+            right_header,
+            Payload::Base(BaseNode::Inner(InnerBase {
+                entries: right_entries.into_iter().skip(1).collect(),
+                leftmost_child: right_leftmost,
+            })),
+            std::ptr::null_mut(),
+            parent_state.lsn,
+        );
+        let right_ptr = Box::into_raw(Box::new(right_state));
+        self.mapping_table.store(new_right_pid, right_ptr);
+
+        if self
+            .mapping_table
+            .compare_exchange(current_parent_pid, current_parent_ptr, left_ptr)
+            .is_err()
+        {
+            let _ = unsafe { Box::from_raw(left_ptr) };
+            let _ = unsafe { Box::from_raw(right_ptr) };
+            self.mapping_table.free_pid(new_right_pid);
+            return Ok(root_pid);
+        }
+        unsafe { retire_chain(current_parent_ptr, guard) };
+
+        if path.len() == 1 {
+            // The split node was the root; create a new root inner node.
+            let new_root_pid = self.mapping_table.allocate_pid();
+            let root_header = NodeHeader {
+                low_key: Bytes::new(),
+                high_key: Bytes::new(),
+                right_sibling: None,
+                item_count: 1,
+                depth: parent_state.header.depth + 1,
+                delta_chain_length: 0,
+            };
+            let root_state = PageState::new(
+                root_header,
+                Payload::Base(BaseNode::Inner(InnerBase {
+                    entries: vec![(promoted_separator.clone(), new_right_pid)],
+                    leftmost_child: current_parent_pid,
+                })),
+                std::ptr::null_mut(),
+                parent_state.lsn,
+            );
+            let root_ptr = Box::into_raw(Box::new(root_state));
+            self.mapping_table.store(new_root_pid, root_ptr);
+            return Ok(new_root_pid);
+        }
+
+        // Recursively insert the promoted separator into the grandparent.
+        let grandparent_pid = path[path.len() - 2].0;
+        self.insert_into_parent(
+            root_pid,
+            grandparent_pid,
+            promoted_separator,
+            new_right_pid,
+            guard,
+        )
+    }
+
+    fn install_inner_base(
+        &self,
+        root_pid: Pid,
+        parent_pid: Pid,
+        parent_ptr: *mut PageState,
+        entries: Vec<(Bytes, Pid)>,
+        guard: &epoch::Guard,
+    ) -> Result<Pid> {
+        let parent_state = unsafe { &*parent_ptr };
+        let leftmost_child = entries[0].1;
+        let new_parent = PageState::new(
+            NodeHeader {
+                low_key: parent_state.header.low_key.clone(),
+                high_key: parent_state.header.high_key.clone(),
+                right_sibling: parent_state.header.right_sibling,
+                item_count: (entries.len().saturating_sub(1)) as u32,
+                depth: parent_state.header.depth,
+                delta_chain_length: 0,
+            },
+            Payload::Base(BaseNode::Inner(InnerBase {
+                entries: entries.into_iter().skip(1).collect(),
+                leftmost_child,
+            })),
+            std::ptr::null_mut(),
+            parent_state.lsn,
+        );
+        let new_ptr = Box::into_raw(Box::new(new_parent));
+        if self
+            .mapping_table
+            .compare_exchange(parent_pid, parent_ptr, new_ptr)
+            .is_err()
+        {
+            let _ = unsafe { Box::from_raw(new_ptr) };
+            return Ok(root_pid);
+        }
+        unsafe { retire_chain(parent_ptr, guard) };
         Ok(root_pid)
     }
 
-    fn post_separator(
+    fn find_path_to(
         &self,
-        parent_pid: Pid,
-        parent_ptr: *mut PageState,
-        separator: Bytes,
-        right_pid: Pid,
+        root_pid: Pid,
+        target_pid: Pid,
+        key: &[u8],
         _guard: &epoch::Guard,
-    ) -> Result<()> {
-        let parent_state = unsafe { &*parent_ptr };
-        let new_header = NodeHeader {
-            item_count: parent_state.header.item_count + 1,
-            delta_chain_length: parent_state.header.delta_chain_length + 1,
-            ..parent_state.header.clone()
-        };
-        let entries = logical_inner_entries(parent_state);
-        let next_sep = entries
-            .iter()
-            .find(|(k, _)| k.as_ref() > separator.as_ref())
-            .map(|(k, _)| k.clone())
-            .unwrap_or_default();
-        let sep_delta = PageState::new(
-            new_header,
-            Payload::Delta(DeltaKind::Separator {
-                separator_key: separator,
-                new_child: right_pid,
-                next_separator_key: next_sep,
-            }),
-            parent_ptr,
-            parent_state.lsn,
-        );
-        let sep_delta_ptr = Box::into_raw(Box::new(sep_delta));
-        if self
-            .mapping_table
-            .compare_exchange(parent_pid, parent_ptr, sep_delta_ptr)
-            .is_err()
-        {
-            let _ = unsafe { Box::from_raw(sep_delta_ptr) };
-            // Parent changed; the split is already visible via side link, so
-            // another thread must have helped. This is safe.
+    ) -> Result<Vec<(Pid, *mut PageState)>> {
+        let mut path = Vec::new();
+        let mut current_pid = root_pid;
+        loop {
+            let state_ptr = self
+                .mapping_table
+                .load(current_pid)
+                .ok_or_else(|| Error::Corruption(format!("missing page {current_pid}")))?;
+            let state = unsafe { &*state_ptr };
+            path.push((current_pid, state_ptr));
+            if current_pid == target_pid {
+                return Ok(path);
+            }
+            if state.header.depth == 0 {
+                return Err(Error::Corruption(format!(
+                    "reached leaf before finding page {target_pid}"
+                )));
+            }
+            let entries = logical_inner_entries(state);
+            let child = child_for_key(&entries, key);
+            if child == NULL_PID {
+                return Err(Error::Corruption(format!(
+                    "null child while searching for page {target_pid}"
+                )));
+            }
+            current_pid = child;
         }
-        Ok(())
     }
 
-    fn merge_leaf(&self, root_pid: Pid, leaf_pid: Pid, key: &[u8], guard: &epoch::Guard) -> Result<Pid> {
+    #[allow(dead_code)]
+    fn merge_leaf(
+        &self,
+        root_pid: Pid,
+        leaf_pid: Pid,
+        key: &[u8],
+        guard: &epoch::Guard,
+    ) -> Result<Pid> {
         let _lock = self.smo_lock.lock();
         // Find the leaf and its left sibling.
         let path = self.find_leaf_path(root_pid, key, guard)?;
         // Re-find the specific leaf in the path or re-traverse.
-        let (current_leaf_pid, current_leaf_ptr) = *path.last().ok_or_else(|| {
-            Error::Corruption("empty path during merge".into())
-        })?;
+        let (current_leaf_pid, current_leaf_ptr) = *path
+            .last()
+            .ok_or_else(|| Error::Corruption("empty path during merge".into()))?;
         if current_leaf_pid != leaf_pid {
             return Ok(root_pid);
         }
@@ -508,25 +722,19 @@ impl Tree {
         }
         let (parent_pid, parent_ptr) = path[path.len() - 2];
         let _parent_entries = logical_inner_entries(unsafe { &*parent_ptr });
-        let (left_sibling_pid, left_sibling_ptr) = match self.find_left_sibling(
-            parent_pid,
-            parent_ptr,
-            current_leaf_pid,
-            guard,
-        )? {
-            Some(p) => p,
-            None => return Ok(root_pid),
-        };
+        let (left_sibling_pid, left_sibling_ptr) =
+            match self.find_left_sibling(parent_pid, parent_ptr, current_leaf_pid, guard)? {
+                Some(p) => p,
+                None => return Ok(root_pid),
+            };
         let left_state = unsafe { &*left_sibling_ptr };
         let left_entries = match &left_state.payload {
             Payload::Base(BaseNode::Leaf(leaf)) => leaf.entries.clone(),
             _ => logical_leaf_entries(left_state),
         };
 
-        let merged_entries: Vec<(Bytes, Value)> = left_entries
-            .into_iter()
-            .chain(leaf_entries)
-            .collect();
+        let merged_entries: Vec<(Bytes, Value)> =
+            left_entries.into_iter().chain(leaf_entries).collect();
         if leaf_size(&merged_entries) > self.options.node_size_threshold() {
             // Combined node would overflow; redistribution is not implemented.
             return Ok(root_pid);
@@ -590,51 +798,54 @@ impl Tree {
         // Update parent to remove the right leaf's separator.
         let parent_state = unsafe { &*parent_ptr };
         let parent_entries = logical_inner_entries(parent_state);
-        let sep_to_remove = parent_entries
-            .iter()
-            .find(|(_, pid)| *pid == current_leaf_pid)
-            .map(|(k, _)| k.clone())
-            .unwrap_or_default();
-        let next_sep = parent_entries
-            .iter()
-            .find(|(k, _)| k.as_ref() > sep_to_remove.as_ref())
-            .map(|(k, _)| k.clone())
-            .unwrap_or_default();
-        let sep_delta = PageState::new(
+        let new_entries: Vec<(Bytes, Pid)> = parent_entries
+            .into_iter()
+            .filter(|(_, pid)| *pid != current_leaf_pid)
+            .collect();
+        let leftmost_child = new_entries[0].1;
+        let new_parent = PageState::new(
             NodeHeader {
-                item_count: parent_state.header.item_count.saturating_sub(1),
-                delta_chain_length: parent_state.header.delta_chain_length + 1,
-                ..parent_state.header.clone()
+                low_key: parent_state.header.low_key.clone(),
+                high_key: parent_state.header.high_key.clone(),
+                right_sibling: parent_state.header.right_sibling,
+                item_count: (new_entries.len().saturating_sub(1)) as u32,
+                depth: parent_state.header.depth,
+                delta_chain_length: 0,
             },
-            Payload::Delta(DeltaKind::Separator {
-                separator_key: sep_to_remove,
-                new_child: left_sibling_pid,
-                next_separator_key: next_sep,
-            }),
-            parent_ptr,
+            Payload::Base(BaseNode::Inner(InnerBase {
+                entries: new_entries.into_iter().skip(1).collect(),
+                leftmost_child,
+            })),
+            std::ptr::null_mut(),
             parent_state.lsn,
         );
-        let sep_delta_ptr = Box::into_raw(Box::new(sep_delta));
+        let new_parent_ptr = Box::into_raw(Box::new(new_parent));
         if self
             .mapping_table
-            .compare_exchange(parent_pid, parent_ptr, sep_delta_ptr)
+            .compare_exchange(parent_pid, parent_ptr, new_parent_ptr)
             .is_err()
         {
-            let _ = unsafe { Box::from_raw(sep_delta_ptr) };
+            let _ = unsafe { Box::from_raw(new_parent_ptr) };
         }
 
         // Mark right leaf PID as free (delayed by epoch).
-        self.mapping_table.store(current_leaf_pid, std::ptr::null_mut());
+        self.mapping_table
+            .store(current_leaf_pid, std::ptr::null_mut());
         unsafe { retire_chain(remove_delta_ptr, guard) };
 
         // If parent underflows, recursively merge up.
-        let parent_after = logical_inner_entries(unsafe { &*self.mapping_table.load(parent_pid).unwrap() });
+        let parent_after_ptr = self
+            .mapping_table
+            .load(parent_pid)
+            .ok_or_else(|| Error::Corruption(format!("missing parent {parent_pid} after merge")))?;
+        let parent_after = logical_inner_entries(unsafe { &*parent_after_ptr });
         if inner_needs_merge(&parent_after, &self.options) && path.len() > 2 {
             return self.merge_inner(root_pid, parent_pid, guard);
         }
         Ok(root_pid)
     }
 
+    #[allow(dead_code)]
     fn find_left_sibling(
         &self,
         _parent_pid: Pid,
@@ -654,6 +865,7 @@ impl Tree {
         Ok(None)
     }
 
+    #[allow(dead_code)]
     fn merge_inner(&self, root_pid: Pid, inner_pid: Pid, guard: &epoch::Guard) -> Result<Pid> {
         // Simplified: do not recursively merge inner nodes in the first version.
         // This can leave the tree slightly unbalanced but still correct.
@@ -718,6 +930,29 @@ fn find_split_point(entries: &[(Bytes, Value)], options: &BwTreeOptions) -> Resu
     }
 }
 
+fn find_inner_split_point(entries: &[(Bytes, Pid)], options: &BwTreeOptions) -> Result<usize> {
+    let mut split_point = entries.len() / 2;
+    split_point = split_point.max(1).min(entries.len().saturating_sub(1));
+    loop {
+        let left = &entries[..split_point];
+        let right = &entries[split_point..];
+        if inner_size(left) <= options.node_size_threshold()
+            && inner_size(right) <= options.node_size_threshold()
+        {
+            return Ok(split_point);
+        }
+        if split_point + 1 < entries.len() {
+            split_point += 1;
+        } else if split_point > 1 {
+            split_point -= 1;
+        } else {
+            return Err(Error::Corruption(
+                "cannot split inner: single entry does not fit".into(),
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,8 +978,14 @@ mod tests {
         let mut root = NULL_PID;
         root = tree.insert(root, b"a", b"1", 1).unwrap();
         root = tree.insert(root, b"b", b"2", 2).unwrap();
-        assert_eq!(tree.get(root, b"a").unwrap(), Some(Bytes::from_static(b"1")));
-        assert_eq!(tree.get(root, b"b").unwrap(), Some(Bytes::from_static(b"2")));
+        assert_eq!(
+            tree.get(root, b"a").unwrap(),
+            Some(Bytes::from_static(b"1"))
+        );
+        assert_eq!(
+            tree.get(root, b"b").unwrap(),
+            Some(Bytes::from_static(b"2"))
+        );
         assert_eq!(tree.get(root, b"c").unwrap(), None);
     }
 
@@ -756,7 +997,29 @@ mod tests {
         root = tree.insert(root, b"b", b"2", 2).unwrap();
         root = tree.delete(root, b"a", 3).unwrap();
         assert_eq!(tree.get(root, b"a").unwrap(), None);
-        assert_eq!(tree.get(root, b"b").unwrap(), Some(Bytes::from_static(b"2")));
+        assert_eq!(
+            tree.get(root, b"b").unwrap(),
+            Some(Bytes::from_static(b"2"))
+        );
+    }
+
+    #[test]
+    fn delete_middle_key() {
+        let (tree, _dir) = make_tree(4096);
+        let mut root = NULL_PID;
+        root = tree.insert(root, b"a", b"1", 1).unwrap();
+        root = tree.insert(root, b"b", b"2", 2).unwrap();
+        root = tree.insert(root, b"c", b"3", 3).unwrap();
+        root = tree.delete(root, b"b", 4).unwrap();
+        assert_eq!(tree.get(root, b"b").unwrap(), None);
+        assert_eq!(
+            tree.get(root, b"a").unwrap(),
+            Some(Bytes::from_static(b"1"))
+        );
+        assert_eq!(
+            tree.get(root, b"c").unwrap(),
+            Some(Bytes::from_static(b"3"))
+        );
     }
 
     #[test]
@@ -770,6 +1033,28 @@ mod tests {
             assert_eq!(
                 tree.get(root, &[i]).unwrap(),
                 Some(Bytes::from(vec![i + 100]))
+            );
+        }
+    }
+
+    #[test]
+    fn inner_node_split() {
+        let (tree, _dir) = make_tree(512);
+        let mut root = NULL_PID;
+        const N: usize = 5_000;
+        for i in 0..N {
+            let key = format!("{:08}", i);
+            root = tree
+                .insert(root, key.as_bytes(), b"v", i as u64 + 1)
+                .unwrap();
+        }
+        for i in 0..N {
+            let key = format!("{:08}", i);
+            assert_eq!(
+                tree.get(root, key.as_bytes()).unwrap(),
+                Some(Bytes::from_static(b"v")),
+                "missing key {}",
+                key
             );
         }
     }

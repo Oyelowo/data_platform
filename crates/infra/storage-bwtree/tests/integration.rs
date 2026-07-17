@@ -106,10 +106,7 @@ fn reopen_and_recovery() {
     // Re-open the engine in the same directory.
     let engine2 = BwTreeEngine::open(dir.path(), BwTreeOptions::default()).unwrap();
     for i in 0..100u8 {
-        assert_eq!(
-            engine2.get(&[i]).unwrap(),
-            Some(Bytes::from(vec![i + 100]))
-        );
+        assert_eq!(engine2.get(&[i]).unwrap(), Some(Bytes::from(vec![i + 100])));
     }
 }
 
@@ -175,6 +172,29 @@ fn concurrent_multi_writer_stress() {
                 Some(Bytes::from(value))
             );
         }
+    }
+}
+
+#[test]
+fn large_dataset_with_inner_splits_survives_reopen() {
+    let (engine, dir) = open();
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in 0..5_000 {
+        let key = format!("{:08}", i);
+        tx.put(key.as_bytes(), b"v").unwrap();
+    }
+    tx.commit().unwrap();
+    engine.sync().unwrap();
+
+    let engine2 = BwTreeEngine::open(dir.path(), BwTreeOptions::default()).unwrap();
+    for i in 0..5_000 {
+        let key = format!("{:08}", i);
+        assert_eq!(
+            engine2.get(key.as_bytes()).unwrap(),
+            Some(Bytes::from_static(b"v")),
+            "missing key {}",
+            key
+        );
     }
 }
 

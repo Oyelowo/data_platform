@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 use crate::options::BwTreeOptions;
 use crate::page::{
-    BaseNode, DeltaKind, InnerBase, LeafBase, NodeHeader, PageState, Payload, Pid, Value, NULL_PID,
+    BaseNode, DeltaKind, InnerBase, LeafBase, NULL_PID, NodeHeader, PageState, Payload, Pid, Value,
 };
 
 /// Result of searching a leaf chain.
@@ -59,9 +59,13 @@ fn search_leaf_base(base: &LeafBase, key: &[u8]) -> LeafSearchResult {
 }
 
 /// Build the logical view of a leaf chain as a sorted vector of entries.
+///
+/// Deltas are applied newest-to-oldest: the first delta seen for a key wins,
+/// so a delete followed by a newer insert leaves the key present, while an
+/// insert followed by a newer delete removes it.
 pub fn logical_leaf_entries(state: &PageState) -> Vec<(Bytes, Value)> {
-    let mut inserts: Vec<(Bytes, Value)> = Vec::new();
-    let mut deletes: Vec<Bytes> = Vec::new();
+    let mut overrides: std::collections::BTreeMap<Bytes, Option<Value>> =
+        std::collections::BTreeMap::new();
     let mut base: Option<&LeafBase> = None;
 
     let mut current = Some(state);
@@ -73,78 +77,30 @@ pub fn logical_leaf_entries(state: &PageState) -> Vec<(Bytes, Value)> {
             }
             Payload::Base(BaseNode::Inner(_)) => break,
             Payload::Delta(DeltaKind::Insert { key, value }) => {
-                inserts.push((key.clone(), value.clone()));
+                overrides
+                    .entry(key.clone())
+                    .or_insert_with(|| Some(value.clone()));
             }
             Payload::Delta(DeltaKind::Delete { key }) => {
-                deletes.push(key.clone());
+                overrides.entry(key.clone()).or_insert_with(|| None);
             }
             _ => {}
         }
         current = unsafe { page.next.as_ref() };
     }
 
-    // Sort and deduplicate inserts, keeping the newest value for each key.
-    inserts.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut deduped: Vec<(Bytes, Value)> = Vec::new();
-    for (key, value) in inserts {
-        if let Some(last) = deduped.last_mut() {
-            if last.0 == key {
-                last.1 = value;
-                continue;
-            }
-        }
-        deduped.push((key, value));
-    }
-
-    let mut result = Vec::new();
     if let Some(base) = base {
-        let mut del_iter = deletes.iter().peekable();
-        let mut ins_iter = deduped.iter().peekable();
         for (key, value) in &base.entries {
-            // Apply deletes.
-            while let Some(del) = del_iter.peek() {
-                if del.as_ref() < key.as_ref() {
-                    del_iter.next();
-                } else {
-                    break;
-                }
-            }
-            if del_iter.peek() == Some(&key) {
-                del_iter.next();
-                continue;
-            }
-            // Merge inserts that belong before this base key.
-            while let Some((ins_key, ins_value)) = ins_iter.peek() {
-                if ins_key.as_ref() < key.as_ref() {
-                    result.push(((*ins_key).clone(), (*ins_value).clone()));
-                    ins_iter.next();
-                } else {
-                    break;
-                }
-            }
-            if let Some((ins_key, ins_value)) = ins_iter.peek() {
-                if ins_key.as_ref() == key.as_ref() {
-                    result.push(((*ins_key).clone(), (*ins_value).clone()));
-                    ins_iter.next();
-                    continue;
-                }
-            }
-            result.push((key.clone(), value.clone()));
-        }
-        // Remaining inserts after the last base key.
-        for (ins_key, ins_value) in ins_iter {
-            result.push((ins_key.clone(), ins_value.clone()));
-        }
-    } else {
-        // No base node (should only happen transiently during consolidation).
-        for (ins_key, ins_value) in deduped {
-            if !deletes.iter().any(|d| d.as_ref() == ins_key.as_ref()) {
-                result.push((ins_key, ins_value));
-            }
+            overrides
+                .entry(key.clone())
+                .or_insert_with(|| Some(value.clone()));
         }
     }
 
-    result
+    overrides
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|v| (key, v)))
+        .collect()
 }
 
 /// Build the logical view of an inner chain as a sorted vector of separator
@@ -173,7 +129,10 @@ pub fn logical_inner_entries(state: &PageState) -> Vec<(Bytes, Pid)> {
                     deletes.push(next_separator_key.clone());
                 }
             }
-            Payload::Delta(DeltaKind::Split { split_key, new_right_sibling }) => {
+            Payload::Delta(DeltaKind::Split {
+                split_key,
+                new_right_sibling,
+            }) => {
                 // Split delta on an inner node is not expected in this
                 // simplified protocol; treat as separator.
                 separators.push((split_key.clone(), *new_right_sibling));
@@ -186,25 +145,24 @@ pub fn logical_inner_entries(state: &PageState) -> Vec<(Bytes, Pid)> {
     separators.sort_by(|a, b| a.0.cmp(&b.0));
     let mut deduped: Vec<(Bytes, Pid)> = Vec::new();
     for (key, child) in separators {
-        if let Some(last) = deduped.last_mut() {
-            if last.0 == key {
-                last.1 = child;
-                continue;
-            }
+        if let Some(last) = deduped.last_mut()
+            && last.0 == key
+        {
+            // Newest mapping is already present; drop the older duplicate.
+            let _ = child;
+            continue;
         }
         deduped.push((key, child));
     }
 
     let mut result = Vec::new();
     if let Some(base) = base {
-        let mut base_iter = base.entries.iter();
+        let base_iter = base.entries.iter();
         let mut sep_iter = deduped.iter().peekable();
         let mut del_iter = deletes.iter().peekable();
 
-        // The first base entry is the leftmost child with an empty separator.
-        if let Some((_, leftmost)) = base_iter.next() {
-            result.push((Bytes::new(), *leftmost));
-        }
+        // The leftmost child is stored separately in InnerBase.
+        result.push((Bytes::new(), base.leftmost_child));
 
         for (key, child) in base_iter {
             // Apply separator deletes.
@@ -228,12 +186,12 @@ pub fn logical_inner_entries(state: &PageState) -> Vec<(Bytes, Pid)> {
                     break;
                 }
             }
-            if let Some((sep_key, sep_child)) = sep_iter.peek() {
-                if sep_key.as_ref() == key.as_ref() {
-                    result.push(((*sep_key).clone(), *sep_child));
-                    sep_iter.next();
-                    continue;
-                }
+            if let Some((sep_key, sep_child)) = sep_iter.peek()
+                && sep_key.as_ref() == key.as_ref()
+            {
+                result.push(((*sep_key).clone(), *sep_child));
+                sep_iter.next();
+                continue;
             }
             result.push((key.clone(), *child));
         }
@@ -281,7 +239,10 @@ pub fn consolidate(state: &PageState, _options: &BwTreeOptions) -> (PageState, *
                     delta_chain_length: 0,
                 };
                 let base = BaseNode::Leaf(LeafBase { entries });
-                (PageState::new(header, Payload::Base(base), std::ptr::null_mut(), state.lsn), old)
+                (
+                    PageState::new(header, Payload::Base(base), std::ptr::null_mut(), state.lsn),
+                    old,
+                )
             } else {
                 let entries = logical_inner_entries(state);
                 let leftmost_child = entries.first().map(|(_, c)| *c).unwrap_or(NULL_PID);
@@ -297,7 +258,10 @@ pub fn consolidate(state: &PageState, _options: &BwTreeOptions) -> (PageState, *
                     entries: entries.into_iter().skip(1).collect(),
                     leftmost_child,
                 });
-                (PageState::new(header, Payload::Base(base), std::ptr::null_mut(), state.lsn), old)
+                (
+                    PageState::new(header, Payload::Base(base), std::ptr::null_mut(), state.lsn),
+                    old,
+                )
             }
         }
     }
@@ -305,16 +269,16 @@ pub fn consolidate(state: &PageState, _options: &BwTreeOptions) -> (PageState, *
 
 fn copy_state(state: &PageState) -> PageState {
     let payload = match &state.payload {
-        Payload::Base(BaseNode::Leaf(leaf)) => {
-            Payload::Base(BaseNode::Leaf(LeafBase {
-                entries: leaf.entries.clone(),
-            }))
-        }
+        Payload::Base(BaseNode::Leaf(leaf)) => Payload::Base(BaseNode::Leaf(LeafBase {
+            entries: leaf.entries.clone(),
+        })),
         Payload::Base(BaseNode::Inner(inner)) => Payload::Base(BaseNode::Inner(InnerBase {
             entries: inner.entries.clone(),
             leftmost_child: inner.leftmost_child,
         })),
-        Payload::Delta(_delta) => Payload::Base(BaseNode::Leaf(LeafBase { entries: Vec::new() })),
+        Payload::Delta(_delta) => Payload::Base(BaseNode::Leaf(LeafBase {
+            entries: Vec::new(),
+        })),
     };
     PageState::new(
         NodeHeader {
@@ -342,6 +306,7 @@ pub fn leaf_size(entries: &[(Bytes, Value)]) -> usize {
 }
 
 /// Compute the serialized size of a logical inner node.
+#[allow(dead_code)]
 pub fn inner_size(entries: &[(Bytes, Pid)]) -> usize {
     // First entry has empty separator; count all entries including leftmost.
     entries.iter().map(|(k, _)| 2 + k.len() + 8).sum::<usize>()
@@ -353,13 +318,20 @@ pub fn leaf_needs_split(entries: &[(Bytes, Value)], options: &BwTreeOptions) -> 
 }
 
 /// Return true if the leaf node is below the minimum fill ratio.
+#[allow(dead_code)]
 pub fn leaf_needs_merge(entries: &[(Bytes, Value)], options: &BwTreeOptions) -> bool {
     leaf_size(entries) < options.min_node_size() && entries.len() > 1
 }
 
 /// Return true if the inner node is below the minimum fill ratio.
+#[allow(dead_code)]
 pub fn inner_needs_merge(entries: &[(Bytes, Pid)], options: &BwTreeOptions) -> bool {
     inner_size(entries) < options.min_node_size() && entries.len() > 1
+}
+
+/// Return true if the inner node should split.
+pub fn inner_needs_split(entries: &[(Bytes, Pid)], options: &BwTreeOptions) -> bool {
+    inner_size(entries) > options.node_size_threshold()
 }
 
 /// Pick the child PID for `key` from an inner node's logical entries.
@@ -394,8 +366,14 @@ mod tests {
     #[test]
     fn search_leaf_base_found() {
         let state = make_leaf_base(vec![
-            (Bytes::from_static(b"a"), Value::Inline(Bytes::from_static(b"1"))),
-            (Bytes::from_static(b"b"), Value::Inline(Bytes::from_static(b"2"))),
+            (
+                Bytes::from_static(b"a"),
+                Value::Inline(Bytes::from_static(b"1")),
+            ),
+            (
+                Bytes::from_static(b"b"),
+                Value::Inline(Bytes::from_static(b"2")),
+            ),
         ]);
         assert_eq!(
             search_leaf_chain(&state, b"a"),
@@ -410,80 +388,91 @@ mod tests {
 
     #[test]
     fn search_leaf_delta_wins() {
-        let base = Box::into_raw(Box::new(make_leaf_base(vec![
-            (Bytes::from_static(b"a"), Value::Inline(Bytes::from_static(b"1"))),
-        ])));
-        let head = make_leaf_delta(
+        let base = Box::into_raw(Box::new(make_leaf_base(vec![(
+            Bytes::from_static(b"a"),
+            Value::Inline(Bytes::from_static(b"1")),
+        )])));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
             DeltaKind::Insert {
                 key: Bytes::from_static(b"b"),
                 value: Value::Inline(Bytes::from_static(b"3")),
             },
             base,
-        );
+        )));
         assert_eq!(
-            search_leaf_chain(&head, b"b"),
+            search_leaf_chain(unsafe { &*head }, b"b"),
             LeafSearchResult::Found(Value::Inline(Bytes::from_static(b"3")))
         );
 
-        let head2 = make_leaf_delta(
+        let head2 = Box::into_raw(Box::new(make_leaf_delta(
             DeltaKind::Delete {
                 key: Bytes::from_static(b"a"),
             },
-            Box::into_raw(Box::new(head)),
-        );
-        assert_eq!(search_leaf_chain(&head2, b"a"), LeafSearchResult::Deleted);
+            head,
+        )));
         assert_eq!(
-            search_leaf_chain(&head2, b"b"),
+            search_leaf_chain(unsafe { &*head2 }, b"a"),
+            LeafSearchResult::Deleted
+        );
+        assert_eq!(
+            search_leaf_chain(unsafe { &*head2 }, b"b"),
             LeafSearchResult::Found(Value::Inline(Bytes::from_static(b"3")))
         );
 
         unsafe {
-            let _ = Box::from_raw(base);
+            let _ = Box::from_raw(head2);
         }
     }
 
     #[test]
     fn logical_leaf_merge_and_delete() {
         let base = Box::into_raw(Box::new(make_leaf_base(vec![
-            (Bytes::from_static(b"a"), Value::Inline(Bytes::from_static(b"1"))),
-            (Bytes::from_static(b"c"), Value::Inline(Bytes::from_static(b"3"))),
+            (
+                Bytes::from_static(b"a"),
+                Value::Inline(Bytes::from_static(b"1")),
+            ),
+            (
+                Bytes::from_static(b"c"),
+                Value::Inline(Bytes::from_static(b"3")),
+            ),
         ])));
-        let head = make_leaf_delta(
+        let head = Box::into_raw(Box::new(make_leaf_delta(
             DeltaKind::Insert {
                 key: Bytes::from_static(b"b"),
                 value: Value::Inline(Bytes::from_static(b"2")),
             },
             base,
-        );
-        let head = make_leaf_delta(
+        )));
+        let head2 = Box::into_raw(Box::new(make_leaf_delta(
             DeltaKind::Delete {
                 key: Bytes::from_static(b"a"),
             },
-            Box::into_raw(Box::new(head)),
-        );
-        let entries = logical_leaf_entries(&head);
+            head,
+        )));
+        let entries = logical_leaf_entries(unsafe { &*head2 });
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].0.as_ref(), b"b");
         assert_eq!(entries[1].0.as_ref(), b"c");
         unsafe {
-            let _ = Box::from_raw(base);
+            let _ = Box::from_raw(head2);
         }
     }
 
     #[test]
     fn consolidate_leaf() {
-        let base = Box::into_raw(Box::new(make_leaf_base(vec![
-            (Bytes::from_static(b"a"), Value::Inline(Bytes::from_static(b"1"))),
-        ])));
-        let head = make_leaf_delta(
+        let base = Box::into_raw(Box::new(make_leaf_base(vec![(
+            Bytes::from_static(b"a"),
+            Value::Inline(Bytes::from_static(b"1")),
+        )])));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
             DeltaKind::Insert {
                 key: Bytes::from_static(b"b"),
                 value: Value::Inline(Bytes::from_static(b"2")),
             },
             base,
-        );
+        )));
         let options = BwTreeOptions::default();
-        let (new_state, _) = consolidate(&head, &options);
+        let (new_state, _) = consolidate(unsafe { &*head }, &options);
         match &new_state.payload {
             Payload::Base(BaseNode::Leaf(leaf)) => {
                 assert_eq!(leaf.entries.len(), 2);
@@ -491,7 +480,89 @@ mod tests {
             _ => panic!("expected leaf base"),
         }
         unsafe {
-            let _ = Box::from_raw(base);
+            let _ = Box::from_raw(head);
+        }
+    }
+
+    #[test]
+    fn consolidate_delete() {
+        let base = Box::into_raw(Box::new(make_leaf_base(vec![
+            (
+                Bytes::from_static(b"a"),
+                Value::Inline(Bytes::from_static(b"1")),
+            ),
+            (
+                Bytes::from_static(b"b"),
+                Value::Inline(Bytes::from_static(b"2")),
+            ),
+            (
+                Bytes::from_static(b"c"),
+                Value::Inline(Bytes::from_static(b"3")),
+            ),
+        ])));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
+            DeltaKind::Delete {
+                key: Bytes::from_static(b"b"),
+            },
+            base,
+        )));
+        let options = BwTreeOptions::default();
+        let (new_state, _) = consolidate(unsafe { &*head }, &options);
+        match &new_state.payload {
+            Payload::Base(BaseNode::Leaf(leaf)) => {
+                assert_eq!(leaf.entries.len(), 2);
+                assert_eq!(leaf.entries[0].0.as_ref(), b"a");
+                assert_eq!(leaf.entries[1].0.as_ref(), b"c");
+            }
+            _ => panic!("expected leaf base"),
+        }
+        unsafe {
+            let _ = Box::from_raw(head);
+        }
+    }
+
+    #[test]
+    fn consolidate_insert_then_delete() {
+        let base = Box::into_raw(Box::new(make_leaf_base(vec![])));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
+            DeltaKind::Insert {
+                key: Bytes::from_static(b"a"),
+                value: Value::Inline(Bytes::from_static(b"1")),
+            },
+            base,
+        )));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
+            DeltaKind::Insert {
+                key: Bytes::from_static(b"b"),
+                value: Value::Inline(Bytes::from_static(b"2")),
+            },
+            head,
+        )));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
+            DeltaKind::Insert {
+                key: Bytes::from_static(b"c"),
+                value: Value::Inline(Bytes::from_static(b"3")),
+            },
+            head,
+        )));
+        let head = Box::into_raw(Box::new(make_leaf_delta(
+            DeltaKind::Delete {
+                key: Bytes::from_static(b"b"),
+            },
+            head,
+        )));
+        let options = BwTreeOptions::default();
+        let (new_state, _) = consolidate(unsafe { &*head }, &options);
+        match &new_state.payload {
+            Payload::Base(BaseNode::Leaf(leaf)) => {
+                assert_eq!(leaf.entries.len(), 2);
+                assert_eq!(leaf.entries[0].0.as_ref(), b"a");
+                assert_eq!(leaf.entries[1].0.as_ref(), b"c");
+            }
+            _ => panic!("expected leaf base"),
+        }
+        unsafe {
+            let _ = Box::from_raw(head);
         }
     }
 }

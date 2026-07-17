@@ -50,12 +50,16 @@ fn compaction_reduces_file_count_and_preserves_rows() {
     assert_eq!(engine.file_count(), 1);
 
     let result = engine.scan(&["id", "name"], &Predicate::True).unwrap();
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
     assert_eq!(map["id"].len(), 4);
     let ids: Vec<i64> = map["id"]
         .iter()
-        .map(|v| std::str::from_utf8(v.as_ref().unwrap()).unwrap().parse().unwrap())
+        .map(|v| {
+            std::str::from_utf8(v.as_ref().unwrap())
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
         .collect();
     assert_eq!(ids, vec![0, 1, 2, 3]);
 }

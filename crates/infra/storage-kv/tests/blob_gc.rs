@@ -316,9 +316,7 @@ fn blob_stats_rebuild_on_open() {
 
     for i in 0..5 {
         let key = format!("k{i}");
-        engine
-            .put(key.as_bytes(), &large_value(i, 100))
-            .unwrap();
+        engine.put(key.as_bytes(), &large_value(i, 100)).unwrap();
     }
     engine.sync().unwrap();
 

@@ -8,7 +8,7 @@ use crossbeam_epoch::{self as epoch};
 use crate::engine::EngineInner;
 use crate::error::{Error, Result};
 use crate::node::logical_leaf_entries;
-use crate::page::{Pid, Value, NULL_PID};
+use crate::page::{NULL_PID, Pid, Value};
 
 /// Cursor over a key range in the Bw-Tree.
 ///
@@ -54,6 +54,8 @@ impl BwTreeCursor {
         result
     }
 
+    // `guard` is held across recursive calls to keep the epoch pin alive.
+    #[allow(clippy::only_used_in_recursion)]
     fn seek_recursive(
         &mut self,
         pid: Pid,
@@ -139,7 +141,9 @@ impl Iterator for BwTreeCursor {
                 }
             }
             let (key, value) = &self.current_entries[self.pos];
-            if let Some(ref end) = self.end && key.as_ref() >= end.as_ref() {
+            if let Some(ref end) = self.end
+                && key.as_ref() >= end.as_ref()
+            {
                 self.exhausted = true;
                 return None;
             }

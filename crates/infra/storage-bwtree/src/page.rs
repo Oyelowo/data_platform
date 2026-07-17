@@ -132,6 +132,10 @@ impl Value {
 
 /// Delta record kinds. Deltas are prepended to a chain to install a state
 /// change with a single CAS.
+///
+/// Several variants are not constructed in v1 (splits rebuild base nodes,
+/// merges are disabled) but are kept for the next version.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeltaKind {
     /// Insert or overwrite a key in a leaf.
@@ -147,6 +151,7 @@ pub enum DeltaKind {
         key: Bytes,
     },
     /// Split a node: keys >= `split_key` belong to the new right sibling.
+    #[allow(dead_code)]
     Split {
         /// First key that belongs to the right sibling.
         split_key: Bytes,
@@ -175,7 +180,6 @@ pub enum DeltaKind {
         next_separator_key: Bytes,
     },
     /// Abort marker used to serialize structural modifications.
-    #[allow(dead_code)]
     Abort,
 }
 

@@ -92,11 +92,7 @@ impl MappingTable {
             return None;
         }
         let ptr = guard.entries[idx].load(Ordering::Acquire);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
+        if ptr.is_null() { None } else { Some(ptr) }
     }
 
     /// Store a page state pointer for `pid`.
@@ -177,7 +173,9 @@ mod tests {
     fn dummy_state() -> *mut PageState {
         Box::into_raw(Box::new(PageState::new(
             NodeHeader::default(),
-            Payload::Base(BaseNode::Leaf(LeafBase { entries: Vec::new() })),
+            Payload::Base(BaseNode::Leaf(LeafBase {
+                entries: Vec::new(),
+            })),
             ptr::null_mut(),
             0,
         )))

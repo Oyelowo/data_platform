@@ -31,7 +31,12 @@ fn snapshot_and_wal_truncation_are_consistent() {
     let values: Vec<i64> = result[0]
         .1
         .iter()
-        .map(|v| std::str::from_utf8(v.as_ref().unwrap()).unwrap().parse().unwrap())
+        .map(|v| {
+            std::str::from_utf8(v.as_ref().unwrap())
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
         .collect();
     assert_eq!(values, vec![1, 2]);
 }

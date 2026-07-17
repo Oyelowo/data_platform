@@ -26,8 +26,14 @@ fn data_survives_reopen() {
             .unwrap();
         engine
             .ingest(vec![
-                ("id".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
-                ("name".into(), vec![Some(Bytes::from("a")), Some(Bytes::from("b"))]),
+                (
+                    "id".into(),
+                    vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+                ),
+                (
+                    "name".into(),
+                    vec![Some(Bytes::from("a")), Some(Bytes::from("b"))],
+                ),
             ])
             .unwrap();
         engine.sync().unwrap();
@@ -36,8 +42,7 @@ fn data_survives_reopen() {
 
     let engine = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap();
     let result = engine.scan(&["id", "name"], &Predicate::True).unwrap();
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
     assert_eq!(
         map["id"],
         vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]

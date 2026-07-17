@@ -72,6 +72,7 @@ impl BwTreeOptions {
     }
 
     /// Return the byte threshold below which a node is considered underfull.
+    #[allow(dead_code)]
     pub(crate) fn min_node_size(&self) -> usize {
         self.page_size * self.min_fill_percent / 100
     }

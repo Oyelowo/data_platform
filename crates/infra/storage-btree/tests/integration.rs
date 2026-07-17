@@ -250,3 +250,198 @@ fn concurrent_writers_stress() {
         }
     }
 }
+
+#[test]
+fn check_integrity_passes_after_workload() {
+    let (engine, _dir) = open_engine();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in 0..200u32 {
+        let key = format!("k{:08}", i);
+        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
+            .unwrap();
+    }
+    tx.commit().unwrap();
+    engine.check_integrity().unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in (0..200u32).step_by(3) {
+        let key = format!("k{:08}", i);
+        tx.delete(key.as_bytes()).unwrap();
+    }
+    tx.commit().unwrap();
+    engine.check_integrity().unwrap();
+
+    engine.sync().unwrap();
+    engine.check_integrity().unwrap();
+}
+
+#[test]
+fn stats_account_for_all_files() {
+    let (engine, _dir) = open_engine();
+    let before = engine.stats().unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"a", &[0u8; 10_000]).unwrap();
+    tx.commit().unwrap();
+
+    let after = engine.stats().unwrap();
+    assert!(after.disk_bytes >= before.disk_bytes);
+    assert!(after.metrics.contains_key("storage_btree.retired_pages"));
+    assert!(
+        after
+            .metrics
+            .contains_key("storage_btree.cache_memory_bytes")
+    );
+}
+
+#[test]
+fn recover_after_meta_deleted() {
+    let (engine, dir) = open_engine();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"a", b"1").unwrap();
+    tx.put(b"b", b"2").unwrap();
+    tx.commit().unwrap();
+    // Do NOT sync; the WAL still contains the committed batch. Losing META
+    // should be recoverable by replaying the WAL from scratch.
+    drop(engine);
+
+    std::fs::remove_file(dir.path().join("META")).unwrap();
+
+    let engine = reopen_engine(&dir);
+    assert_eq!(engine.get(b"a").unwrap(), Some(Bytes::from_static(b"1")));
+    assert_eq!(engine.get(b"b").unwrap(), Some(Bytes::from_static(b"2")));
+    engine.check_integrity().unwrap();
+}
+
+#[test]
+fn scan_across_split_boundary() {
+    // Use a tiny page size so a modest number of keys forces leaf splits.
+    let dir = tempfile::tempdir().unwrap();
+    let engine = BtreeEngine::open(
+        dir.path(),
+        BtreeOptions {
+            page_size: 512,
+            max_inline_value_size: 64,
+            min_fill_percent: 50,
+            cache_size: 0,
+            max_value_size: 16 * 1024 * 1024,
+            max_batch_ops: 10_000,
+        },
+    )
+    .unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in 0..500u32 {
+        let key = format!("k{:08}", i);
+        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
+            .unwrap();
+    }
+    tx.commit().unwrap();
+    engine.check_integrity().unwrap();
+
+    let items: Vec<_> = engine
+        .scan(None, None)
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(items.len(), 500);
+    for (i, (key, value)) in items.iter().enumerate() {
+        assert_eq!(key.as_ref(), format!("k{:08}", i).as_bytes());
+        assert_eq!(value.as_ref(), format!("v{}", i).as_bytes());
+    }
+}
+
+#[test]
+fn delete_many_and_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = BtreeEngine::open(
+        dir.path(),
+        BtreeOptions {
+            page_size: 512,
+            max_inline_value_size: 64,
+            min_fill_percent: 50,
+            cache_size: 0,
+            max_value_size: 16 * 1024 * 1024,
+            max_batch_ops: 10_000,
+        },
+    )
+    .unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in 0..200u32 {
+        let key = format!("k{:08}", i);
+        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
+            .unwrap();
+    }
+    tx.commit().unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in (0..200u32).step_by(2) {
+        let key = format!("k{:08}", i);
+        tx.delete(key.as_bytes()).unwrap();
+    }
+    tx.commit().unwrap();
+    engine.check_integrity().unwrap();
+
+    let keys: Vec<_> = engine
+        .scan(None, None)
+        .unwrap()
+        .map(|r| r.unwrap().0)
+        .collect();
+    assert_eq!(keys.len(), 100);
+    for (i, key) in keys.iter().enumerate() {
+        let expected = format!("k{:08}", i * 2 + 1);
+        assert_eq!(key.as_ref(), expected.as_bytes());
+    }
+}
+
+#[test]
+fn max_value_size_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = BtreeEngine::open(
+        dir.path(),
+        BtreeOptions {
+            page_size: 4096,
+            max_inline_value_size: 1024,
+            min_fill_percent: 50,
+            cache_size: 0,
+            max_value_size: 64,
+            max_batch_ops: 10_000,
+        },
+    )
+    .unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"k", &[0u8; 65]).unwrap();
+    assert!(tx.commit().is_err());
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"k", &[0u8; 64]).unwrap();
+    tx.commit().unwrap();
+}
+
+#[test]
+fn max_batch_ops_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = BtreeEngine::open(
+        dir.path(),
+        BtreeOptions {
+            page_size: 4096,
+            max_inline_value_size: 1024,
+            min_fill_percent: 50,
+            cache_size: 0,
+            max_value_size: 16 * 1024 * 1024,
+            max_batch_ops: 3,
+        },
+    )
+    .unwrap();
+
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"a", b"1").unwrap();
+    tx.put(b"b", b"2").unwrap();
+    tx.put(b"c", b"3").unwrap();
+    tx.put(b"d", b"4").unwrap();
+    assert!(tx.commit().is_err());
+}

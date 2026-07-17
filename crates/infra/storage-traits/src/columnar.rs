@@ -61,9 +61,5 @@ pub trait ColumnarEngine: Send + Sync + 'static {
     fn ingest(&self, columns: ColumnBatch) -> Result<(), Self::Error>;
 
     /// Scan columns matching `projection`, filtering by `predicate`.
-    fn scan(
-        &self,
-        projection: &[&str],
-        predicate: &Predicate,
-    ) -> Result<ScanResult, Self::Error>;
+    fn scan(&self, projection: &[&str], predicate: &Predicate) -> Result<ScanResult, Self::Error>;
 }

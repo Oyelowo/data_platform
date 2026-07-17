@@ -59,10 +59,12 @@ pub fn scan(
         // positives (e.g. "20" > "100"). Stats pruning below handles numeric
         // columns correctly.
         if let Some(part_col) = partition_column
-            && manifest
-                .schema
-                .column(part_col)
-                .is_some_and(|c| matches!(c.ty, crate::types::ColumnType::Utf8 | crate::types::ColumnType::Binary))
+            && manifest.schema.column(part_col).is_some_and(|c| {
+                matches!(
+                    c.ty,
+                    crate::types::ColumnType::Utf8 | crate::types::ColumnType::Binary
+                )
+            })
             && !partition::partition_prune(part_col, &file.partition, predicate)
         {
             continue;
@@ -355,7 +357,10 @@ pub fn read_files_for_compaction(
             // Build an output batch in the requested schema order.
             let mut arrays: Vec<(String, ArrayRef)> = Vec::with_capacity(schema.columns.len());
             for def in &schema.columns {
-                let values = column_values.get(&def.name).cloned().unwrap_or_else(|| vec![None; num_rows]);
+                let values = column_values
+                    .get(&def.name)
+                    .cloned()
+                    .unwrap_or_else(|| vec![None; num_rows]);
                 let array: ArrayRef = match def.ty {
                     ColumnType::Bool => Arc::new(build_boolean_array(&values)?),
                     ColumnType::Int64 => Arc::new(build_int64_array(&values)?),
@@ -413,8 +418,9 @@ fn build_utf8_array(values: &[Option<Bytes>]) -> Result<arrow::array::StringArra
         match v {
             None => builder.append_null(),
             Some(b) => {
-                let s = std::str::from_utf8(b)
-                    .map_err(|e| crate::Error::Batch(format!("invalid utf8 for Utf8 column: {e}")))?;
+                let s = std::str::from_utf8(b).map_err(|e| {
+                    crate::Error::Batch(format!("invalid utf8 for Utf8 column: {e}"))
+                })?;
                 builder.append_value(s);
             }
         }
@@ -433,7 +439,9 @@ fn build_binary_array(values: &[Option<Bytes>]) -> Result<arrow::array::BinaryAr
     Ok(builder.finish())
 }
 
-fn build_timestamp_micros_array(values: &[Option<Bytes>]) -> Result<arrow::array::TimestampMicrosecondArray> {
+fn build_timestamp_micros_array(
+    values: &[Option<Bytes>],
+) -> Result<arrow::array::TimestampMicrosecondArray> {
     let mut builder = TimestampMicrosecondBuilder::with_capacity(values.len());
     for v in values {
         match v {

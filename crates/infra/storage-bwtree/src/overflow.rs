@@ -51,7 +51,10 @@ impl OverflowStore {
         let data_capacity = OVERFLOW_BLOCK_SIZE - 16;
         let num_blocks = value.len().div_ceil(data_capacity).max(1);
         let offsets: Vec<u64> = (0..num_blocks)
-            .map(|_| self.next_offset.fetch_add(OVERFLOW_BLOCK_SIZE as u64, Ordering::SeqCst))
+            .map(|_| {
+                self.next_offset
+                    .fetch_add(OVERFLOW_BLOCK_SIZE as u64, Ordering::SeqCst)
+            })
             .collect();
 
         let mut file = self.file.lock();
@@ -91,7 +94,7 @@ impl OverflowStore {
         let file = self.file.lock();
         file.sync_all()?;
         drop(file);
-        if let Ok(dir) = File::open(&self.path.parent().unwrap_or(Path::new(""))) {
+        if let Ok(dir) = File::open(self.path.parent().unwrap_or(Path::new(""))) {
             let _ = dir.sync_all();
         }
         Ok(())
@@ -136,7 +139,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = OverflowStore::open(dir.path()).unwrap();
         let head = store.write(&[]).unwrap();
-        assert_eq!(store.read(head).unwrap().as_ref(), &[]);
+        assert_eq!(store.read(head).unwrap().as_ref(), &[] as &[u8]);
     }
 
     #[test]

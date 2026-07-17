@@ -81,7 +81,10 @@ pub fn partition_prune(
 
 /// Collect the set of partition directory names mentioned in a predicate for
 /// the configured partition column, if any.
-pub fn collect_partition_literals(predicate: &Predicate, partition_column: &str) -> HashSet<String> {
+pub fn collect_partition_literals(
+    predicate: &Predicate,
+    partition_column: &str,
+) -> HashSet<String> {
     let mut out = HashSet::new();
     collect(predicate, partition_column, &mut out);
     out

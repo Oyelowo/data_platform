@@ -11,4 +11,5 @@ storage-traits = { path = "../storage-traits" }
 storage-memory = { path = "../storage-memory" }
 storage-blob = { path = "../storage-blob" }
 storage-btree = { path = "../storage-btree" }
+storage-bwtree = { path = "../storage-bwtree" }
 storage-columnar = { path = "../storage-columnar" }

@@ -46,7 +46,8 @@ impl BwTreeEngine {
             },
         )?;
 
-        let root = replay_wal(&wal, &tree, meta.as_ref().map_or(0, |m| m.wal_lsn))?;
+        let start_lsn = meta.as_ref().map_or(0, |m| m.wal_lsn);
+        let root = replay_wal(&wal, &tree, start_lsn)?;
 
         Ok(Self {
             inner: Arc::new(EngineInner {
@@ -138,35 +139,51 @@ pub(crate) struct EngineInner {
 
 impl EngineInner {
     /// Apply buffered transaction operations durably.
+    ///
+    /// The root pointer is updated with a CAS loop so that concurrent
+    /// transactions do not overwrite each other's structural modifications
+    /// (splits that install a new root). If the root changed while this batch
+    /// was being applied, the batch is retried against the current root.
     pub(crate) fn apply_ops(&self, ops: &[WriteOp]) -> Result<()> {
         if ops.is_empty() {
             return Ok(());
         }
 
-        let mut root = self.root.load(Ordering::Acquire);
-        for op in ops {
-            let record = match op {
-                WriteOp::Put { key, value } => WalRecord::Put {
-                    key: Bytes::copy_from_slice(key),
-                    value: Bytes::copy_from_slice(value),
-                },
-                WriteOp::Delete { key } => WalRecord::Delete {
-                    key: Bytes::copy_from_slice(key),
-                },
-            };
-            let lsn = self.wal.append(record.encode(), storage_wal::Durability::Immediate)?;
-            match op {
-                WriteOp::Put { key, value } => {
-                    root = self.tree.insert(root, key, value, lsn)?;
-                }
-                WriteOp::Delete { key } => {
-                    root = self.tree.delete(root, key, lsn)?;
+        loop {
+            let start_root = self.root.load(Ordering::Acquire);
+            let mut root = start_root;
+            for op in ops {
+                let record = match op {
+                    WriteOp::Put { key, value } => WalRecord::Put {
+                        key: Bytes::copy_from_slice(key),
+                        value: Bytes::copy_from_slice(value),
+                    },
+                    WriteOp::Delete { key } => WalRecord::Delete {
+                        key: Bytes::copy_from_slice(key),
+                    },
+                };
+                let lsn = self
+                    .wal
+                    .append(record.encode(), storage_wal::Durability::Immediate)?;
+                match op {
+                    WriteOp::Put { key, value } => {
+                        root = self.tree.insert(root, key, value, lsn)?;
+                    }
+                    WriteOp::Delete { key } => {
+                        root = self.tree.delete(root, key, lsn)?;
+                    }
                 }
             }
-        }
 
-        self.root.store(root, Ordering::Release);
-        Ok(())
+            if self
+                .root
+                .compare_exchange(start_root, root, Ordering::Release, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(());
+            }
+            // Root changed under us: retry with the latest root.
+        }
     }
 
     pub(crate) fn sync(&self) -> Result<()> {
@@ -175,12 +192,12 @@ impl EngineInner {
         let meta = Meta {
             root_pid: root,
             next_pid: self.mapping_table.next_pid(),
+            // WAL truncation requires a durable page checkpoint. Without one,
+            // truncating the WAL would lose data because pages live only in
+            // memory. v1 replays the full WAL on every open.
             wal_lsn: 0,
         };
         recovery::write_meta(&self.path, &meta)?;
-        // WAL records are already durable because each append uses
-        // `Durability::Immediate`. In the first version the WAL is not
-        // truncated because there is no mapping-table checkpoint.
         Ok(())
     }
 }

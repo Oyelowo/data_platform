@@ -56,9 +56,8 @@ impl Committer {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
 
-        let handle = std::thread::spawn(move || {
-            worker_loop_with_state(state, receiver, shutdown_clone)
-        });
+        let handle =
+            std::thread::spawn(move || worker_loop_with_state(state, receiver, shutdown_clone));
 
         Ok(Self {
             sender: Mutex::new(Some(sender)),

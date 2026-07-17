@@ -83,7 +83,10 @@ fn missing_referenced_parquet_file_is_reported() {
     }
 
     let result = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default());
-    assert!(result.is_err(), "missing referenced file should fail recovery");
+    assert!(
+        result.is_err(),
+        "missing referenced file should fail recovery"
+    );
 }
 
 #[test]

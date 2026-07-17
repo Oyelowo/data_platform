@@ -62,7 +62,12 @@ fn rows_routed_to_partition_directories() {
         .filter_map(|e| {
             let e = e.ok()?;
             let name = e.file_name().to_string_lossy().into_owned();
-            if e.file_type().ok()?.is_dir() && !name.starts_with('_') && name != "manifest-wal" && name != "manifest-snapshot" && name != "tmp" {
+            if e.file_type().ok()?.is_dir()
+                && !name.starts_with('_')
+                && name != "manifest-wal"
+                && name != "manifest-snapshot"
+                && name != "tmp"
+            {
                 Some(name)
             } else {
                 None
@@ -73,8 +78,7 @@ fn rows_routed_to_partition_directories() {
     assert!(partitions.contains(&"us".to_string()));
 
     let result = engine.scan(&["region", "id"], &Predicate::True).unwrap();
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
     assert_eq!(map["id"].len(), 3);
 }
 
@@ -101,8 +105,14 @@ fn partition_pruning_skips_directories() {
 
     engine
         .ingest(vec![
-            ("region".into(), vec![Some(Bytes::from("eu")), Some(Bytes::from("us"))]),
-            ("id".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
+            (
+                "region".into(),
+                vec![Some(Bytes::from("eu")), Some(Bytes::from("us"))],
+            ),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+            ),
         ])
         .unwrap();
 
@@ -143,7 +153,12 @@ fn unsafe_partition_characters_are_sanitized() {
         .filter_map(|e| {
             let e = e.ok()?;
             let name = e.file_name().to_string_lossy().into_owned();
-            if e.file_type().ok()?.is_dir() && !name.starts_with('_') && name != "manifest-wal" && name != "manifest-snapshot" && name != "tmp" {
+            if e.file_type().ok()?.is_dir()
+                && !name.starts_with('_')
+                && name != "manifest-wal"
+                && name != "manifest-snapshot"
+                && name != "tmp"
+            {
                 Some(name)
             } else {
                 None

@@ -59,7 +59,8 @@ impl ManifestRecord {
                     add: add.clone(),
                     remove: remove.clone(),
                 };
-                let json = serde_json::to_vec(&payload).expect("CompactPayload serialization cannot fail");
+                let json =
+                    serde_json::to_vec(&payload).expect("CompactPayload serialization cannot fail");
                 buf.put_u64_le(json.len() as u64);
                 buf.extend_from_slice(&json);
                 buf
@@ -127,9 +128,7 @@ pub fn apply_record(manifest: &mut Manifest, record: ManifestRecord) -> Result<(
         }
         ManifestRecord::Compact { add, remove } => {
             let remove_set: std::collections::HashSet<_> = remove.into_iter().collect();
-            manifest
-                .files
-                .retain(|f| !remove_set.contains(&f.path));
+            manifest.files.retain(|f| !remove_set.contains(&f.path));
             for file_meta in add {
                 manifest.files.push(file_meta);
             }

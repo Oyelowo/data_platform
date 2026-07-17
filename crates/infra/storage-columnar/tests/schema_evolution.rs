@@ -9,22 +9,36 @@ fn add_nullable_column_in_second_ingest() {
 
     engine
         .ingest(vec![
-            ("a".into(), vec![Some(Bytes::from("r1")), Some(Bytes::from("r2"))]),
-            ("b".into(), vec![Some(Bytes::from("10")), Some(Bytes::from("20"))]),
+            (
+                "a".into(),
+                vec![Some(Bytes::from("r1")), Some(Bytes::from("r2"))],
+            ),
+            (
+                "b".into(),
+                vec![Some(Bytes::from("10")), Some(Bytes::from("20"))],
+            ),
         ])
         .unwrap();
 
     engine
         .ingest(vec![
-            ("a".into(), vec![Some(Bytes::from("r3")), Some(Bytes::from("r4"))]),
-            ("b".into(), vec![Some(Bytes::from("30")), Some(Bytes::from("40"))]),
-            ("c".into(), vec![Some(Bytes::from("x")), Some(Bytes::from("y"))]),
+            (
+                "a".into(),
+                vec![Some(Bytes::from("r3")), Some(Bytes::from("r4"))],
+            ),
+            (
+                "b".into(),
+                vec![Some(Bytes::from("30")), Some(Bytes::from("40"))],
+            ),
+            (
+                "c".into(),
+                vec![Some(Bytes::from("x")), Some(Bytes::from("y"))],
+            ),
         ])
         .unwrap();
 
     let result = engine.scan(&["a", "b", "c"], &Predicate::True).unwrap();
-    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> =
-        result.into_iter().collect();
+    let map: std::collections::HashMap<String, Vec<Option<Bytes>>> = result.into_iter().collect();
 
     assert_eq!(
         map["a"],

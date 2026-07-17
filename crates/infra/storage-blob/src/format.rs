@@ -127,10 +127,7 @@ mod tests {
                 let size = padded_record_size(id_len, payload_len);
                 assert_eq!(size % 8, 0, "id={}, payload={}", id_len, payload_len);
                 let pad = padding_len(id_len, payload_len);
-                assert_eq!(
-                    HEADER_SIZE as u64 + id_len as u64 + payload_len + pad,
-                    size
-                );
+                assert_eq!(HEADER_SIZE as u64 + id_len as u64 + payload_len + pad, size);
             }
         }
     }

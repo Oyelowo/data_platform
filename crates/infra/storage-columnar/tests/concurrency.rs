@@ -6,7 +6,8 @@ use storage_traits::{ColumnarEngine, Predicate};
 #[test]
 fn concurrent_ingest_and_scan_are_consistent() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = Arc::new(ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap());
+    let engine =
+        Arc::new(ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap());
     engine
         .set_schema(TableSchema {
             columns: vec![
@@ -34,7 +35,10 @@ fn concurrent_ingest_and_scan_are_consistent() {
                 engine
                     .ingest(vec![
                         ("id".into(), vec![Some(Bytes::from(id.clone()))]),
-                        ("value".into(), vec![Some(Bytes::from(format!("v-{t}-{i}")))]),
+                        (
+                            "value".into(),
+                            vec![Some(Bytes::from(format!("v-{t}-{i}")))],
+                        ),
                     ])
                     .unwrap();
             }

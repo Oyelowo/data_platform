@@ -41,8 +41,14 @@ fn basic_roundtrip() {
 
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("a")), Some(Bytes::from("b"))]),
-            ("count".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("a")), Some(Bytes::from("b"))],
+            ),
+            (
+                "count".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+            ),
             (
                 "score".into(),
                 vec![Some(Bytes::from("3.14")), Some(Bytes::from("2.71"))],
@@ -63,13 +69,22 @@ fn basic_roundtrip() {
 
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("c")), Some(Bytes::from("d"))]),
-            ("count".into(), vec![Some(Bytes::from("3")), Some(Bytes::from("4"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("c")), Some(Bytes::from("d"))],
+            ),
+            (
+                "count".into(),
+                vec![Some(Bytes::from("3")), Some(Bytes::from("4"))],
+            ),
             (
                 "score".into(),
                 vec![Some(Bytes::from("1.41")), Some(Bytes::from("1.73"))],
             ),
-            ("active".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("0"))]),
+            (
+                "active".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("0"))],
+            ),
             (
                 "payload".into(),
                 vec![
@@ -91,7 +106,12 @@ fn basic_roundtrip() {
         result.into_iter().collect();
     assert_eq!(
         as_map["id"],
-        vec![Some(Bytes::from("a")), Some(Bytes::from("b")), Some(Bytes::from("c")), Some(Bytes::from("d"))]
+        vec![
+            Some(Bytes::from("a")),
+            Some(Bytes::from("b")),
+            Some(Bytes::from("c")),
+            Some(Bytes::from("d"))
+        ]
     );
     assert_eq!(
         as_map["count"],

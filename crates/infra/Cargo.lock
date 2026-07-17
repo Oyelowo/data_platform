@@ -1827,6 +1827,7 @@ version = "0.1.0"
 dependencies = [
  "storage-blob",
  "storage-btree",
+ "storage-bwtree",
  "storage-columnar",
  "storage-memory",
  "storage-traits",

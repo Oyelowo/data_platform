@@ -30,15 +30,27 @@ fn range_predicate_prunes_files() {
 
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
-            ("name".into(), vec![Some(Bytes::from("a")), Some(Bytes::from("b"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+            ),
+            (
+                "name".into(),
+                vec![Some(Bytes::from("a")), Some(Bytes::from("b"))],
+            ),
         ])
         .unwrap();
 
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("10")), Some(Bytes::from("20"))]),
-            ("name".into(), vec![Some(Bytes::from("x")), Some(Bytes::from("y"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("10")), Some(Bytes::from("20"))],
+            ),
+            (
+                "name".into(),
+                vec![Some(Bytes::from("x")), Some(Bytes::from("y"))],
+            ),
         ])
         .unwrap();
 
@@ -69,15 +81,27 @@ fn equality_predicate_with_residual_filtering() {
 
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("1")), Some(Bytes::from("2"))]),
-            ("name".into(), vec![Some(Bytes::from("a")), Some(Bytes::from("b"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("1")), Some(Bytes::from("2"))],
+            ),
+            (
+                "name".into(),
+                vec![Some(Bytes::from("a")), Some(Bytes::from("b"))],
+            ),
         ])
         .unwrap();
 
     engine
         .ingest(vec![
-            ("id".into(), vec![Some(Bytes::from("2")), Some(Bytes::from("3"))]),
-            ("name".into(), vec![Some(Bytes::from("c")), Some(Bytes::from("d"))]),
+            (
+                "id".into(),
+                vec![Some(Bytes::from("2")), Some(Bytes::from("3"))],
+            ),
+            (
+                "name".into(),
+                vec![Some(Bytes::from("c")), Some(Bytes::from("d"))],
+            ),
         ])
         .unwrap();
 

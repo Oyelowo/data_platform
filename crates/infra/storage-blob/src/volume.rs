@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
 
-use crate::format::{RecordHeader, HEADER_SIZE, padding_len};
+use crate::format::{HEADER_SIZE, RecordHeader, padding_len};
 use crate::{Error, Result};
 
 /// Location of a single record inside a volume.
@@ -65,7 +65,11 @@ impl VolumeWriter {
     ///
     /// Returns the location of the written record and the record header.
     /// The caller must serialize volume appends (one active writer per store).
-    pub fn append_record(&mut self, id: &[u8], reader: &mut dyn Read) -> Result<(RecordLocation, RecordHeader)> {
+    pub fn append_record(
+        &mut self,
+        id: &[u8],
+        reader: &mut dyn Read,
+    ) -> Result<(RecordLocation, RecordHeader)> {
         let offset = self.size;
         let id_len = id.len() as u32;
 
@@ -146,11 +150,7 @@ impl VolumeReader {
     pub fn open(path: impl AsRef<Path>, number: u64) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new().read(true).open(&path)?;
-        Ok(Self {
-            number,
-            file,
-            path,
-        })
+        Ok(Self { number, file, path })
     }
 
     /// Volume number.
@@ -404,7 +404,9 @@ mod tests {
         for i in 0..5u8 {
             let id = vec![b'k', i];
             let payload = vec![i; 100];
-            let (_loc, _header) = writer.append_record(&id, &mut Cursor::new(&payload)).unwrap();
+            let (_loc, _header) = writer
+                .append_record(&id, &mut Cursor::new(&payload))
+                .unwrap();
         }
 
         let reader = VolumeReader::open(&path, 1).unwrap();
@@ -422,7 +424,9 @@ mod tests {
     fn empty_payload_roundtrips() {
         let (_dir, path) = tmp_path();
         let mut writer = VolumeWriter::create(&path, 1).unwrap();
-        let (loc, _header) = writer.append_record(b"empty", &mut Cursor::new(&[] as &[u8])).unwrap();
+        let (loc, _header) = writer
+            .append_record(b"empty", &mut Cursor::new(&[] as &[u8]))
+            .unwrap();
         let reader = VolumeReader::open(&path, 1).unwrap();
         let (header, id, payload) = reader.read_record(loc.offset).unwrap();
         assert_eq!(id.as_ref(), b"empty");

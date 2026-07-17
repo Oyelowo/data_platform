@@ -63,9 +63,9 @@ pub fn load(path: &Path) -> Result<(Manifest, u64)> {
 }
 
 fn parse_lsn(name: &str) -> Result<u64> {
-    let stem = name
-        .strip_suffix(".snapshot")
-        .ok_or_else(|| Error::ManifestWal(format!("snapshot name missing .snapshot suffix: {name}")))?;
+    let stem = name.strip_suffix(".snapshot").ok_or_else(|| {
+        Error::ManifestWal(format!("snapshot name missing .snapshot suffix: {name}"))
+    })?;
     stem.parse::<u64>()
         .map_err(|e| Error::ManifestWal(format!("invalid snapshot lsn '{stem}': {e}")))
 }

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use storage_blob::{BlobStoreImpl, BlobStoreOptions};
 use storage_traits::BlobStore;
-use storage_wal::{Record, RECORD_HEADER_SIZE};
+use storage_wal::{RECORD_HEADER_SIZE, Record};
 use tempfile::TempDir;
 
 fn open(dir: &TempDir) -> BlobStoreImpl {
@@ -120,10 +120,12 @@ fn torn_volume_tail_is_truncated_and_earlier_objects_survive() {
     assert_eq!(buf, b"safe payload");
 
     // The torn object is either missing or unreadable.
-    assert!(store.get(b"torn").is_err() || {
-        let mut r = store.get(b"torn").unwrap();
-        r.read_to_end(&mut Vec::new()).is_err()
-    });
+    assert!(
+        store.get(b"torn").is_err() || {
+            let mut r = store.get(b"torn").unwrap();
+            r.read_to_end(&mut Vec::new()).is_err()
+        }
+    );
 }
 
 #[test]
@@ -139,7 +141,10 @@ fn truncated_index_wal_drops_later_puts() {
     // Remove the last index record so only `first` is recovered.
     let wal_path = wal_segment_path(dir.path());
     let offsets = wal_record_offsets(&wal_path);
-    assert!(offsets.len() >= 2, "expected at least two index wal records");
+    assert!(
+        offsets.len() >= 2,
+        "expected at least two index wal records"
+    );
     let truncate_to = *offsets.last().unwrap();
     truncate_file(&wal_path, truncate_to);
 
@@ -168,9 +173,8 @@ fn corrupt_volume_payload_is_detected_on_read() {
 
     // Flip one payload byte of the only record.
     let mut bytes = fs::read(&volume_path).unwrap();
-    let payload_offset = offsets[0] as usize
-        + storage_blob::format::HEADER_SIZE as usize
-        + b"fragile".len();
+    let payload_offset =
+        offsets[0] as usize + storage_blob::format::HEADER_SIZE as usize + b"fragile".len();
     bytes[payload_offset] = bytes[payload_offset].wrapping_add(1);
     fs::write(&volume_path, bytes).unwrap();
 
@@ -192,7 +196,10 @@ fn corrupt_wal_record_is_truncated_and_earlier_records_survive() {
 
     let wal_path = wal_segment_path(dir.path());
     let offsets = wal_record_offsets(&wal_path);
-    assert!(offsets.len() >= 2, "expected at least two index wal records");
+    assert!(
+        offsets.len() >= 2,
+        "expected at least two index wal records"
+    );
 
     let mut bytes = fs::read(&wal_path).unwrap();
     // Flip a byte inside the payload area of the second record.
