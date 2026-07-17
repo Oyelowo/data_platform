@@ -1,4 +1,4 @@
-use crate::unify::{Snapshot, UnificationTable, UnifyKey};
+use crate::unify::{UnificationTable, UnifyKey};
 
 #[derive(Clone, Debug, PartialEq)]
 enum TestValue {

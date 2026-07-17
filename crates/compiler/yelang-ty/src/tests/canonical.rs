@@ -7,7 +7,7 @@ fn canonical_var_kind_variants() {
     let k1 = CanonicalVarKind::Ty(CanonicalTyVarKind::General(UniverseIndex(0)));
     let k2 = CanonicalVarKind::Int;
     let k3 = CanonicalVarKind::Float;
-    let k4 = CanonicalVarKind::Const;
+    let _k4 = CanonicalVarKind::Const;
     assert_ne!(k1, k2);
     assert_ne!(k2, k3);
 }

@@ -194,24 +194,26 @@ impl<'a, K: Idx, V> IntoIterator for &'a mut IndexVec<K, V> {
 }
 
 // ----------------------------------------------------------------------------
-// SecondaryMap
+// IndexSecondaryMap
 // ----------------------------------------------------------------------------
 
-/// A dense secondary map keyed by typed indices.
+/// A dense secondary map keyed by typed indices from an [`IndexVec`].
 ///
-/// Backed by `Vec<Option<V>>`, indexed by the same `Idx` type used for an
-/// [`IndexVec`]. This is the right tool for per-key metadata when the key space
-/// is dense: it has better cache locality and lower per-lookup overhead than
-/// `FxHashMap<Idx, V>`.
+/// This is the `IndexVec` counterpart to [`ArenaMap`](crate::ArenaMap), which is
+/// keyed by slotmap arena keys. `IndexSecondaryMap` is backed by
+/// `Vec<Option<V>>` indexed by the same `Idx` type as the primary vector.
+///
+/// Use it for per-key metadata when the key space is dense: it has better cache
+/// locality and lower per-lookup overhead than `FxHashMap<Idx, V>`.
 ///
 /// For sparse metadata, use `FxHashMap` or a dedicated sparse map instead.
 #[derive(Debug, Clone)]
-pub struct SecondaryMap<K: Idx, V> {
+pub struct IndexSecondaryMap<K: Idx, V> {
     raw: Vec<Option<V>>,
     _marker: PhantomData<K>,
 }
 
-impl<K: Idx, V> SecondaryMap<K, V> {
+impl<K: Idx, V> IndexSecondaryMap<K, V> {
     /// Create an empty map.
     pub fn new() -> Self {
         Self {
@@ -292,7 +294,7 @@ impl<K: Idx, V> SecondaryMap<K, V> {
     }
 }
 
-impl<K: Idx, V> Default for SecondaryMap<K, V> {
+impl<K: Idx, V> Default for IndexSecondaryMap<K, V> {
     fn default() -> Self {
         Self::new()
     }
@@ -300,7 +302,7 @@ impl<K: Idx, V> Default for SecondaryMap<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexVec, SecondaryMap};
+    use super::{IndexSecondaryMap, IndexVec};
     use crate::id::Id;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -377,7 +379,7 @@ mod tests {
 
     #[test]
     fn secondary_map_insert_and_get() {
-        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        let mut map: IndexSecondaryMap<Key, i32> = IndexSecondaryMap::new();
         assert_eq!(map.get(Key::new(1)), None);
         assert_eq!(map.insert(Key::new(1), 10), None);
         assert_eq!(map.get(Key::new(1)), Some(&10));
@@ -387,7 +389,7 @@ mod tests {
 
     #[test]
     fn secondary_map_sparse_growth() {
-        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        let mut map: IndexSecondaryMap<Key, i32> = IndexSecondaryMap::new();
         map.insert(Key::new(3), 42);
         assert_eq!(map.get(Key::new(1)), None);
         assert_eq!(map.get(Key::new(2)), None);
@@ -398,7 +400,7 @@ mod tests {
 
     #[test]
     fn secondary_map_remove_and_len() {
-        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        let mut map: IndexSecondaryMap<Key, i32> = IndexSecondaryMap::new();
         map.insert(Key::new(1), 10);
         map.insert(Key::new(3), 30);
         assert_eq!(map.len(), 2);
@@ -409,7 +411,7 @@ mod tests {
 
     #[test]
     fn secondary_map_iter_enumerated() {
-        let mut map: SecondaryMap<Key, i32> = SecondaryMap::new();
+        let mut map: IndexSecondaryMap<Key, i32> = IndexSecondaryMap::new();
         map.insert(Key::new(1), 10);
         map.insert(Key::new(3), 30);
         let pairs: Vec<_> = map.iter_enumerated().collect();

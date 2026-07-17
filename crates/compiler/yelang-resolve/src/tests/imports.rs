@@ -73,7 +73,7 @@ fn duplicate_import_error() {
         fn main() {}
     "#;
     let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
+    let _resolved = resolve_crate(&program, &interner);
     // Duplicate imports may or may not produce errors depending on implementation.
     // For now, we just assert the resolver does not panic.
 }

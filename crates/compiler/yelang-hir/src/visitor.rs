@@ -2,7 +2,8 @@
 
 use crate::crate_hir::Crate;
 use crate::hir::{
-    Arm, Block, Expr, FnSig, Impl, Item, ItemKind, Stmt, Trait, Ty,
+    Arm, Block, Expr, FieldDef, FnSig, Impl, Item, ItemKind, Stmt, StructField, Trait, Ty,
+    VariantData, VariantDef,
 };
 use crate::hir_body::Body;
 use crate::hir_pat::Pat;
@@ -66,6 +67,18 @@ pub trait Visitor<'hir>: Sized {
     fn visit_trait(&mut self, trait_: &'hir Trait) {
         walk_trait(self, trait_)
     }
+
+    fn visit_variant_def(&mut self, variant: &'hir VariantDef) {
+        walk_variant_def(self, variant)
+    }
+
+    fn visit_field_def(&mut self, field: &'hir FieldDef) {
+        walk_field_def(self, field)
+    }
+
+    fn visit_struct_field(&mut self, field: &'hir StructField) {
+        walk_struct_field(self, field)
+    }
 }
 
 pub fn walk_crate<'hir, V: Visitor<'hir>>(visitor: &mut V, crate_hir: &'hir Crate) {
@@ -85,12 +98,12 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
             walk_fn_sig(visitor, sig);
             visitor.visit_body_by_id(*body);
         }
-        ItemKind::Struct { data: _, .. } => {
-            // TODO: walk fields
+        ItemKind::Struct { data, .. } | ItemKind::Union { data, .. } => {
+            walk_variant_data(visitor, data);
         }
         ItemKind::Enum { def, .. } => {
-            for _variant in &def.variants {
-                // TODO: walk variant data
+            for variant in &def.variants {
+                visitor.visit_variant_def(variant);
             }
         }
         ItemKind::Impl {
@@ -341,6 +354,34 @@ pub fn walk_fn_sig<'hir, V: Visitor<'hir>>(visitor: &mut V, sig: &'hir FnSig) {
     visitor.visit_ty_by_id(sig.output);
 }
 
+pub fn walk_variant_data<'hir, V: Visitor<'hir>>(visitor: &mut V, data: &'hir VariantData) {
+    match data {
+        VariantData::Struct { fields } => {
+            for field in fields {
+                visitor.visit_field_def(field);
+            }
+        }
+        VariantData::Tuple { fields } => {
+            for field in fields {
+                visitor.visit_struct_field(field);
+            }
+        }
+        VariantData::Unit => {}
+    }
+}
+
+pub fn walk_variant_def<'hir, V: Visitor<'hir>>(visitor: &mut V, variant: &'hir VariantDef) {
+    walk_variant_data(visitor, &variant.data);
+}
+
+pub fn walk_field_def<'hir, V: Visitor<'hir>>(visitor: &mut V, field: &'hir FieldDef) {
+    visitor.visit_ty_by_id(field.ty);
+}
+
+pub fn walk_struct_field<'hir, V: Visitor<'hir>>(visitor: &mut V, field: &'hir StructField) {
+    visitor.visit_ty_by_id(field.ty);
+}
+
 pub fn walk_impl<'hir, V: Visitor<'hir>>(visitor: &mut V, impl_: &'hir Impl) {
     visitor.visit_ty_by_id(impl_.self_ty);
     for item in &impl_.items {
@@ -375,10 +416,8 @@ pub fn walk_trait<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_: &'hir Trait) 
                     visitor.visit_body_by_id(body);
                 }
             }
-            crate::hir::TraitItemKind::Type { bounds, default } => {
-                for _bound in bounds {
-                    // TODO: walk bound
-                }
+            crate::hir::TraitItemKind::Type { bounds: _, default } => {
+                // TraitBound has no nested HIR nodes to walk (only a resolved path).
                 if let Some(ty) = default {
                     visitor.visit_ty_by_id(*ty);
                 }

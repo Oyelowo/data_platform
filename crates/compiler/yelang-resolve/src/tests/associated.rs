@@ -124,7 +124,7 @@ fn multiple_inherent_impls_same_name() {
         fn main() { Point::foo(); }
     "#;
     let (program, interner) = parse_program(src);
-    let resolved = resolve_crate(&program, &interner);
+    let _resolved = resolve_crate(&program, &interner);
     // FIX: This should be a duplicate error:
     // For now, just verify it resolves without crashing
     // (full ambiguity checking is future work)

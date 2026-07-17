@@ -15,6 +15,8 @@ use crate::response::{CanonicalGoal, CanonicalResponse, NestedGoal, SolverResult
 use crate::search_graph::SearchGraph;
 
 /// The evaluation context for the trait solver.
+#[allow(dead_code)] // `nested_goals` and `tainted` are solver state used by the
+                    // full next-gen solver implementation, which is still WIP.
 pub struct EvalCtxt<'tcx> {
     /// The search graph for cycle detection and caching.
     search_graph: SearchGraph<'tcx>,
