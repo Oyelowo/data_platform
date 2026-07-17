@@ -41,9 +41,9 @@ pub struct FnCtxt<'tcx> {
     pub interner: &'tcx Interner<'tcx>,
     /// The HIR crate used to look up arena-allocated nodes.
     ///
-    /// Kept as a mutable reference so test helpers can allocate nodes through
-    /// the context while it is live.
-    pub crate_hir: &'tcx mut HirCrate,
+    /// Immutable: type checking must not mutate the HIR. Results are stored in
+    /// `results` and other side tables.
+    pub crate_hir: &'tcx HirCrate,
     /// The inference context.
     pub infer: InferCtxt<'tcx>,
     /// Collected results.
@@ -65,7 +65,7 @@ pub struct FnCtxt<'tcx> {
 impl<'tcx> FnCtxt<'tcx> {
     pub fn new(
         interner: &'tcx Interner<'tcx>,
-        crate_hir: &'tcx mut HirCrate,
+        crate_hir: &'tcx HirCrate,
         def_id: DefId,
         return_ty: Ty<'tcx>,
         item_types: FxHashMap<DefId, Ty<'tcx>>,
