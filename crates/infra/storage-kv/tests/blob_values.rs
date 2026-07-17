@@ -192,7 +192,10 @@ fn transaction_put_and_get_blob_value() {
     txn.put(b"txn-key", &value).unwrap();
 
     // Read-your-writes inside the transaction.
-    assert_eq!(txn.get(b"txn-key").unwrap(), Some(Bytes::from(value.clone())));
+    assert_eq!(
+        txn.get(b"txn-key").unwrap(),
+        Some(Bytes::from(value.clone()))
+    );
 
     txn.commit().unwrap();
 

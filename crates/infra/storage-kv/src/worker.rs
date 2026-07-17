@@ -71,9 +71,7 @@ fn worker_loop(
                 for cf in state.column_families.iter() {
                     match cf.immutable.front() {
                         Some((num, mem))
-                            if best
-                                .as_ref()
-                                .is_none_or(|(_, best_num, _)| num < *best_num) =>
+                            if best.as_ref().is_none_or(|(_, best_num, _)| num < *best_num) =>
                         {
                             best = Some((cf.id, num, mem));
                         }
@@ -87,7 +85,10 @@ fn worker_loop(
                 // Clone engine-wide fields before borrowing the CF mutably.
                 let path = state.path.clone();
                 let manifest = Arc::clone(&state.manifest);
-                let last_sequence = state.seq_allocator.current();
+                let smallest_snapshot = state
+                    .snapshots
+                    .oldest()
+                    .unwrap_or_else(|| state.seq_allocator.completed());
                 let logger = state.options.logger();
                 let cf = state.column_families.get_mut(cf_id).unwrap();
                 cf.active_flushes += 1;
@@ -99,7 +100,7 @@ fn worker_loop(
                     options: cf.options.clone(),
                     version_set: Arc::clone(&cf.version_set),
                     manifest,
-                    last_sequence,
+                    smallest_snapshot,
                     metrics: Arc::clone(&cf.metrics),
                     logger,
                 }
@@ -111,10 +112,10 @@ fn worker_loop(
                 &work.version_set,
                 &work.manifest,
                 &work.mem,
-                work.last_sequence,
                 work.file_number,
                 &work.metrics,
                 work.cf_id,
+                work.smallest_snapshot,
             );
 
             {
@@ -167,7 +168,7 @@ struct FlushWork {
     options: crate::options::LsmOptions,
     version_set: Arc<crate::version_set::VersionSet>,
     manifest: Arc<std::sync::Mutex<crate::manifest::Manifest>>,
-    last_sequence: crate::SequenceNumber,
+    smallest_snapshot: crate::SequenceNumber,
     metrics: Arc<crate::metrics::Metrics>,
     logger: Arc<dyn crate::logger::Logger>,
 }

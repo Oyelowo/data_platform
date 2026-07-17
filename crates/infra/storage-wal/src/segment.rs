@@ -156,10 +156,7 @@ mod tests {
     fn segment_path_and_parse() {
         let dir = Path::new("/tmp/wal");
         let path = segment_path(dir, 123);
-        assert_eq!(
-            path,
-            PathBuf::from("/tmp/wal/wal-00000000000000000123.log")
-        );
+        assert_eq!(path, PathBuf::from("/tmp/wal/wal-00000000000000000123.log"));
         let name = path.file_name().unwrap().to_string_lossy();
         assert_eq!(parse_segment_filename(&name), Some(123));
     }

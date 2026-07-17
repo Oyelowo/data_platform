@@ -84,7 +84,10 @@ impl Version {
     /// L0 has no byte target; levels >= 1 follow the RocksDB static leveled
     /// formula: `max_bytes_for_level_base * multiplier^(level - 1)`.
     pub fn level_target_bytes(level: usize, options: &LsmOptions) -> u64 {
-        assert!(level >= 1, "level_target_bytes is only defined for level >= 1");
+        assert!(
+            level >= 1,
+            "level_target_bytes is only defined for level >= 1"
+        );
         let mut target = options.max_bytes_for_level_base;
         for _ in 1..level {
             target = target.saturating_mul(options.max_bytes_for_level_multiplier);

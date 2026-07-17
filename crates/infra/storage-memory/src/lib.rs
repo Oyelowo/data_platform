@@ -12,5 +12,5 @@ pub mod cursor;
 pub mod engine;
 pub mod transaction;
 
-pub use engine::{MemoryEngine, MAX_KEY_SIZE, MAX_VALUE_SIZE};
+pub use engine::{MAX_KEY_SIZE, MAX_VALUE_SIZE, MemoryEngine};
 pub use transaction::MemoryTransaction;

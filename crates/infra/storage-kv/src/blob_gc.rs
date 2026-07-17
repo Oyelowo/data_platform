@@ -63,16 +63,12 @@ impl BlobGcWorker {
 
 fn worker_loop(state: Arc<Mutex<EngineState>>, receiver: Receiver<BlobGcCommand>) {
     loop {
-        let (interval_ms, ratio, blob_store, snapshot) = {
+        let (interval_ms, force_threshold, blob_store) = {
             let state = state.lock().unwrap();
             let interval_ms = state.options.blob_gc_interval_ms;
-            let ratio = state.options.blob_gc_ratio;
-            let snapshot = state
-                .snapshots
-                .oldest()
-                .unwrap_or_else(|| state.seq_allocator.completed());
+            let force_threshold = state.options.blob_gc_force_threshold;
             let blob_store = Arc::clone(&state.blob_store);
-            (interval_ms, ratio, blob_store, snapshot)
+            (interval_ms, force_threshold, blob_store)
         };
 
         // A disabled worker waits for an explicit wake or shutdown.
@@ -83,41 +79,147 @@ fn worker_loop(state: Arc<Mutex<EngineState>>, receiver: Receiver<BlobGcCommand>
             }
         }
 
+        // Sleep until the next scheduled pass, but wake early if an explicit
+        // wake arrives or if the force threshold is exceeded.  Polling in small
+        // chunks lets us react to garbage-ratio spikes without putting the
+        // write path to sleep.
+        let reason = wait_for_next_pass(&receiver, interval_ms, &blob_store, force_threshold);
+
+        match reason {
+            WakeReason::Shutdown => break,
+            WakeReason::Explicit | WakeReason::Interval | WakeReason::ForceThreshold => {}
+        }
+
+        // Read the GC options and live snapshots *after* waking so the liveness
+        // check includes all writes that contributed to the blob garbage ratio.
+        let (ratio, threads, snapshots) = {
+            let state = state.lock().unwrap();
+            let mut snapshots = state.snapshots.all();
+            // The current completed watermark is also a valid snapshot: it must
+            // see all writes that have been published, so current values must be
+            // preserved even if no explicit snapshot is registered.
+            snapshots.push(state.seq_allocator.completed());
+            snapshots.sort_unstable();
+            snapshots.dedup();
+            (
+                state.options.blob_gc_ratio,
+                state.options.blob_gc_threads,
+                snapshots,
+            )
+        };
+
         let mut owner = BlobGcOwner::new(Arc::clone(&state), Arc::clone(&blob_store));
         let options = GcOptions {
             min_live_ratio: ratio,
+            threads,
         };
 
-        match blob_store.gc_once(&mut owner, &options, snapshot) {
-            Ok(stats) => {
-                if stats.scanned_files > 0 || stats.deleted_files > 0 {
-                    let logger = state.lock().unwrap().options.logger();
-                    logger.log(
-                        crate::logger::LogLevel::Info,
-                        &format!(
-                            "blob GC pass completed: scanned={}, rewritten={} ({} bytes), deleted={} ({} bytes reclaimed)",
-                            stats.scanned_files,
-                            stats.rewritten_records,
-                            stats.rewritten_bytes,
-                            stats.deleted_files,
-                            stats.space_reclaimed,
-                        ),
-                    );
-                }
-            }
-            Err(e) => {
-                let logger = state.lock().unwrap().options.logger();
-                logger.log(
-                    crate::logger::LogLevel::Error,
-                    &format!("background blob GC failed: {}", e),
-                );
+        // Run at least one pass whenever we wake.  If the configured force
+        // threshold is exceeded and the last pass made progress, keep running
+        // back-to-back until the ratio drops or no more work can be done.
+        // This prevents runaway loops when garbage is pinned by snapshots or
+        // lives in the current file.
+        let mut first = true;
+        while first || should_force_pass(&blob_store, force_threshold) {
+            first = false;
+            let did_work = run_gc_pass(&state, &blob_store, &mut owner, &options, &snapshots);
+            if !did_work {
+                break;
             }
         }
 
-        // Wait for the next scheduled pass or an explicit wake.
-        match receiver.recv_timeout(Duration::from_millis(interval_ms)) {
-            Ok(BlobGcCommand::Wake) => continue,
-            Ok(BlobGcCommand::Shutdown) | Err(_) => break,
+        // If we were explicitly woken, go straight back to sleep without
+        // waiting for the full interval again.
+        if matches!(reason, WakeReason::Explicit) {
+            continue;
+        }
+    }
+}
+
+fn should_force_pass(blob_store: &crate::blob::BlobStore, force_threshold: f64) -> bool {
+    force_threshold > 0.0 && blob_store.force_gc_needed(force_threshold)
+}
+
+/// Reason the worker decided to run a scheduled GC pass.
+enum WakeReason {
+    /// The regular interval fired.
+    Interval,
+    /// An explicit `Wake` command was received.
+    Explicit,
+    /// The force-GC threshold was exceeded.
+    ForceThreshold,
+    /// The worker was asked to shut down.
+    Shutdown,
+}
+
+/// Block until the next scheduled GC pass should run.
+fn wait_for_next_pass(
+    receiver: &Receiver<BlobGcCommand>,
+    interval_ms: u64,
+    blob_store: &crate::blob::BlobStore,
+    force_threshold: f64,
+) -> WakeReason {
+    let target = Duration::from_millis(interval_ms);
+    let poll = Duration::from_millis(100);
+    let mut elapsed = Duration::ZERO;
+
+    while elapsed < target {
+        // The loop body advances `elapsed` at the bottom.
+        if force_threshold > 0.0 && blob_store.force_gc_needed(force_threshold) {
+            return WakeReason::ForceThreshold;
+        }
+        let wait = poll.min(target - elapsed);
+        match receiver.recv_timeout(wait) {
+            Ok(BlobGcCommand::Wake) => return WakeReason::Explicit,
+            Ok(BlobGcCommand::Shutdown)
+            | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                return WakeReason::Shutdown;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                elapsed += wait;
+            }
+        }
+    }
+    WakeReason::Interval
+}
+
+/// Run one GC pass and return true if it did any work.
+fn run_gc_pass(
+    state: &Arc<Mutex<EngineState>>,
+    blob_store: &crate::blob::BlobStore,
+    owner: &mut crate::engine::BlobGcOwner,
+    options: &GcOptions,
+    snapshots: &[crate::SequenceNumber],
+) -> bool {
+    match blob_store.gc_once(owner, options, snapshots) {
+        Ok(stats) => {
+            let did_work =
+                stats.scanned_files > 0 || stats.deleted_files > 0 || stats.rewritten_records > 0;
+            if did_work {
+                let logger = state.lock().unwrap().options.logger();
+                logger.log(
+                    crate::logger::LogLevel::Info,
+                    &format!(
+                        "blob GC pass completed: scanned={}, rewritten={} ({} bytes), dead={} ({} bytes), deleted={} ({} bytes reclaimed)",
+                        stats.scanned_files,
+                        stats.rewritten_records,
+                        stats.rewritten_bytes,
+                        stats.dead_records,
+                        stats.dead_bytes,
+                        stats.deleted_files,
+                        stats.space_reclaimed,
+                    ),
+                );
+            }
+            did_work
+        }
+        Err(e) => {
+            let logger = state.lock().unwrap().options.logger();
+            logger.log(
+                crate::logger::LogLevel::Error,
+                &format!("background blob GC failed: {}", e),
+            );
+            false
         }
     }
 }

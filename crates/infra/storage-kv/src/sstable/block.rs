@@ -1,6 +1,30 @@
 //! Block-based data block builder and iterator.
 
+use std::cmp::Ordering;
+
 use bytes::{Buf, BufMut, Bytes};
+
+use crate::internal_key::compare_internal_keys;
+
+/// Comparator used when building or iterating a block.
+///
+/// Data blocks store full internal keys and must order by the internal-key
+/// comparator (user key ascending, sequence descending).  Index and meta
+/// blocks use plain user-key boundaries and keep the simpler bytewise order.
+#[derive(Debug, Clone, Copy)]
+pub enum BlockComparator {
+    Bytewise,
+    InternalKey,
+}
+
+impl BlockComparator {
+    fn compare(&self, a: &[u8], b: &[u8]) -> Ordering {
+        match self {
+            BlockComparator::Bytewise => a.cmp(b),
+            BlockComparator::InternalKey => compare_internal_keys(a, b),
+        }
+    }
+}
 
 /// Builder for a data block with prefix compression restart points.
 pub struct BlockBuilder {
@@ -10,10 +34,11 @@ pub struct BlockBuilder {
     restart_interval: usize,
     entry_count: usize,
     finished: bool,
+    comparator: BlockComparator,
 }
 
 impl BlockBuilder {
-    pub fn new(restart_interval: usize) -> Self {
+    pub fn new(restart_interval: usize, comparator: BlockComparator) -> Self {
         Self {
             buf: Vec::new(),
             restarts: Vec::new(),
@@ -21,6 +46,7 @@ impl BlockBuilder {
             restart_interval,
             entry_count: 0,
             finished: false,
+            comparator,
         }
     }
 
@@ -33,11 +59,13 @@ impl BlockBuilder {
         self.finished = false;
     }
 
-    /// Add a key/value pair. Keys must be added in strictly ascending order.
+    /// Add a key/value pair. Keys must be added in strictly ascending order
+    /// according to the block's comparator.
     pub fn add(&mut self, key: &[u8], value: &[u8]) {
         assert!(!self.finished);
         assert!(
-            self.last_key.as_slice() < key,
+            self.last_key.is_empty()
+                || self.comparator.compare(&self.last_key, key) == Ordering::Less,
             "keys must be added in ascending order"
         );
 
@@ -90,7 +118,7 @@ fn shared_prefix_len(a: &[u8], b: &[u8]) -> usize {
     i
 }
 
-/// Iterator over entries in a data block.
+/// Iterator over entries in a block.
 pub struct BlockIterator {
     data: Bytes,
     restarts_offset: usize,
@@ -99,10 +127,11 @@ pub struct BlockIterator {
     current_key: Vec<u8>,
     current_value: Bytes,
     valid: bool,
+    comparator: BlockComparator,
 }
 
 impl BlockIterator {
-    pub fn new(data: Bytes) -> Self {
+    pub fn new(data: Bytes, comparator: BlockComparator) -> Self {
         let (num_restarts, restarts_offset) = read_num_restarts(&data);
         Self {
             data,
@@ -112,10 +141,12 @@ impl BlockIterator {
             current_key: Vec::new(),
             current_value: Bytes::new(),
             valid: false,
+            comparator,
         }
     }
 
-    /// Position the iterator at the first key >= target.
+    /// Position the iterator at the first key >= target according to the
+    /// block comparator.
     pub fn seek(&mut self, target: &[u8]) {
         if self.num_restarts == 0 {
             self.valid = false;
@@ -127,7 +158,7 @@ impl BlockIterator {
             let mid = (left + right) / 2;
             let offset = self.restart_offset(mid);
             let key = self.key_at_restart(offset);
-            if key.as_slice() < target {
+            if self.comparator.compare(&key, target) == Ordering::Less {
                 left = mid + 1;
             } else {
                 right = mid;
@@ -135,7 +166,7 @@ impl BlockIterator {
         }
         let restart_idx = if left == 0 { 0 } else { left - 1 };
         self.parse_from_restart(restart_idx);
-        while self.valid && self.current_key.as_slice() < target {
+        while self.valid && self.comparator.compare(&self.current_key, target) == Ordering::Less {
             self.next();
         }
     }
@@ -221,13 +252,13 @@ mod tests {
 
     #[test]
     fn block_roundtrip() {
-        let mut builder = BlockBuilder::new(2);
+        let mut builder = BlockBuilder::new(2, BlockComparator::Bytewise);
         builder.add(b"apple", b"1");
         builder.add(b"application", b"2");
         builder.add(b"banana", b"3");
         let data = Bytes::copy_from_slice(builder.finish());
 
-        let mut iter = BlockIterator::new(data);
+        let mut iter = BlockIterator::new(data, BlockComparator::Bytewise);
         iter.seek_to_first();
         assert_eq!(iter.key(), b"apple");
         assert_eq!(iter.value(), b"1");
@@ -243,13 +274,13 @@ mod tests {
 
     #[test]
     fn block_seek() {
-        let mut builder = BlockBuilder::new(2);
+        let mut builder = BlockBuilder::new(2, BlockComparator::Bytewise);
         builder.add(b"a", b"1");
         builder.add(b"b", b"2");
         builder.add(b"d", b"3");
         let data = Bytes::copy_from_slice(builder.finish());
 
-        let mut iter = BlockIterator::new(data);
+        let mut iter = BlockIterator::new(data, BlockComparator::Bytewise);
         iter.seek(b"c");
         assert!(iter.valid());
         assert_eq!(iter.key(), b"d");

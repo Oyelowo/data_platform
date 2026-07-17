@@ -236,7 +236,10 @@ pub fn create_backup(engine: &LsmEngine, name: &str) -> Result<()> {
 pub fn restore_backup(engine: &LsmEngine, name: &str, target: impl AsRef<Path>) -> Result<()> {
     let source = backup_dir(engine, name)?;
     if !source.exists() {
-        return Err(Error::InvalidArgument(format!("backup '{}' not found", name)));
+        return Err(Error::InvalidArgument(format!(
+            "backup '{}' not found",
+            name
+        )));
     }
     restore_checkpoint(&source, target)
 }
@@ -290,7 +293,10 @@ pub fn restore_checkpoint(source: impl AsRef<Path>, target: impl AsRef<Path>) ->
 pub fn delete_backup(engine: &LsmEngine, name: &str) -> Result<()> {
     let dir = backup_dir(engine, name)?;
     if !dir.exists() {
-        return Err(Error::InvalidArgument(format!("backup '{}' not found", name)));
+        return Err(Error::InvalidArgument(format!(
+            "backup '{}' not found",
+            name
+        )));
     }
     fs::remove_dir_all(&dir)?;
     Ok(())

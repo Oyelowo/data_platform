@@ -125,9 +125,7 @@ fn engine_roundtrip_every_codec() {
         let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
         for i in 0..100u32 {
             let value = compressible_value(i as usize, 1024);
-            engine
-                .put(format!("k{i:04}").as_bytes(), &value)
-                .unwrap();
+            engine.put(format!("k{i:04}").as_bytes(), &value).unwrap();
         }
         // Point reads while data is spread across memtable + L0 files.
         for i in 0..100u32 {
@@ -166,11 +164,7 @@ fn corrupt_compressed_block_is_detected() {
     // One key with a large compressible value, so the first data block has a
     // sizeable compressed payload at the start of the file.
     let path = dir.path().join("000001.sst");
-    let mut builder = SSTableBuilder::open(
-        &path,
-        builder_opts(CompressionType::Lz4),
-    )
-    .unwrap();
+    let mut builder = SSTableBuilder::open(&path, builder_opts(CompressionType::Lz4)).unwrap();
     builder
         .add(&ikey(b"victim", 1), &compressible_value(0, 8 * 1024))
         .unwrap();
@@ -195,8 +189,7 @@ fn corrupt_compressed_block_is_detected() {
 fn unknown_compression_type_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("000001.sst");
-    let mut builder =
-        SSTableBuilder::open(&path, builder_opts(CompressionType::None)).unwrap();
+    let mut builder = SSTableBuilder::open(&path, builder_opts(CompressionType::None)).unwrap();
     builder.add(&ikey(b"a", 1), b"1").unwrap();
     builder.finish().unwrap();
 
@@ -205,10 +198,14 @@ fn unknown_compression_type_is_rejected() {
     let mut bytes = std::fs::read(&path).unwrap();
     let footer_start = bytes.len() - 48;
     let index_offset = u64::from_le_bytes(
-        bytes[footer_start + 16..footer_start + 24].try_into().unwrap(),
+        bytes[footer_start + 16..footer_start + 24]
+            .try_into()
+            .unwrap(),
     ) as usize;
     let index_size = u64::from_le_bytes(
-        bytes[footer_start + 24..footer_start + 32].try_into().unwrap(),
+        bytes[footer_start + 24..footer_start + 32]
+            .try_into()
+            .unwrap(),
     ) as usize;
     // The first byte of the index block's trailer is the compression type.
     bytes[index_offset + index_size] = 99;
@@ -256,7 +253,10 @@ fn bottommost_compaction_uses_bottommost_codec() {
         for i in 0..40u32 {
             let n = round * 40 + i;
             engine
-                .put(format!("k{n:04}").as_bytes(), &compressible_value(n as usize, 1024))
+                .put(
+                    format!("k{n:04}").as_bytes(),
+                    &compressible_value(n as usize, 1024),
+                )
                 .unwrap();
         }
         engine.sync().unwrap();
@@ -310,7 +310,10 @@ fn compressed_blocks_flow_through_block_cache() {
     let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
     for i in 0..50u32 {
         engine
-            .put(format!("k{i:03}").as_bytes(), &compressible_value(i as usize, 2048))
+            .put(
+                format!("k{i:03}").as_bytes(),
+                &compressible_value(i as usize, 2048),
+            )
             .unwrap();
     }
     engine.sync().unwrap();

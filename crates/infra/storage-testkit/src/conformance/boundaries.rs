@@ -22,7 +22,10 @@ fn empty_key<E: Engine, F: Fn() -> E>(factory: &F) {
     tx.put(b"", b"empty-key").unwrap();
     tx.commit().unwrap();
 
-    assert_eq!(engine.get(b"").unwrap(), Some(Bytes::from_static(b"empty-key")));
+    assert_eq!(
+        engine.get(b"").unwrap(),
+        Some(Bytes::from_static(b"empty-key"))
+    );
 }
 
 fn binary_keys<E: Engine, F: Fn() -> E>(factory: &F) {
@@ -33,7 +36,10 @@ fn binary_keys<E: Engine, F: Fn() -> E>(factory: &F) {
     tx.put(&key, b"binary").unwrap();
     tx.commit().unwrap();
 
-    assert_eq!(engine.get(&key).unwrap(), Some(Bytes::from_static(b"binary")));
+    assert_eq!(
+        engine.get(&key).unwrap(),
+        Some(Bytes::from_static(b"binary"))
+    );
 }
 
 fn unicode_values<E: Engine, F: Fn() -> E>(factory: &F) {
@@ -44,7 +50,10 @@ fn unicode_values<E: Engine, F: Fn() -> E>(factory: &F) {
     tx.put(b"unicode", value).unwrap();
     tx.commit().unwrap();
 
-    assert_eq!(engine.get(b"unicode").unwrap(), Some(Bytes::copy_from_slice(value)));
+    assert_eq!(
+        engine.get(b"unicode").unwrap(),
+        Some(Bytes::copy_from_slice(value))
+    );
 }
 
 fn null_value<E: Engine, F: Fn() -> E>(factory: &F) {

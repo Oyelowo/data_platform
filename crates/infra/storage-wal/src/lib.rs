@@ -28,12 +28,12 @@
 //! ```
 
 mod committer;
-mod record;
 mod reader;
+mod record;
 mod segment;
 mod wal;
 
-pub use record::{Durability, Record, RecordType};
+pub use record::{Durability, Record, RecordType, RECORD_HEADER_SIZE};
 pub use wal::{Wal, WalOptions};
 
 /// Logical sequence number. Monotonically increasing within a WAL.

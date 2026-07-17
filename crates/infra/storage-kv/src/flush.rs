@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 
 use crate::immutable::sstable_path;
-use crate::internal_key::extract_user_key;
+use crate::internal_key::{ValueType, compare_internal_keys, extract_user_key, parse_internal_key};
 use crate::manifest::Manifest;
 use crate::memtable::MemTable;
 use crate::metrics::Metrics;
@@ -28,10 +28,10 @@ pub fn flush_memtable(
     version_set: &Arc<VersionSet>,
     manifest: &Arc<Mutex<Manifest>>,
     mem: &MemTable,
-    last_sequence: SequenceNumber,
     file_number: crate::FileNumber,
     metrics: &Metrics,
     cf_id: crate::column_family::ColumnFamilyId,
+    smallest_snapshot: SequenceNumber,
 ) -> Result<FileMetaData> {
     let path = sstable_path(db_path, file_number);
     let opts = SSTableBuilderOptions {
@@ -44,22 +44,40 @@ pub fn flush_memtable(
     let mut builder = SSTableBuilder::open(path, opts)?;
 
     // The MemTable iter is sorted by internal-key comparator (user key
-    // ascending, sequence descending). Keep only the newest version of each
-    // user key, then reorder by raw internal-key bytes because the SSTable
-    // block format relies on lexicographic ordering.
+    // ascending, sequence descending).  Keep the newest version of each user
+    // key, plus any older versions that are still visible to the oldest live
+    // snapshot.  This preserves snapshot isolation for transactions that pinned
+    // this MemTable before it was frozen.
     let mut deduped: Vec<(Vec<u8>, Bytes)> = Vec::new();
     let mut last_user_key: Option<Vec<u8>> = None;
+    let mut have_oldest_visible = false;
+    let mut max_sequence: SequenceNumber = 0;
     for (ikey, value) in mem.iter() {
         let user_key = extract_user_key(&ikey).to_vec();
-        if Some(&user_key) == last_user_key.as_ref() {
+        if Some(&user_key) != last_user_key.as_ref() {
+            last_user_key = Some(user_key);
+            have_oldest_visible = false;
+        }
+        if have_oldest_visible {
             continue;
         }
-        last_user_key = Some(user_key);
+        let (seq, _) = parse_internal_key(&ikey).unwrap_or((0, ValueType::Deletion));
+        max_sequence = max_sequence.max(seq);
         deduped.push((ikey, value));
+        if seq <= smallest_snapshot {
+            have_oldest_visible = true;
+        }
     }
-    deduped.sort_by(|a, b| a.0.cmp(&b.0));
+    deduped.sort_by(|a, b| compare_internal_keys(&a.0, &b.0));
     for (ikey, value) in deduped {
         builder.add(&ikey, &value)?;
+    }
+
+    // Range tombstones also carry sequence numbers; the flush edit's
+    // last_sequence must be at least as large as the newest one so WAL replay
+    // can safely skip records already represented by this SSTable.
+    for rt in mem.range_tombstones() {
+        max_sequence = max_sequence.max(rt.seq);
     }
 
     // Range tombstones are stored in a dedicated meta-block so they can be
@@ -78,10 +96,13 @@ pub fn flush_memtable(
         largest: built.largest_key,
     };
 
+    // Use the actual highest sequence in the flushed MemTable, not the allocator's
+    // current value, so the manifest records exactly which WAL records are now
+    // represented by SSTables.
     let edit = VersionEdit {
         cf_id,
         new_files: vec![(0, meta.clone())],
-        last_sequence,
+        last_sequence: max_sequence,
         next_file_number: version_set.next_file_number(),
         ..Default::default()
     };

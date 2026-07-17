@@ -81,8 +81,7 @@ impl MemTable {
     /// entry is a blob reference; callers that need to distinguish the type
     /// should use [`Self::get_with_type`].
     pub fn get(&self, key: &[u8], snapshot_seq: SequenceNumber) -> Option<Option<Bytes>> {
-        self.get_with_type(key, snapshot_seq)
-            .map(|(_, val)| val)
+        self.get_with_type(key, snapshot_seq).map(|(_, val)| val)
     }
 
     /// Look up the newest visible entry for `key` at or before `snapshot_seq`,
@@ -272,9 +271,10 @@ impl crate::merge_iter::InternalIterator for MemTableIterator {
     }
 
     fn seek(&mut self, target: &[u8]) -> crate::Result<()> {
+        let target_user = extract_user_key(target);
         self.position = self
             .entries
-            .partition_point(|(k, _)| extract_user_key(k) < target);
+            .partition_point(|(k, _)| extract_user_key(k) < target_user);
         Ok(())
     }
 
@@ -354,10 +354,7 @@ mod tests {
         mt.put(b"b", 1, b"v1");
         mt.delete_range(b"a", b"d", 5);
         // Snapshot at seq 3 predates the range tombstone.
-        assert_eq!(
-            mt.get(b"b", 3),
-            Some(Some(Bytes::from_static(b"v1")))
-        );
+        assert_eq!(mt.get(b"b", 3), Some(Some(Bytes::from_static(b"v1"))));
         // Snapshot at seq 5 sees the tombstone.
         assert_eq!(mt.get(b"b", 5), Some(None));
     }
@@ -368,10 +365,7 @@ mod tests {
         mt.put(b"b", 1, b"v1");
         mt.delete_range(b"a", b"d", 5);
         mt.put(b"b", 10, b"v2");
-        assert_eq!(
-            mt.get(b"b", 10),
-            Some(Some(Bytes::from_static(b"v2")))
-        );
+        assert_eq!(mt.get(b"b", 10), Some(Some(Bytes::from_static(b"v2"))));
     }
 
     #[test]
@@ -380,10 +374,7 @@ mod tests {
         mt.put(b"b", 10, b"v1");
         mt.delete_range(b"a", b"d", 5);
         // The put at seq 10 is newer than the tombstone at seq 5, so it wins.
-        assert_eq!(
-            mt.get(b"b", 10),
-            Some(Some(Bytes::from_static(b"v1")))
-        );
+        assert_eq!(mt.get(b"b", 10), Some(Some(Bytes::from_static(b"v1"))));
         // At seq 5 the tombstone is the newest covering entry.
         assert_eq!(mt.get(b"b", 5), Some(None));
     }

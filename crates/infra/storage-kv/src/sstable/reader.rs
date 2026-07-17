@@ -5,17 +5,19 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use super::block::BlockIterator;
+use super::block::{BlockComparator, BlockIterator};
 use super::filter::BloomFilterReader;
 use super::format::{
     BLOCK_TRAILER_SIZE, BlockHandle, CompressionType, FOOTER_SIZE, Footer, MAX_BLOCK_SIZE, checksum,
 };
 use super::index::IndexIterator;
 use crate::Result;
+use crate::SequenceNumber;
 use crate::cache::{BlockCacheKey, BlockCaches};
 use crate::file::{FadviseAdvice, RandomAccessFile, StdRandomAccessFile};
-use crate::internal_key::{RangeTombstone, extract_user_key, parse_internal_key};
-use crate::SequenceNumber;
+use crate::internal_key::{
+    RangeTombstone, build_internal_key, extract_user_key, parse_internal_key,
+};
 use crate::merge_iter::InternalIterator;
 
 /// Reader for a single SSTable file.
@@ -83,14 +85,8 @@ impl SSTableReader {
 
         let range_tombstones = match find_range_tombstone_handle(&meta_index) {
             Some(handle) => {
-                let rt_block = read_block(
-                    &file,
-                    file_len,
-                    file_number,
-                    handle,
-                    caches.as_ref(),
-                    true,
-                )?;
+                let rt_block =
+                    read_block(&file, file_len, file_number, handle, caches.as_ref(), true)?;
                 decode_range_tombstone_block(&rt_block)
             }
             None => Vec::new(),
@@ -144,6 +140,8 @@ impl SSTableReader {
             return Ok(tombstone_seq.map(|_| None));
         }
 
+        // Seek the index to the user key.  The index separators are user-key
+        // boundaries encoded as raw bytes, so a plain user-key target works.
         let mut index_iter = IndexIterator::new(self.index_block.clone());
         index_iter.seek(key);
         if !index_iter.valid() {
@@ -159,15 +157,19 @@ impl SSTableReader {
             true,
         )?;
 
-        let mut block_iter = BlockIterator::new(data_block);
-        block_iter.seek(key);
+        // Seek to the newest version of `key`.  Using a max-sequence internal
+        // key positions the block iterator at the first entry for this user key
+        // (the block stores entries newest-first).
+        let mut block_iter = BlockIterator::new(data_block, BlockComparator::InternalKey);
+        let seek_key = build_internal_key(key, u64::MAX, ValueType::Value);
+        block_iter.seek(&seek_key);
         if !block_iter.valid() {
             return Ok(tombstone_seq.map(|_| None));
         }
 
-        // The block stores entries for the same user key in ascending sequence
-        // order.  Walk through all versions and keep the newest one that is
-        // visible to `snapshot_seq`.
+        // The block stores entries for the same user key in descending sequence
+        // order (newest first).  The first entry with sequence <= snapshot_seq
+        // is the newest visible version.
         let mut point_result: Option<(SequenceNumber, ValueType, Option<Bytes>)> = None;
         while block_iter.valid() {
             if extract_user_key(block_iter.key()) != key {
@@ -186,6 +188,7 @@ impl SSTableReader {
                         Some(Bytes::copy_from_slice(value))
                     },
                 ));
+                break;
             }
             block_iter.next();
         }
@@ -229,10 +232,10 @@ impl SSTableReader {
 
 /// Iterator over an SSTable.
 ///
-/// Entries are stored on disk in raw byte order (user key ascending, sequence
-/// ascending).  This iterator buffers the versions of each user key and yields
-/// them in the logical order expected by the merge iterator: user key
-/// ascending, sequence descending (newest first).
+/// Entries are stored on disk in internal-key order: user key ascending,
+/// sequence descending (newest first).  This iterator buffers the versions of
+/// each user key and yields them in the logical order expected by the merge
+/// iterator: user key ascending, sequence descending (newest first).
 pub struct SSTableIterator {
     file: Arc<dyn RandomAccessFile>,
     file_len: u64,
@@ -242,8 +245,8 @@ pub struct SSTableIterator {
     index_iter: IndexIterator,
     current_block: Option<(BlockHandle, Bytes, BlockIterator)>,
     /// Buffered entries for the current user key, in on-disk (sequence
-    /// ascending) order.  Entries are popped from the back to yield newest
-    /// first.
+    /// descending) order.  `fill_pending` reverses them so entries are popped
+    /// from the back to yield newest first.
     pending: Vec<(Vec<u8>, Bytes)>,
 }
 
@@ -279,7 +282,11 @@ impl SSTableIterator {
     }
 
     pub fn seek(&mut self, target: &[u8]) -> Result<()> {
-        self.index_iter.seek(target);
+        // Index separators are user-key boundaries (or full internal keys for a
+        // single-block table), so seek the index using the user-key portion of
+        // the target.  The data block is then seeked with the full internal key.
+        let user_target = extract_user_key(target);
+        self.index_iter.seek(user_target);
         self.load_block()?;
         if let Some((_, _, ref mut bi)) = self.current_block {
             bi.seek(target);
@@ -301,7 +308,7 @@ impl SSTableIterator {
             self.caches.as_ref(),
             self.fill_cache,
         )?;
-        let mut bi = BlockIterator::new(data.clone());
+        let mut bi = BlockIterator::new(data.clone(), BlockComparator::InternalKey);
         bi.seek_to_first();
         self.current_block = Some((handle, data, bi));
         Ok(())
@@ -312,7 +319,7 @@ impl SSTableIterator {
     fn fill_pending(&mut self) -> Result<()> {
         self.pending.clear();
         loop {
-            let entries = match self.current_block {
+            let mut entries = match self.current_block {
                 Some((_, _, ref mut bi)) if bi.valid() => {
                     let first_key = extract_user_key(bi.key()).to_vec();
                     let mut entries = Vec::new();
@@ -325,6 +332,7 @@ impl SSTableIterator {
                 _ => Vec::new(),
             };
             if !entries.is_empty() {
+                entries.reverse();
                 self.pending = entries;
                 return Ok(());
             }
@@ -464,9 +472,7 @@ fn read_block(
 
     let compression = CompressionType::from_u8(trailer[0])
         .ok_or_else(|| crate::Error::Sstable("unknown compression type".into()))?;
-    let stored_crc = u32::from_le_bytes([
-        trailer[1], trailer[2], trailer[3], trailer[4],
-    ]);
+    let stored_crc = u32::from_le_bytes([trailer[1], trailer[2], trailer[3], trailer[4]]);
     // The CRC covers the stored (compressed) bytes, so corruption is caught
     // before any decompression is attempted.
     let computed_crc = checksum(&block);
@@ -518,7 +524,10 @@ fn decompress_stored(raw: Bytes) -> Result<Bytes> {
 }
 
 fn find_filter_handle(meta_index: &[u8]) -> Result<BlockHandle> {
-    let mut iter = BlockIterator::new(Bytes::copy_from_slice(meta_index));
+    let mut iter = BlockIterator::new(
+        Bytes::copy_from_slice(meta_index),
+        BlockComparator::Bytewise,
+    );
     iter.seek_to_first();
     while iter.valid() {
         if iter.key() == b"filter.bloom" {
@@ -530,7 +539,10 @@ fn find_filter_handle(meta_index: &[u8]) -> Result<BlockHandle> {
 }
 
 fn find_range_tombstone_handle(meta_index: &[u8]) -> Option<BlockHandle> {
-    let mut iter = BlockIterator::new(Bytes::copy_from_slice(meta_index));
+    let mut iter = BlockIterator::new(
+        Bytes::copy_from_slice(meta_index),
+        BlockComparator::Bytewise,
+    );
     iter.seek_to_first();
     while iter.valid() {
         if iter.key() == b"range_tombstone" {
@@ -543,7 +555,7 @@ fn find_range_tombstone_handle(meta_index: &[u8]) -> Option<BlockHandle> {
 
 fn decode_range_tombstone_block(block: &[u8]) -> Vec<RangeTombstone> {
     let mut out = Vec::new();
-    let mut iter = BlockIterator::new(Bytes::copy_from_slice(block));
+    let mut iter = BlockIterator::new(Bytes::copy_from_slice(block), BlockComparator::Bytewise);
     iter.seek_to_first();
     while iter.valid() {
         if let Some(rt) = RangeTombstone::decode(iter.value()) {
@@ -653,7 +665,7 @@ mod tests {
 
         let reader = SSTableReader::open(&path, 1, None).unwrap();
         let mut iter = reader.iter().unwrap();
-        iter.seek(b"d").unwrap();
+        iter.seek(&ik(b"d")).unwrap();
         assert!(iter.valid());
         assert_eq!(iter.key(), ik(b"e"));
     }
@@ -676,9 +688,19 @@ mod tests {
         let mut reader = SSTableReader::open(&path, 1, Some(caches)).unwrap();
 
         // First get should populate the cache.
-        assert!(reader.get(&50u16.to_be_bytes(), u64::MAX).unwrap().is_some());
+        assert!(
+            reader
+                .get(&50u16.to_be_bytes(), u64::MAX)
+                .unwrap()
+                .is_some()
+        );
         // Second get for the same key should hit the cache.
-        assert!(reader.get(&50u16.to_be_bytes(), u64::MAX).unwrap().is_some());
+        assert!(
+            reader
+                .get(&50u16.to_be_bytes(), u64::MAX)
+                .unwrap()
+                .is_some()
+        );
 
         // The cache should contain at least one block.
         assert!(
@@ -719,7 +741,11 @@ mod tests {
         // Hot tier that can never retain anything; cold tier large enough.
         let hot = Arc::new(BlockCache::with_capacity(1));
         let cold = Arc::new(BlockCache::with_capacity(1 << 20));
-        let caches = BlockCaches::new(hot.clone(), Some(cold.clone()), Arc::new(Metrics::default()));
+        let caches = BlockCaches::new(
+            hot.clone(),
+            Some(cold.clone()),
+            Arc::new(Metrics::default()),
+        );
         let mut reader = SSTableReader::open(&path, 1, Some(caches)).unwrap();
 
         // Populate the cold tier with the block containing key0000.
@@ -727,7 +753,10 @@ mod tests {
             reader.get(b"key0000", u64::MAX).unwrap().is_some(),
             "first read should succeed"
         );
-        assert!(cold.total_weight() > 0, "cold tier should hold stored bytes");
+        assert!(
+            cold.total_weight() > 0,
+            "cold tier should hold stored bytes"
+        );
         assert_eq!(
             hot.total_weight(),
             0,
@@ -764,7 +793,11 @@ mod tests {
 
         let hot = Arc::new(BlockCache::with_capacity(1 << 20));
         let cold = Arc::new(BlockCache::with_capacity(1 << 20));
-        let caches = BlockCaches::new(hot.clone(), Some(cold.clone()), Arc::new(Metrics::default()));
+        let caches = BlockCaches::new(
+            hot.clone(),
+            Some(cold.clone()),
+            Arc::new(Metrics::default()),
+        );
         let mut reader = SSTableReader::open(&path, 1, Some(caches)).unwrap();
 
         // open() legitimately caches the meta blocks; measure the scan as a
@@ -819,14 +852,16 @@ mod tests {
             for i in 0..50u32 {
                 let user_key = format!("t{}-k{}", t, i);
                 let seq = (t * 50 + i + 1) as u64;
-                keys.push(build_internal_key(user_key.as_bytes(), seq, ValueType::Value));
+                keys.push(build_internal_key(
+                    user_key.as_bytes(),
+                    seq,
+                    ValueType::Value,
+                ));
             }
         }
         keys.sort();
         for (idx, ikey) in keys.iter().enumerate() {
-            builder
-                .add(ikey, format!("v{}", idx).as_bytes())
-                .unwrap();
+            builder.add(ikey, format!("v{}", idx).as_bytes()).unwrap();
         }
         let built = builder.finish().unwrap();
 
@@ -862,9 +897,7 @@ mod tests {
         )
         .unwrap();
         for i in 0..10u8 {
-            builder
-                .add(&ik(&[i]), &[i, 1])
-                .unwrap();
+            builder.add(&ik(&[i]), &[i, 1]).unwrap();
         }
         builder
             .add_range_tombstone(RangeTombstone {
@@ -904,14 +937,16 @@ mod tests {
             for i in 0..100u32 {
                 let user_key = format!("t{}-k{}", t, i);
                 let seq = (t * 100 + i + 1) as u64;
-                keys.push(build_internal_key(user_key.as_bytes(), seq, ValueType::Value));
+                keys.push(build_internal_key(
+                    user_key.as_bytes(),
+                    seq,
+                    ValueType::Value,
+                ));
             }
         }
         keys.sort();
         for (idx, ikey) in keys.iter().enumerate() {
-            builder
-                .add(ikey, format!("v{}", idx).as_bytes())
-                .unwrap();
+            builder.add(ikey, format!("v{}", idx).as_bytes()).unwrap();
         }
         let built = builder.finish().unwrap();
         assert!(
@@ -928,7 +963,8 @@ mod tests {
                 assert!(
                     got.is_some(),
                     "missing key {} in {}-entry sstable",
-                    user_key, built.num_entries
+                    user_key,
+                    built.num_entries
                 );
             }
         }

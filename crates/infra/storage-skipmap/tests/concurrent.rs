@@ -72,7 +72,11 @@ fn concurrent_overlapping_mutate_invariants() {
 
     let snapshot = map.iter();
     let keys: BTreeSet<_> = snapshot.iter().map(|(k, _)| *k).collect();
-    assert_eq!(keys.len(), snapshot.len(), "duplicate keys in final snapshot");
+    assert_eq!(
+        keys.len(),
+        snapshot.len(),
+        "duplicate keys in final snapshot"
+    );
 
     for window in snapshot.windows(2) {
         assert!(window[0].0 < window[1].0, "snapshot not sorted");

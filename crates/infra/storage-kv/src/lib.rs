@@ -14,6 +14,7 @@ mod backup;
 mod blob;
 mod blob_gc;
 mod cache;
+pub mod column_family;
 mod compaction;
 mod compaction_merge;
 mod compaction_worker;
@@ -26,9 +27,9 @@ mod file_number;
 mod flush;
 mod immutable;
 pub mod internal_key;
+pub mod logger;
 mod manifest;
 mod memtable;
-pub mod column_family;
 pub mod merge_iter;
 mod metrics;
 mod obsolete_files;
@@ -42,11 +43,13 @@ mod version;
 mod version_set;
 mod wal;
 mod worker;
-pub mod logger;
 
 pub mod sstable;
 
-pub use backup::{create_backup, create_checkpoint, delete_backup, list_backups, restore_backup, restore_checkpoint, BackupColumnFamily, BackupManifest};
+pub use backup::{
+    BackupColumnFamily, BackupManifest, create_backup, create_checkpoint, delete_backup,
+    list_backups, restore_backup, restore_checkpoint,
+};
 pub use engine::LsmEngine;
 pub use error::{Error, Result};
 pub use options::LsmOptions;

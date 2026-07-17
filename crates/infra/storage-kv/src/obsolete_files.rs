@@ -171,7 +171,9 @@ mod tests {
         obsolete.mark_obsolete(2);
         assert_eq!(obsolete.pending_count(), 1);
 
-        obsolete.delete_unreferenced(dir.path(), &version_set).unwrap();
+        obsolete
+            .delete_unreferenced(dir.path(), &version_set)
+            .unwrap();
         assert!(sstable_path(dir.path(), 1).exists());
         assert!(!sstable_path(dir.path(), 2).exists());
         assert_eq!(obsolete.pending_count(), 0);
@@ -201,13 +203,17 @@ mod tests {
         obsolete.mark_obsolete(1);
 
         // The held version still references file 1, so it must not be deleted.
-        obsolete.delete_unreferenced(dir.path(), &version_set).unwrap();
+        obsolete
+            .delete_unreferenced(dir.path(), &version_set)
+            .unwrap();
         assert!(sstable_path(dir.path(), 1).exists());
         assert_eq!(obsolete.pending_count(), 1);
 
         // After dropping the held version the next cleanup pass deletes it.
         drop(_held_version);
-        obsolete.delete_unreferenced(dir.path(), &version_set).unwrap();
+        obsolete
+            .delete_unreferenced(dir.path(), &version_set)
+            .unwrap();
         assert!(!sstable_path(dir.path(), 1).exists());
         assert_eq!(obsolete.pending_count(), 0);
     }

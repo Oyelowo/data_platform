@@ -44,7 +44,10 @@ fn compression_counters_are_populated() {
 
     assert!(bytes_in > 0, "compression_bytes_in should be > 0");
     assert!(bytes_out > 0, "compression_bytes_out should be > 0");
-    assert!(bytes_out <= bytes_in, "compressed bytes should not exceed input");
+    assert!(
+        bytes_out <= bytes_in,
+        "compressed bytes should not exceed input"
+    );
     assert!(blocks > 0, "compression_blocks should be > 0");
 }
 
@@ -127,6 +130,88 @@ fn engine_stats_fields_are_sensible() {
     assert_eq!(stats.name, "storage-kv");
     assert!(stats.disk_bytes > 0, "disk_bytes should include SSTables");
     assert!(stats.memory_bytes > 0, "memory_bytes should include caches");
+}
+
+/// Blob writes and GC must update blob-specific counters.
+#[test]
+fn blob_counters_are_populated() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = LsmOptions {
+        min_blob_value_size: 64,
+        blob_file_size: 1,
+        write_buffer_size: 64,
+        level0_file_num_compaction_trigger: 2,
+        target_file_size_base: 128,
+        blob_gc_ratio: 1.0,
+        blob_gc_interval_ms: 0,
+        ..Default::default()
+    };
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
+
+    let key = b"k";
+    let v1 = vec![b'1'; 100];
+    let v2 = vec![b'2'; 100];
+
+    engine.put(key, &v1).unwrap();
+    engine.sync().unwrap();
+
+    let stats_before = engine.stats().unwrap();
+    assert!(get_metric(&stats_before, "blob_bytes_total") > 0);
+
+    engine.put(key, &v2).unwrap();
+    engine.sync().unwrap();
+    engine.run_blob_gc_once().unwrap();
+
+    let stats_after = engine.stats().unwrap();
+    assert!(get_metric(&stats_after, "blob_gc_scanned_files") > 0);
+    assert!(get_metric(&stats_after, "blob_gc_deleted_files") > 0);
+    assert!(get_metric(&stats_after, "blob_gc_space_reclaimed") > 0);
+    assert_eq!(get_metric(&stats_after, "blob_bytes_garbage"), 0);
+}
+
+/// Blob references rewritten during compaction must update compaction-rewrite
+/// counters and keep the value readable.
+#[test]
+fn blob_compaction_rewrite_counters_are_populated() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = LsmOptions {
+        min_blob_value_size: 64,
+        blob_file_size: 1,
+        write_buffer_size: 64,
+        level0_file_num_compaction_trigger: 2,
+        target_file_size_base: 128,
+        blob_gc_ratio: 1.0,
+        blob_gc_interval_ms: 0,
+        ..Default::default()
+    };
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
+
+    let key = b"k";
+    let v1 = vec![b'1'; 100];
+    let v2 = vec![b'2'; 100];
+
+    engine.put(key, &v1).unwrap();
+    engine.sync().unwrap();
+
+    engine.put(key, &v2).unwrap();
+    engine.sync().unwrap();
+
+    // Trigger background compaction.
+    for i in 0..20usize {
+        let k = format!("x{i:03}");
+        engine.put(k.as_bytes(), &vec![i as u8; 100]).unwrap();
+    }
+    engine.sync().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    assert_eq!(engine.get(key).unwrap(), Some(Bytes::from(v2)));
+
+    let stats = engine.stats().unwrap();
+    assert!(
+        get_metric(&stats, "blob_compaction_rewritten_records") > 0
+            || get_metric(&stats, "blob_gc_rewritten_records") > 0,
+        "blob ref should have been rewritten by compaction or GC"
+    );
 }
 
 /// A disabled cold tier must still report all metrics correctly.

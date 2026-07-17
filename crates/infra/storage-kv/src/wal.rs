@@ -2,8 +2,8 @@
 
 use bytes::{Buf, BufMut, Bytes};
 
-use crate::column_family::ColumnFamilyId;
 use crate::SequenceNumber;
+use crate::column_family::ColumnFamilyId;
 
 /// Record type stored in the WAL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,11 +51,7 @@ impl WalRecord {
         Self::new_delete_cf(0, key, sequence)
     }
 
-    pub fn new_delete_cf(
-        cf_id: ColumnFamilyId,
-        key: &[u8],
-        sequence: SequenceNumber,
-    ) -> Self {
+    pub fn new_delete_cf(cf_id: ColumnFamilyId, key: &[u8], sequence: SequenceNumber) -> Self {
         Self {
             ty: WalRecordType::Delete,
             cf_id,
@@ -66,11 +62,7 @@ impl WalRecord {
     }
 
     #[allow(dead_code)]
-    pub fn new_delete_range(
-        start: &[u8],
-        end: &[u8],
-        sequence: SequenceNumber,
-    ) -> Self {
+    pub fn new_delete_range(start: &[u8], end: &[u8], sequence: SequenceNumber) -> Self {
         Self::new_delete_range_cf(0, start, end, sequence)
     }
 

@@ -108,9 +108,7 @@ fn concurrent_scans_during_compaction() {
         writer_barrier.wait();
         for round in 0..10u8 {
             for i in 0..200u16 {
-                writer_engine
-                    .put(&i.to_be_bytes(), &[round; 2])
-                    .unwrap();
+                writer_engine.put(&i.to_be_bytes(), &[round; 2]).unwrap();
             }
         }
         writer_engine.sync().unwrap();

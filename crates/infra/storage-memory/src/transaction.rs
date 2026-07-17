@@ -25,10 +25,7 @@ pub struct MemoryTransaction {
 
 impl MemoryTransaction {
     /// Create a new transaction.
-    pub(crate) fn new(
-        data: Arc<storage_skipmap::SkipMap<Bytes, Bytes>>,
-        opts: TxnOptions,
-    ) -> Self {
+    pub(crate) fn new(data: Arc<storage_skipmap::SkipMap<Bytes, Bytes>>, opts: TxnOptions) -> Self {
         Self {
             data,
             local: BTreeMap::new(),

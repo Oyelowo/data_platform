@@ -130,7 +130,8 @@ impl Record {
         let payload_start = RECORD_HEADER_SIZE - 4; // before the trailing CRC
         let payload = Bytes::copy_from_slice(&buf[payload_start..payload_start + payload_len]);
         let stored_crc = &buf[payload_start + payload_len..payload_start + payload_len + 4];
-        let stored_crc = u32::from_le_bytes([stored_crc[0], stored_crc[1], stored_crc[2], stored_crc[3]]);
+        let stored_crc =
+            u32::from_le_bytes([stored_crc[0], stored_crc[1], stored_crc[2], stored_crc[3]]);
 
         let computed_crc = crc32c::crc32c(&buf[4..payload_start + payload_len]);
         if computed_crc != stored_crc {

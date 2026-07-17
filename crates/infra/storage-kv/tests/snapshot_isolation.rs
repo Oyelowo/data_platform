@@ -55,9 +55,7 @@ fn scan_snapshot_isolation() {
     let engine = LsmEngine::open(dir.path(), opts()).unwrap();
 
     for i in 0..10 {
-        engine
-            .put(format!("k{}", i).as_bytes(), b"base")
-            .unwrap();
+        engine.put(format!("k{}", i).as_bytes(), b"base").unwrap();
     }
 
     let txn = engine.begin(Default::default()).unwrap();
@@ -142,9 +140,7 @@ fn concurrent_transactions_have_consistent_snapshots() {
     let engine = Arc::new(LsmEngine::open(dir.path(), opts()).unwrap());
 
     for i in 0..20 {
-        engine
-            .put(format!("k{}", i).as_bytes(), b"base")
-            .unwrap();
+        engine.put(format!("k{}", i).as_bytes(), b"base").unwrap();
     }
 
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -164,12 +160,7 @@ fn concurrent_transactions_have_consistent_snapshots() {
                 }
                 // Each transaction must see the full set of base keys; it will
                 // not see its own writes in this simple snapshot model.
-                assert!(
-                    count == 20,
-                    "thread {} saw {} keys, expected 20",
-                    t,
-                    count
-                );
+                assert!(count == 20, "thread {} saw {} keys, expected 20", t, count);
             }
 
             // Each thread writes its own unique keys inside the transaction.

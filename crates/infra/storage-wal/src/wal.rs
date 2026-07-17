@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::committer::Committer;
-use crate::record::{Durability, Record, RecordType};
 use crate::reader::{WalIterator, WalReader};
+use crate::record::{Durability, Record, RecordType};
 use crate::segment::{list_segments, segment_path};
 use crate::{Error, Lsn, Result};
 
@@ -64,7 +64,13 @@ impl Wal {
     /// Append `payload` with the default record type `Put` and the configured
     /// durability. Returns the assigned LSN.
     pub fn append(&self, payload: impl AsRef<[u8]>, durability: Durability) -> Result<Lsn> {
-        self.append_record(Record::new(RecordType::Put, bytes::Bytes::copy_from_slice(payload.as_ref())), durability)
+        self.append_record(
+            Record::new(
+                RecordType::Put,
+                bytes::Bytes::copy_from_slice(payload.as_ref()),
+            ),
+            durability,
+        )
     }
 
     /// Append an arbitrary record.
@@ -84,7 +90,13 @@ impl Wal {
     /// Append a checkpoint record. This is durable and may be used to truncate
     /// older segments.
     pub fn checkpoint(&self, payload: impl AsRef<[u8]>) -> Result<Lsn> {
-        self.append_record(Record::new(RecordType::Checkpoint, bytes::Bytes::copy_from_slice(payload.as_ref())), Durability::Immediate)
+        self.append_record(
+            Record::new(
+                RecordType::Checkpoint,
+                bytes::Bytes::copy_from_slice(payload.as_ref()),
+            ),
+            Durability::Immediate,
+        )
     }
 
     /// Return a random-access reader for this WAL.
@@ -155,7 +167,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
         let lsns: Vec<_> = (0..10)
-            .map(|i| wal.append(format!("record-{i}").into_bytes(), Durability::Immediate).unwrap())
+            .map(|i| {
+                wal.append(format!("record-{i}").into_bytes(), Durability::Immediate)
+                    .unwrap()
+            })
             .collect();
 
         for (i, lsn) in lsns.iter().enumerate() {

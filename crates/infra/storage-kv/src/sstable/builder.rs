@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::compression::{CompressionCodec, codec_for};
-use crate::internal_key::{RangeTombstone, build_internal_key, extract_user_key, ValueType};
+use crate::internal_key::{
+    RangeTombstone, ValueType, build_internal_key, compare_internal_keys, extract_user_key,
+};
 
-use super::block::BlockBuilder;
+use super::block::{BlockBuilder, BlockComparator};
 use super::filter::BloomFilterBuilder;
 use super::format::{BLOCK_TRAILER_SIZE, BlockHandle, CompressionType, Footer, checksum};
 use super::index::IndexBuilder;
@@ -72,7 +74,10 @@ impl SSTableBuilder {
             file,
             options,
             codec: codec_for(options.compression),
-            data_block: BlockBuilder::new(options.block_restart_interval),
+            data_block: BlockBuilder::new(
+                options.block_restart_interval,
+                BlockComparator::InternalKey,
+            ),
             index_builder: IndexBuilder::new(options.block_restart_interval),
             filter_builder: BloomFilterBuilder::new(options.bloom_bits_per_key),
             last_key: Vec::new(),
@@ -88,9 +93,12 @@ impl SSTableBuilder {
         })
     }
 
-    /// Add a key/value pair. Keys must be added in ascending order.
+    /// Add a key/value pair. Keys must be added in ascending order according
+    /// to the internal-key comparator.
     pub fn add(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        if !self.last_key.is_empty() && self.last_key.as_slice() >= key {
+        if !self.last_key.is_empty()
+            && compare_internal_keys(&self.last_key, key) != std::cmp::Ordering::Less
+        {
             return Err(crate::Error::InvalidArgument(
                 "keys must be added in ascending order".into(),
             ));
@@ -108,6 +116,18 @@ impl SSTableBuilder {
         // Bloom filters are keyed by user key so that reads can test the user
         // key directly without decoding the internal-key trailer.
         self.filter_builder.add_key(extract_user_key(key));
+
+        // Only split a data block on a user-key boundary.  Internal keys for
+        // the same user key are stored newest-first, so a mid-key split would
+        // place an older version in the next block and the raw-byte index
+        // separator would no longer match the internal-key comparator order.
+        let prev_user_key: Option<Vec<u8>> = if self.last_key.is_empty() {
+            None
+        } else {
+            Some(extract_user_key(&self.last_key).to_vec())
+        };
+        let curr_user_key = extract_user_key(key);
+
         self.data_block.add(key, value);
         self.last_key = key.to_vec();
         self.num_entries += 1;
@@ -117,7 +137,9 @@ impl SSTableBuilder {
         }
         self.largest_key = Some(key.to_vec());
 
-        if self.data_block.current_size_estimate() >= self.options.block_size {
+        if self.data_block.current_size_estimate() >= self.options.block_size
+            && prev_user_key.as_deref() != Some(curr_user_key)
+        {
             self.flush_data_block()?;
         }
 
@@ -140,15 +162,18 @@ impl SSTableBuilder {
 
         // Update file bounds so that compaction overlap considers the full
         // span covered by range tombstones, not just the point keys.
-        let start_ikey = build_internal_key(&tombstone.start, tombstone.seq, ValueType::RangeDeletion);
+        let start_ikey =
+            build_internal_key(&tombstone.start, tombstone.seq, ValueType::RangeDeletion);
         let end_ikey = build_internal_key(&tombstone.end, tombstone.seq, ValueType::RangeDeletion);
         if self.smallest_key.is_none()
-            || start_ikey < self.smallest_key.as_ref().unwrap().clone()
+            || compare_internal_keys(&start_ikey, self.smallest_key.as_ref().unwrap())
+                == std::cmp::Ordering::Less
         {
             self.smallest_key = Some(start_ikey);
         }
         if self.largest_key.is_none()
-            || end_ikey > self.largest_key.as_ref().unwrap().clone()
+            || compare_internal_keys(&end_ikey, self.largest_key.as_ref().unwrap())
+                == std::cmp::Ordering::Greater
         {
             self.largest_key = Some(end_ikey);
         }
@@ -192,7 +217,12 @@ impl SSTableBuilder {
         self.write_raw(block.len() as u64, block, CompressionType::None)
     }
 
-    fn write_raw(&mut self, uncompressed_len: u64, stored: &[u8], ty: CompressionType) -> Result<BlockHandle> {
+    fn write_raw(
+        &mut self,
+        uncompressed_len: u64,
+        stored: &[u8],
+        ty: CompressionType,
+    ) -> Result<BlockHandle> {
         let handle = BlockHandle {
             offset: self.offset,
             size: stored.len() as u64,
@@ -231,7 +261,10 @@ impl SSTableBuilder {
         let range_tombstone_handle = if self.range_tombstones.is_empty() {
             None
         } else {
-            let mut rt_builder = BlockBuilder::new(self.options.block_restart_interval);
+            let mut rt_builder = BlockBuilder::new(
+                self.options.block_restart_interval,
+                BlockComparator::Bytewise,
+            );
             for rt in &self.range_tombstones {
                 rt_builder.add(&rt.start, &rt.encode());
             }
@@ -240,7 +273,10 @@ impl SSTableBuilder {
         };
 
         // Write meta-index block.
-        let mut meta_index_builder = BlockBuilder::new(self.options.block_restart_interval);
+        let mut meta_index_builder = BlockBuilder::new(
+            self.options.block_restart_interval,
+            BlockComparator::Bytewise,
+        );
         let mut handle_buf = Vec::new();
         filter_handle.encode(&mut handle_buf);
         meta_index_builder.add(b"filter.bloom", &handle_buf);

@@ -1,8 +1,8 @@
 //! Integration tests for storage-wal.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use storage_wal::{Durability, Wal, WalOptions};
 
@@ -24,11 +24,7 @@ fn reopen_and_recover_records() {
     let second = wal.reader().read(lsns[1]).unwrap().unwrap();
     assert_eq!(second.payload, &b"second"[..]);
 
-    let all: Vec<_> = wal
-        .iter(0)
-        .unwrap()
-        .map(|r| r.unwrap().payload)
-        .collect();
+    let all: Vec<_> = wal.iter(0).unwrap().map(|r| r.unwrap().payload).collect();
     assert_eq!(all.len(), 2);
     wal.close().unwrap();
 }
@@ -169,7 +165,8 @@ fn torn_write_detected_as_truncation() {
 fn reopen_truncates_torn_tail() {
     let dir = tempfile::tempdir().unwrap();
     let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
-    wal.append(&b"before-crash"[..], Durability::Immediate).unwrap();
+    wal.append(&b"before-crash"[..], Durability::Immediate)
+        .unwrap();
     wal.close().unwrap();
 
     // Append trailing garbage to simulate a crash mid-write.
@@ -186,15 +183,12 @@ fn reopen_truncates_torn_tail() {
 
     // Reopen should recover and allow further valid appends.
     let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
-    let recovered: Vec<_> = wal
-        .iter(0)
-        .unwrap()
-        .map(|r| r.unwrap().payload)
-        .collect();
+    let recovered: Vec<_> = wal.iter(0).unwrap().map(|r| r.unwrap().payload).collect();
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0], &b"before-crash"[..]);
 
-    wal.append(&b"after-crash"[..], Durability::Immediate).unwrap();
+    wal.append(&b"after-crash"[..], Durability::Immediate)
+        .unwrap();
     let after = wal
         .iter(0)
         .unwrap()

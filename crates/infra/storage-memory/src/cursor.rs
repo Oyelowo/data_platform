@@ -22,9 +22,7 @@ impl MemoryCursor {
             buffer,
             position: 0,
         };
-        Self {
-            inner: Some(inner),
-        }
+        Self { inner: Some(inner) }
     }
 
     fn inner(&mut self) -> Result<&mut MemoryCursorInner> {
@@ -52,9 +50,7 @@ impl Cursor for MemoryCursor {
 
     fn seek(&mut self, target: &[u8]) -> Result<()> {
         let inner = self.inner()?;
-        inner.position = inner
-            .buffer
-            .partition_point(|(k, _)| k.as_ref() < target);
+        inner.position = inner.buffer.partition_point(|(k, _)| k.as_ref() < target);
         Ok(())
     }
 }

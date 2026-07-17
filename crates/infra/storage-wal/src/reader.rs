@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use bytes::{Buf, Bytes};
 
-use crate::record::{Record, RECORD_HEADER_SIZE};
+use crate::record::{RECORD_HEADER_SIZE, Record};
 use crate::segment::{list_segments, read_segment, segment_path};
 use crate::{Error, Lsn, Result};
 

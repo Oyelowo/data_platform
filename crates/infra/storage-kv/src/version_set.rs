@@ -65,13 +65,25 @@ impl VersionSet {
 
     /// Return the compaction rotation pointer for `level`, if any.
     pub fn compaction_pointer(&self, level: usize) -> Option<Vec<u8>> {
-        self.inner.lock().unwrap().compaction_pointers.get(level).cloned().flatten()
+        self.inner
+            .lock()
+            .unwrap()
+            .compaction_pointers
+            .get(level)
+            .cloned()
+            .flatten()
     }
 
     /// Store the largest user key of the most recent compaction at `level`.
     #[allow(dead_code)]
     pub fn set_compaction_pointer(&self, level: usize, key: Vec<u8>) {
-        if let Some(ptr) = self.inner.lock().unwrap().compaction_pointers.get_mut(level) {
+        if let Some(ptr) = self
+            .inner
+            .lock()
+            .unwrap()
+            .compaction_pointers
+            .get_mut(level)
+        {
             *ptr = Some(key);
         }
     }
@@ -259,12 +271,7 @@ mod tests {
         })
         .unwrap();
 
-        let numbers: Vec<FileNumber> = vs
-            .current()
-            .levels[0]
-            .iter()
-            .map(|f| f.number)
-            .collect();
+        let numbers: Vec<FileNumber> = vs.current().levels[0].iter().map(|f| f.number).collect();
         assert_eq!(numbers, vec![10, 11, 12]);
     }
 }

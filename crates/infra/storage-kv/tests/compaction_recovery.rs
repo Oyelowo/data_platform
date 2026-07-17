@@ -18,8 +18,7 @@ fn opts() -> LsmOptions {
 fn write_orphan_sstable(db_path: &Path, file_number: u64) {
     // A partially written SSTable: just enough bytes to look like a file,
     // but missing a valid footer / magic number so recovery must ignore it.
-    fs::write(db_path.join(format!("{:06}.sst", file_number)), b"orphan")
-        .unwrap();
+    fs::write(db_path.join(format!("{:06}.sst", file_number)), b"orphan").unwrap();
 }
 
 /// Orphan SSTables left behind by a crashed compaction are not visible to the

@@ -63,7 +63,10 @@ pub fn recover(
         .flat_map(|level| level.iter().map(|f| f.number))
         .max()
         .unwrap_or(0);
-    cf_set.default().version_set.set_next_file_number(max_file + 1);
+    cf_set
+        .default()
+        .version_set
+        .set_next_file_number(max_file + 1);
 
     // 2. Replay WAL.
     let wal = storage_wal::Wal::open(
@@ -74,12 +77,24 @@ pub fn recover(
         },
     )?;
 
+    // Any WAL record with sequence <= this cutoff is already represented by an
+    // SSTable recorded in the manifest and must not be replayed.
+    let replay_cutoff = max_seq.unwrap_or(0);
+
     for record in wal.iter(0)? {
         let record = record?;
         let (rec, _) = WalRecord::decode(&record.payload)
             .ok_or_else(|| crate::Error::Corruption("bad wal record during recovery".into()))?;
 
         max_seq = Some(max_seq.map_or(rec.sequence, |m| m.max(rec.sequence)));
+
+        // Records whose sequence is already reflected in the recovered SSTables
+        // (per the manifest's last_sequence) do not need to be replayed.  This
+        // prevents duplicate MemTable entries and, for blob values, avoids
+        // re-writing large payloads that are already referenced by SSTables.
+        if rec.sequence <= replay_cutoff {
+            continue;
+        }
 
         if cf_set.get(rec.cf_id).is_none() {
             let _ = cf_set.create_with_id(
@@ -92,16 +107,19 @@ pub fn recover(
         match rec.ty {
             WalRecordType::Put => {
                 if let Some(value) = rec.value.as_ref() {
-                    if options.min_blob_value_size > 0
-                        && value.len() >= options.min_blob_value_size
+                    if options.min_blob_value_size > 0 && value.len() >= options.min_blob_value_size
                     {
                         let blob_ref = blob_store.put(rec.cf_id, &rec.key, value, rec.sequence)?;
+                        cf.memtable.lock().unwrap().put_blob_ref(
+                            &rec.key,
+                            rec.sequence,
+                            &blob_ref.encode(),
+                        );
+                    } else {
                         cf.memtable
                             .lock()
                             .unwrap()
-                            .put_blob_ref(&rec.key, rec.sequence, &blob_ref.encode());
-                    } else {
-                        cf.memtable.lock().unwrap().put(&rec.key, rec.sequence, value);
+                            .put(&rec.key, rec.sequence, value);
                     }
                 } else {
                     cf.memtable.lock().unwrap().put(&rec.key, rec.sequence, &[]);
@@ -112,7 +130,10 @@ pub fn recover(
             }
             WalRecordType::DeleteRange => {
                 let end = rec.value.as_ref().map(|v| v.as_ref()).unwrap_or(&[]);
-                cf.memtable.lock().unwrap().delete_range(&rec.key, end, rec.sequence);
+                cf.memtable
+                    .lock()
+                    .unwrap()
+                    .delete_range(&rec.key, end, rec.sequence);
             }
         }
     }

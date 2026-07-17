@@ -10,8 +10,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
+use crate::FileNumber;
 use crate::Result;
 use crate::SequenceNumber;
+use crate::blob::{BlobRef, BlobStore};
 use crate::cache::BlockCaches;
 use crate::compaction::Compaction;
 use crate::immutable::sstable_path;
@@ -22,11 +24,13 @@ use crate::options::LsmOptions;
 use crate::sstable::builder::{SSTableBuilder, SSTableBuilderOptions};
 use crate::sstable::reader::SSTableReader;
 use crate::version::{FileMetaData, Version};
-use crate::FileNumber;
 
 /// Target output file size for `level`.
 pub fn target_file_size(level: usize, options: &LsmOptions) -> u64 {
-    assert!(level >= 1, "target_file_size is only defined for level >= 1");
+    assert!(
+        level >= 1,
+        "target_file_size is only defined for level >= 1"
+    );
     let mut size = options.target_file_size_base;
     for _ in 1..level {
         size = size.saturating_mul(options.target_file_size_multiplier);
@@ -56,15 +60,20 @@ pub fn run_compaction_merge(
     caches: Option<BlockCaches>,
     metrics: Arc<Metrics>,
     smallest_snapshot: u64,
-) -> Result<Vec<FileMetaData>> {
+    blob_store: Option<Arc<BlobStore>>,
+) -> Result<(Vec<FileMetaData>, SequenceNumber)> {
     let output_level = job.level + 1;
 
     let mut children: Vec<Box<dyn InternalIterator>> = Vec::new();
     let mut range_tombstones: Vec<RangeTombstone> = Vec::new();
+    let mut max_sequence: SequenceNumber = 0;
     for file in job.inputs.iter().flat_map(|v| v.iter()) {
         let path = sstable_path(db_path, file.number);
         let reader = SSTableReader::open(path, file.number, caches.clone())?;
-        range_tombstones.extend(reader.range_tombstones().iter().cloned());
+        for rt in reader.range_tombstones() {
+            max_sequence = max_sequence.max(rt.seq);
+            range_tombstones.push(rt.clone());
+        }
         // Admission policy: compaction input blocks are read exactly once, so
         // they are not admitted into the block caches — caching them would
         // only evict blocks that point lookups keep reusing.
@@ -88,7 +97,10 @@ pub fn run_compaction_merge(
         }
         let path = sstable_path(db_path, file.number);
         let reader = SSTableReader::open(path, file.number, caches.clone())?;
-        range_tombstones.extend(reader.range_tombstones().iter().cloned());
+        for rt in reader.range_tombstones() {
+            max_sequence = max_sequence.max(rt.seq);
+            range_tombstones.push(rt.clone());
+        }
     }
 
     let mut merge = MergeIterator::new(children)?;
@@ -108,8 +120,15 @@ pub fn run_compaction_merge(
         let ikey = merge.key().to_vec();
         let value = Bytes::copy_from_slice(merge.value());
         let user_key = extract_user_key(&ikey).to_vec();
-        let (seq, ty) = parse_internal_key(&ikey)
-            .ok_or_else(|| crate::Error::Sstable("invalid internal key during compaction".into()))?;
+        let (seq, ty) = parse_internal_key(&ikey).ok_or_else(|| {
+            crate::Error::Sstable("invalid internal key during compaction".into())
+        })?;
+        // Every input sequence is now represented by this compaction, even if the
+        // entry is dropped (hidden by a newer version or covered by a range
+        // tombstone).  Tracking all of them keeps the manifest's last_sequence
+        // high enough that WAL replay does not re-apply records already folded
+        // into SSTables.
+        max_sequence = max_sequence.max(seq);
 
         if last_user_key.as_ref() != Some(&user_key) {
             last_user_key = Some(user_key.clone());
@@ -156,9 +175,14 @@ pub fn run_compaction_merge(
                 &mut current_largest,
                 &ikey,
                 &value,
+                ty,
+                seq,
                 &range_tombstones,
                 smallest_snapshot,
                 &metrics,
+                blob_store.as_ref(),
+                &user_key,
+                &mut max_sequence,
             )?;
         }
 
@@ -167,7 +191,7 @@ pub fn run_compaction_merge(
     }
 
     if let Some((num, builder)) = current_builder {
-        outputs.push(finish_output(
+        let (meta, file_max_seq) = finish_output(
             builder,
             num,
             &range_tombstones,
@@ -177,10 +201,17 @@ pub fn run_compaction_merge(
             current_smallest.as_deref(),
             current_largest.as_deref(),
             &metrics,
-        )?);
+        )?;
+        outputs.push(meta);
+        max_sequence = max_sequence.max(file_max_seq);
     }
 
-    let input_bytes: u64 = job.inputs.iter().flat_map(|v| v.iter()).map(|f| f.file_size).sum();
+    let input_bytes: u64 = job
+        .inputs
+        .iter()
+        .flat_map(|v| v.iter())
+        .map(|f| f.file_size)
+        .sum();
     let input_files: u64 = job.inputs.iter().map(|v| v.len() as u64).sum();
     metrics.record_compaction(
         input_bytes,
@@ -189,7 +220,7 @@ pub fn run_compaction_merge(
         outputs.len() as u64,
     );
 
-    Ok(outputs)
+    Ok((outputs, max_sequence))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -206,9 +237,14 @@ fn emit_entry(
     current_largest: &mut Option<Vec<u8>>,
     ikey: &[u8],
     value: &[u8],
+    ty: ValueType,
+    seq: SequenceNumber,
     range_tombstones: &[RangeTombstone],
     smallest_snapshot: SequenceNumber,
     metrics: &Metrics,
+    blob_store: Option<&Arc<BlobStore>>,
+    user_key: &[u8],
+    max_sequence: &mut SequenceNumber,
 ) -> Result<()> {
     if current_builder.is_none() {
         let file_number = output_numbers.get(*output_idx).copied().ok_or_else(|| {
@@ -240,7 +276,18 @@ fn emit_entry(
     }
 
     let (_, builder) = current_builder.as_mut().unwrap();
-    builder.add(ikey, value)?;
+
+    // Compaction-integrated blob GC: live BlobRefs pointing to non-current blob
+    // files are rewritten into the current blob file so the old file can be
+    // reclaimed by the standalone GC worker.  The original sequence is preserved
+    // so snapshots remain consistent.
+    let value = if ty == ValueType::BlobRef {
+        maybe_rewrite_blob_value(blob_store, value, user_key, seq)?
+    } else {
+        value.to_vec()
+    };
+
+    builder.add(ikey, &value)?;
     *current_largest = Some(ikey.to_vec());
 
     // Split the output file if it has grown too large or would overlap too
@@ -254,7 +301,7 @@ fn emit_entry(
         options,
     ) {
         let (num, builder) = current_builder.take().unwrap();
-        outputs.push(finish_output(
+        let (meta, file_max_seq) = finish_output(
             builder,
             num,
             range_tombstones,
@@ -264,12 +311,37 @@ fn emit_entry(
             current_smallest.as_deref(),
             current_largest.as_deref(),
             metrics,
-        )?);
+        )?;
+        outputs.push(meta);
+        *max_sequence = (*max_sequence).max(file_max_seq);
         *current_smallest = None;
         *current_largest = None;
     }
 
     Ok(())
+}
+
+/// If `value` is a `BlobRef` pointing to a non-current blob file, rewrite the
+/// blob into the current file and return the encoded new reference.  Otherwise
+/// return a copy of the original value.
+fn maybe_rewrite_blob_value(
+    blob_store: Option<&Arc<BlobStore>>,
+    value: &[u8],
+    user_key: &[u8],
+    seq: SequenceNumber,
+) -> Result<Vec<u8>> {
+    let Some(blob_store) = blob_store else {
+        return Ok(value.to_vec());
+    };
+    let Some(blob_ref) = BlobRef::decode(value) else {
+        return Err(crate::Error::Blob(
+            "invalid BlobRef value during compaction".into(),
+        ));
+    };
+    match blob_store.maybe_rewrite_for_compaction(user_key, blob_ref, seq)? {
+        Some(new_ref) => Ok(new_ref.encode().to_vec()),
+        None => Ok(value.to_vec()),
+    }
 }
 
 fn should_split_output(
@@ -286,8 +358,7 @@ fn should_split_output(
     if output_level + 2 >= version.levels.len() {
         return false;
     }
-    let overlap =
-        version.overlapping_inputs(output_level + 2, current_smallest, current_largest);
+    let overlap = version.overlapping_inputs(output_level + 2, current_smallest, current_largest);
     overlap.len() > options.compaction_max_overlap_files
 }
 
@@ -323,8 +394,9 @@ fn finish_output(
     smallest_ikey: Option<&[u8]>,
     largest_ikey: Option<&[u8]>,
     metrics: &Metrics,
-) -> Result<FileMetaData> {
+) -> Result<(FileMetaData, SequenceNumber)> {
     let is_bottommost = output_level + 1 >= num_levels;
+    let mut file_max_seq: SequenceNumber = 0;
     if let (Some(smallest), Some(largest)) = (smallest_ikey, largest_ikey) {
         let smallest_user = extract_user_key(smallest);
         let largest_user = extract_user_key(largest);
@@ -339,18 +411,22 @@ fn finish_output(
             // against this file.
             if rt.start.as_slice() <= largest_user && rt.end.as_slice() > smallest_user {
                 builder.add_range_tombstone(rt.clone())?;
+                file_max_seq = file_max_seq.max(rt.seq);
             }
         }
     }
 
     let built = builder.finish()?;
     metrics.record_compression(built.uncompressed_bytes, built.compressed_bytes);
-    Ok(FileMetaData {
-        number,
-        file_size: built.file_size,
-        smallest: built.smallest_key,
-        largest: built.largest_key,
-    })
+    Ok((
+        FileMetaData {
+            number,
+            file_size: built.file_size,
+            smallest: built.smallest_key,
+            largest: built.largest_key,
+        },
+        file_max_seq,
+    ))
 }
 
 #[cfg(test)]
@@ -413,6 +489,8 @@ mod tests {
             blob_file_size: 64 * 1024 * 1024,
             blob_gc_ratio: 0.0,
             blob_gc_interval_ms: 0,
+            blob_gc_threads: 1,
+            blob_gc_force_threshold: 0.0,
         }
     }
 
@@ -440,7 +518,7 @@ mod tests {
             largest: ikey(b"b", 3, ValueType::Value),
         };
 
-        let outputs = run_compaction_merge(
+        let (outputs, _max_seq) = run_compaction_merge(
             dir.path(),
             &options,
             &version,
@@ -449,6 +527,7 @@ mod tests {
             None,
             Arc::new(Metrics::default()),
             3,
+            None,
         )
         .unwrap();
         assert_eq!(outputs.len(), 1);
@@ -490,7 +569,7 @@ mod tests {
         };
 
         let output_numbers: Vec<u64> = (2..32).collect();
-        let outputs = run_compaction_merge(
+        let (outputs, _max_seq) = run_compaction_merge(
             dir.path(),
             &options,
             &version,
@@ -499,6 +578,7 @@ mod tests {
             None,
             Arc::new(Metrics::default()),
             1,
+            None,
         )
         .unwrap();
         assert!(
@@ -513,9 +593,10 @@ mod tests {
         let mut options = opts();
         options.num_levels = 2; // output level 1 is the deepest
 
+        // Internal-key order stores the newest version first.
         let entries = vec![
-            (ikey(b"a", 1, ValueType::Value), b"v".to_vec()),
             (ikey(b"a", 2, ValueType::Deletion), Vec::new()),
+            (ikey(b"a", 1, ValueType::Value), b"v".to_vec()),
         ];
         let meta = flush_memtable_to_file(&dir, 1, &entries);
 
@@ -526,7 +607,7 @@ mod tests {
             largest: ikey(b"a", 2, ValueType::Deletion),
         };
 
-        let outputs = run_compaction_merge(
+        let (outputs, _max_seq) = run_compaction_merge(
             dir.path(),
             &options,
             &version,
@@ -535,9 +616,14 @@ mod tests {
             None,
             Arc::new(Metrics::default()),
             2,
+            None,
         )
         .unwrap();
-        assert_eq!(outputs.len(), 0, "tombstone should be dropped at deepest level");
+        assert_eq!(
+            outputs.len(),
+            0,
+            "tombstone should be dropped at deepest level"
+        );
     }
 
     #[test]
@@ -581,7 +667,7 @@ mod tests {
             largest: ikey(&[9], 10, ValueType::Value),
         };
 
-        let outputs = run_compaction_merge(
+        let (outputs, _max_seq) = run_compaction_merge(
             dir.path(),
             &options,
             &version,
@@ -590,6 +676,7 @@ mod tests {
             None,
             Arc::new(Metrics::default()),
             100,
+            None,
         )
         .unwrap();
         assert_eq!(outputs.len(), 1);
@@ -615,9 +702,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let options = opts(); // num_levels = 7, output level 1 is not deepest
 
+        // Internal-key order stores the newest version first.
         let entries = vec![
-            (ikey(b"a", 1, ValueType::Value), b"v".to_vec()),
             (ikey(b"a", 2, ValueType::Deletion), Vec::new()),
+            (ikey(b"a", 1, ValueType::Value), b"v".to_vec()),
         ];
         let meta = flush_memtable_to_file(&dir, 1, &entries);
 
@@ -628,7 +716,7 @@ mod tests {
             largest: ikey(b"a", 2, ValueType::Deletion),
         };
 
-        let outputs = run_compaction_merge(
+        let (outputs, _max_seq) = run_compaction_merge(
             dir.path(),
             &options,
             &version,
@@ -637,8 +725,13 @@ mod tests {
             None,
             Arc::new(Metrics::default()),
             2,
+            None,
         )
         .unwrap();
-        assert_eq!(outputs.len(), 1, "tombstone should survive until deepest level");
+        assert_eq!(
+            outputs.len(),
+            1,
+            "tombstone should survive until deepest level"
+        );
     }
 }

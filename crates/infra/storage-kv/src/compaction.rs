@@ -11,11 +11,11 @@
 //! 4. Ln (n >= 1) compactions select the file with the smallest overlap ratio with
 //!    the next level, rotating through the key space so compaction coverage is even.
 
-use std::cmp::Ordering;
 use crate::internal_key::{compare_internal_keys, extract_user_key};
 use crate::options::LsmOptions;
 use crate::version::{FileMetaData, Version, range_boundaries};
 use crate::version_set::VersionSet;
+use std::cmp::Ordering;
 
 /// A compaction job description.
 #[derive(Debug, Clone)]
@@ -150,8 +150,9 @@ fn rotate_files<'a>(
     start_hint: Option<&[u8]>,
 ) -> impl Iterator<Item = &'a FileMetaData> {
     let start_idx = match start_hint {
-        Some(hint) => files
-            .partition_point(|f| extract_user_key(&f.smallest).cmp(hint) != Ordering::Greater),
+        Some(hint) => {
+            files.partition_point(|f| extract_user_key(&f.smallest).cmp(hint) != Ordering::Greater)
+        }
         None => 0,
     };
 
@@ -205,6 +206,8 @@ mod tests {
             blob_file_size: 64 * 1024 * 1024,
             blob_gc_ratio: 0.0,
             blob_gc_interval_ms: 0,
+            blob_gc_threads: 1,
+            blob_gc_force_threshold: 0.0,
         }
     }
 
@@ -222,12 +225,7 @@ mod tests {
         let mut version = Version::new(7);
         let options = opts();
         for i in 0..options.level0_file_num_compaction_trigger {
-            version.levels[0].push(file(
-                i as u64,
-                ikey(&[i as u8]),
-                ikey(&[i as u8, 0xff]),
-                1,
-            ));
+            version.levels[0].push(file(i as u64, ikey(&[i as u8]), ikey(&[i as u8, 0xff]), 1));
         }
         assert_eq!(version.compaction_score(0, &options), 1.0);
         version.levels[0].push(file(100, ikey(&[9]), ikey(&[9, 0xff]), 1));
@@ -236,7 +234,10 @@ mod tests {
         let vs = VersionSet::new(7);
         let job = pick_compaction(&version, &vs, &options).unwrap();
         assert_eq!(job.level, 0);
-        assert_eq!(job.inputs[0].len(), options.level0_file_num_compaction_trigger + 1);
+        assert_eq!(
+            job.inputs[0].len(),
+            options.level0_file_num_compaction_trigger + 1
+        );
     }
 
     #[test]
@@ -245,12 +246,7 @@ mod tests {
         let options = opts();
         // L0 files cover keys 0, 1, 2, 3.
         for i in 0..4 {
-            version.levels[0].push(file(
-                i as u64,
-                ikey(&[i * 2]),
-                ikey(&[i * 2 + 1]),
-                1,
-            ));
+            version.levels[0].push(file(i as u64, ikey(&[i * 2]), ikey(&[i * 2 + 1]), 1));
         }
         // L1 has one file that overlaps [0,7] and one that does not.
         version.levels[1].push(file(10, ikey(&[0]), ikey(&[1]), 1));

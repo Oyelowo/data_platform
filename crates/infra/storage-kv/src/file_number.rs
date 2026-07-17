@@ -5,8 +5,8 @@
 //! clone (it is just an `Arc<AtomicU64>`) and is safe to share across threads
 //! and across column families.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::FileNumber;
 

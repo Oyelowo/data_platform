@@ -9,9 +9,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 
-use crate::record::{Record, RECORD_HEADER_SIZE};
+use crate::record::{RECORD_HEADER_SIZE, Record};
 use crate::segment::Segment;
 use crate::{Error, Lsn, Result};
 
@@ -46,13 +46,19 @@ impl std::fmt::Debug for Committer {
 
 impl Committer {
     /// Start the commit worker bound to `dir` with the given segment size.
+    ///
+    /// Recovery of the current segment tail is performed synchronously on the
+    /// calling thread so that the returned `Committer` reflects a quiesced,
+    /// truncated state.
     pub fn start(dir: std::path::PathBuf, segment_size: u64) -> Result<Self> {
+        let state = init_worker(dir, segment_size)?;
         let (sender, receiver) = bounded(CHANNEL_CAPACITY);
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = shutdown.clone();
 
-        let handle =
-            std::thread::spawn(move || worker_loop(dir, segment_size, receiver, shutdown_clone));
+        let handle = std::thread::spawn(move || {
+            worker_loop_with_state(state, receiver, shutdown_clone)
+        });
 
         Ok(Self {
             sender: Mutex::new(Some(sender)),
@@ -107,13 +113,11 @@ struct WorkerState {
     segment: Segment,
 }
 
-fn worker_loop(
-    dir: std::path::PathBuf,
-    segment_size: u64,
+fn worker_loop_with_state(
+    mut state: WorkerState,
     receiver: Receiver<CommitRequest>,
     shutdown: Arc<AtomicBool>,
 ) -> Result<()> {
-    let mut state = init_worker(dir, segment_size)?;
     // Pending requests whose records have been written but not yet fsynced.
     let mut pending: Vec<(Sender<Result<Lsn>>, Lsn)> = Vec::new();
 
@@ -222,7 +226,10 @@ fn write_record(state: &mut WorkerState, mut record: Record) -> Result<(Lsn, usi
     Ok((lsn, buf.len()))
 }
 
-fn flush_pending(state: &mut WorkerState, pending: &mut Vec<(Sender<Result<Lsn>>, Lsn)>) -> Result<()> {
+fn flush_pending(
+    state: &mut WorkerState,
+    pending: &mut Vec<(Sender<Result<Lsn>>, Lsn)>,
+) -> Result<()> {
     if pending.is_empty() {
         return Ok(());
     }
@@ -253,7 +260,9 @@ mod tests {
     fn basic_group_commit() {
         let dir = tempfile::tempdir().unwrap();
         let committer = Committer::start(dir.path().to_path_buf(), 64 * 1024 * 1024).unwrap();
-        let lsn = committer.append(Record::new(RecordType::Put, &b"a"[..])).unwrap();
+        let lsn = committer
+            .append(Record::new(RecordType::Put, &b"a"[..]))
+            .unwrap();
         assert_eq!(lsn, 0);
         committer.shutdown().unwrap();
     }

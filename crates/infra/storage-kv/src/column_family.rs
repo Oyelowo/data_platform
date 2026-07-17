@@ -71,8 +71,11 @@ impl ColumnFamily {
             version_set,
             caches: BlockCaches::new(
                 Arc::new(BlockCache::with_capacity(options.block_cache_size)),
-                (options.compressed_block_cache_size > 0)
-                    .then(|| Arc::new(BlockCache::with_capacity(options.compressed_block_cache_size))),
+                (options.compressed_block_cache_size > 0).then(|| {
+                    Arc::new(BlockCache::with_capacity(
+                        options.compressed_block_cache_size,
+                    ))
+                }),
                 Arc::clone(&metrics),
             ),
             metrics,
@@ -155,12 +158,16 @@ impl ColumnFamilySet {
 
     /// Return a mutable reference to the default column family.
     pub(crate) fn default_mut(&mut self) -> &mut ColumnFamily {
-        self.by_id.get_mut(&0).expect("default column family always exists")
+        self.by_id
+            .get_mut(&0)
+            .expect("default column family always exists")
     }
 
     /// Return a reference to the default column family.
     pub fn default(&self) -> &ColumnFamily {
-        self.by_id.get(&0).expect("default column family always exists")
+        self.by_id
+            .get(&0)
+            .expect("default column family always exists")
     }
 
     /// Return a reference to a column family by id.
@@ -257,9 +264,10 @@ impl ColumnFamilySet {
                 "cannot drop the default column family".into(),
             ));
         }
-        let cf = self.by_id.remove(&id).ok_or_else(|| {
-            crate::Error::InvalidArgument("column family not found".into())
-        })?;
+        let cf = self
+            .by_id
+            .remove(&id)
+            .ok_or_else(|| crate::Error::InvalidArgument("column family not found".into()))?;
         self.by_name.remove(&cf.name);
         Ok(cf)
     }

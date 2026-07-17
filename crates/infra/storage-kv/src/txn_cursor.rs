@@ -13,11 +13,11 @@ use std::collections::{BTreeMap, HashSet};
 use bytes::Bytes;
 
 use crate::Result;
+use crate::SequenceNumber;
 use crate::column_family::ColumnFamilyId;
 use crate::cursor::LsmCursor;
 use crate::engine::LsmEngineInner;
 use crate::transaction::{CfSnapshotView, WriteOp};
-use crate::SequenceNumber;
 
 /// Cursor over a key range that includes both the transaction snapshot and any
 /// writes buffered inside the transaction.
@@ -59,13 +59,7 @@ impl TxnCursor {
         end: Option<Vec<u8>>,
         snapshot: SequenceNumber,
     ) -> Result<Self> {
-        let base = LsmCursor::new_cf_view(
-            inner,
-            view,
-            start.clone(),
-            end.clone(),
-            snapshot,
-        )?;
+        let base = LsmCursor::new_cf_view(inner, view, start.clone(), end.clone(), snapshot)?;
         let resolved = resolve_buffered_ops(ops, cf_id, start.as_deref(), end.as_deref());
 
         let mut cursor = Self {
@@ -223,14 +217,10 @@ fn resolve_buffered_ops(
 
     for op in ops {
         match op {
-            WriteOp::Put { cf, key, value }
-                if *cf == cf_id && key_in_range(key, start, end) =>
-            {
+            WriteOp::Put { cf, key, value } if *cf == cf_id && key_in_range(key, start, end) => {
                 state.insert(key.clone(), BufferedValue::Present(value.clone()));
             }
-            WriteOp::Delete { cf, key }
-                if *cf == cf_id && key_in_range(key, start, end) =>
-            {
+            WriteOp::Delete { cf, key } if *cf == cf_id && key_in_range(key, start, end) => {
                 state.insert(key.clone(), BufferedValue::Deleted);
             }
             WriteOp::DeleteRange {

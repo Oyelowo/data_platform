@@ -66,9 +66,13 @@ impl LsmEngine {
         std::fs::create_dir_all(&path)?;
 
         let mut column_families = ColumnFamilySet::with_default(options.clone());
-        let blob_store = Arc::new(BlobStore::open(&path, options.blob_file_size)?);
-        let last_sequence =
-            recovery::recover(&path, &options, &mut column_families, &blob_store)?;
+        let blob_metrics = Arc::new(crate::metrics::Metrics::default());
+        let blob_store = Arc::new(BlobStore::open(
+            &path,
+            options.blob_file_size,
+            Arc::clone(&blob_metrics),
+        )?);
+        let last_sequence = recovery::recover(&path, &options, &mut column_families, &blob_store)?;
 
         // Remove SSTables left behind by a crashed compaction, an unfinished
         // flush, or a dropped column family.  Compute the live-file set across
@@ -226,25 +230,21 @@ impl LsmEngine {
 
     /// Return a handle to an existing column family by name.
     pub fn cf_handle(&self, name: &str) -> Option<ColumnFamilyHandle> {
-        self.inner.state.lock().unwrap().column_families.handle(name)
+        self.inner
+            .state
+            .lock()
+            .unwrap()
+            .column_families
+            .handle(name)
     }
 
     /// Write `value` under `key` in `cf`.
-    pub fn put_cf(
-        &self,
-        cf: &ColumnFamilyHandle,
-        key: &[u8],
-        value: &[u8],
-    ) -> Result<()> {
+    pub fn put_cf(&self, cf: &ColumnFamilyHandle, key: &[u8], value: &[u8]) -> Result<()> {
         self.inner.write_cf(cf, key, value)
     }
 
     /// Read `key` from `cf`.
-    pub fn get_cf(
-        &self,
-        cf: &ColumnFamilyHandle,
-        key: &[u8],
-    ) -> Result<Option<Bytes>> {
+    pub fn get_cf(&self, cf: &ColumnFamilyHandle, key: &[u8]) -> Result<Option<Bytes>> {
         let snapshot = self.inner.seq_allocator.completed();
         self.inner.get_cf(cf, key, snapshot)
     }
@@ -255,12 +255,7 @@ impl LsmEngine {
     }
 
     /// Delete all keys in `[start, end)` from `cf`.
-    pub fn delete_range_cf(
-        &self,
-        cf: &ColumnFamilyHandle,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<()> {
+    pub fn delete_range_cf(&self, cf: &ColumnFamilyHandle, start: &[u8], end: &[u8]) -> Result<()> {
         self.inner.delete_range_cf(cf, start, end)
     }
 
@@ -298,11 +293,7 @@ impl LsmEngine {
     ///
     /// `target` must not exist or must be empty.  The restored directory is a
     /// self-contained engine and can be opened with [`LsmEngine::open`].
-    pub fn restore_backup(
-        &self,
-        name: &str,
-        target: impl AsRef<Path>,
-    ) -> Result<()> {
+    pub fn restore_backup(&self, name: &str, target: impl AsRef<Path>) -> Result<()> {
         crate::backup::restore_backup(self, name, target)
     }
 
@@ -314,6 +305,45 @@ impl LsmEngine {
     /// Return the names of all backups stored under the engine.
     pub fn list_backups(&self) -> Result<Vec<String>> {
         crate::backup::list_backups(self)
+    }
+
+    /// Return the current blob-store accounting snapshot.
+    pub fn blob_stats(&self) -> crate::blob::BlobStatsSnapshot {
+        self.inner.blob_store.blob_stats()
+    }
+
+    /// Run one synchronous pass of blob garbage collection.
+    ///
+    /// This is exposed for tests and for deployments that prefer explicit GC
+    /// over the background worker.  It uses the configured `blob_gc_ratio` and
+    /// the oldest live snapshot to decide which blob files to rewrite.
+    pub fn run_blob_gc_once(&self) -> Result<crate::blob::GcStats> {
+        let (snapshots, ratio, threads) = {
+            let state = self.inner.state.lock().unwrap();
+            let mut snapshots = state.snapshots.all();
+            // The current completed watermark is also a valid snapshot: it must
+            // see all writes that have been published, so current values must be
+            // preserved even if no explicit snapshot is registered.
+            snapshots.push(state.seq_allocator.completed());
+            snapshots.sort_unstable();
+            snapshots.dedup();
+            (
+                snapshots,
+                state.options.blob_gc_ratio,
+                state.options.blob_gc_threads,
+            )
+        };
+        let mut owner = BlobGcOwner::new(
+            Arc::clone(&self.inner.state),
+            Arc::clone(&self.inner.blob_store),
+        );
+        let options = crate::blob::GcOptions {
+            min_live_ratio: ratio,
+            threads,
+        };
+        self.inner
+            .blob_store
+            .gc_once(&mut owner, &options, &snapshots)
     }
 }
 
@@ -384,6 +414,14 @@ impl storage_traits::Engine for LsmEngine {
             }
         }
 
+        // Blob store is shared across column families; account its disk usage
+        // and metrics globally.
+        let blob_stats = self.inner.blob_store.blob_stats();
+        disk_bytes += blob_stats.total_bytes;
+        for (k, v) in self.inner.blob_store.metrics().snapshot() {
+            *metrics.entry(k).or_insert(0) += v;
+        }
+
         Ok(storage_traits::EngineStats {
             name: self.name(),
             disk_bytes,
@@ -413,12 +451,7 @@ impl LsmEngineInner {
         self.write_cf(&ColumnFamilyHandle::default(), key, value)
     }
 
-    pub(crate) fn write_cf(
-        &self,
-        cf: &ColumnFamilyHandle,
-        key: &[u8],
-        value: &[u8],
-    ) -> Result<()> {
+    pub(crate) fn write_cf(&self, cf: &ColumnFamilyHandle, key: &[u8], value: &[u8]) -> Result<()> {
         let seq = self.seq_allocator.next();
         let guard = self.seq_allocator.guard(seq);
 
@@ -788,7 +821,13 @@ impl LsmEngineInner {
         // table synchronously here would publish the newest versions to L0
         // while older versions are still queued, and point reads — which search
         // the queue before L0 — would then return stale data.
-        while state.column_families.get(cf_id).unwrap().immutable.is_full() {
+        while state
+            .column_families
+            .get(cf_id)
+            .unwrap()
+            .immutable
+            .is_full()
+        {
             let room = Arc::clone(&state.immutable_room);
             state = room.wait(state).unwrap();
         }
@@ -839,7 +878,13 @@ impl LsmEngineInner {
             std::thread::yield_now();
         }
 
-        while state.column_families.get(cf_id).unwrap().immutable.is_full() {
+        while state
+            .column_families
+            .get(cf_id)
+            .unwrap()
+            .immutable
+            .is_full()
+        {
             let room = Arc::clone(&state.immutable_room);
             state = room.wait(state).unwrap();
         }
@@ -896,7 +941,6 @@ impl LsmEngineInner {
                         Arc::clone(&cf.metrics),
                         smallest_snapshot,
                         Arc::clone(&state.manifest),
-                        state.seq_allocator.clone(),
                     ));
                     break;
                 }
@@ -914,7 +958,6 @@ impl LsmEngineInner {
                 metrics,
                 smallest_snapshot,
                 manifest,
-                seq_allocator,
             ) = match picked {
                 Some(v) => v,
                 None => break,
@@ -924,8 +967,19 @@ impl LsmEngineInner {
 
             {
                 let mut state = state.lock().unwrap();
-                state.column_families.get_mut(cf_id).unwrap().active_compactions += 1;
+                state
+                    .column_families
+                    .get_mut(cf_id)
+                    .unwrap()
+                    .active_compactions += 1;
             }
+
+            // Snapshot the blob store handle outside the engine lock; compaction
+            // will rewrite live BlobRefs pointing to non-current blob files.
+            let blob_store = {
+                let state = state.lock().unwrap();
+                Arc::clone(&state.blob_store)
+            };
 
             // Run the merge outside the engine lock.
             let merge_result = compaction_merge::run_compaction_merge(
@@ -937,13 +991,18 @@ impl LsmEngineInner {
                 Some(caches),
                 metrics,
                 smallest_snapshot,
+                Some(blob_store),
             );
 
-            let output_files = match merge_result {
-                Ok(files) => files,
+            let (output_files, compaction_max_sequence) = match merge_result {
+                Ok(v) => v,
                 Err(e) => {
                     let mut state = state.lock().unwrap();
-                    state.column_families.get_mut(cf_id).unwrap().active_compactions -= 1;
+                    state
+                        .column_families
+                        .get_mut(cf_id)
+                        .unwrap()
+                        .active_compactions -= 1;
                     return Err(e);
                 }
             };
@@ -954,7 +1013,10 @@ impl LsmEngineInner {
                 let cf = state.column_families.get_mut(cf_id).unwrap();
                 let mut edit = VersionEdit {
                     cf_id,
-                    last_sequence: seq_allocator.current(),
+                    // Record the highest sequence actually represented by the
+                    // compaction inputs, not the allocator's current value (which
+                    // may include unflushed mutable-MemTable writes).
+                    last_sequence: compaction_max_sequence,
                     next_file_number: cf.version_set.next_file_number(),
                     ..Default::default()
                 };
@@ -983,7 +1045,11 @@ impl LsmEngineInner {
                 cf.obsolete_files.mark_obsolete_many(input_numbers);
                 cf.obsolete_files.delete_unreferenced(&path, &version_set)?;
 
-                state.column_families.get_mut(cf_id).unwrap().active_compactions -= 1;
+                state
+                    .column_families
+                    .get_mut(cf_id)
+                    .unwrap()
+                    .active_compactions -= 1;
             }
 
             did_work = true;
@@ -1014,7 +1080,9 @@ impl LsmEngineInner {
             let path = state.path.clone();
             (memtable, immutable, version, caches, path)
         };
-        self.get_with_parts(key, snapshot, &memtable, &immutable, &version, &caches, &path)
+        self.get_with_parts(
+            key, snapshot, &memtable, &immutable, &version, &caches, &path,
+        )
     }
 
     /// Read `key` from the default column family using a fully pinned snapshot
@@ -1078,8 +1146,7 @@ impl LsmEngineInner {
 
         for file in version.levels[0].iter().rev() {
             let file_path = sstable_path(path, file.number);
-            let mut reader =
-                SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
+            let mut reader = SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
             if let Some(result) = reader.get_with_type(key, snapshot)? {
                 return resolve_typed_result(result, &self.blob_store);
             }
@@ -1095,8 +1162,7 @@ impl LsmEngineInner {
                     continue;
                 }
                 let file_path = sstable_path(path, file.number);
-                let mut reader =
-                    SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
+                let mut reader = SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
                 if let Some(result) = reader.get_with_type(key, snapshot)? {
                     return resolve_typed_result(result, &self.blob_store);
                 }
@@ -1107,6 +1173,17 @@ impl LsmEngineInner {
     }
 
     pub(crate) fn sync(&self) -> Result<()> {
+        // Ensure every durable WAL record is also represented by an SSTable:
+        // freeze any non-empty mutable MemTables before waiting for the flush
+        // worker to drain them.
+        let cf_ids: Vec<ColumnFamilyId> = {
+            let state = self.state.lock().unwrap();
+            state.column_families.iter().map(|cf| cf.id).collect()
+        };
+        for cf_id in cf_ids {
+            self.force_freeze(cf_id)?;
+        }
+
         // Wake the workers so any queued immutable MemTables are flushed and any
         // pending compaction jobs are picked up.
         let _ = self.flush_sender.send(WorkerCommand::Wake);
@@ -1117,9 +1194,7 @@ impl LsmEngineInner {
             let state = self.state.lock().unwrap();
             let all_quiet = state.compaction_idle
                 && state.column_families.iter().all(|cf| {
-                    cf.immutable.is_empty()
-                        && cf.active_flushes == 0
-                        && cf.active_compactions == 0
+                    cf.immutable.is_empty() && cf.active_flushes == 0 && cf.active_compactions == 0
                 })
                 && self.seq_allocator.is_quiesced()
                 && self.seq_allocator.completed() == self.seq_allocator.current();
@@ -1166,7 +1241,8 @@ pub(crate) struct EngineState {
     pub(crate) immutable_room: Arc<Condvar>,
     /// Sender used by the flush worker to wake the compaction worker.  Filled
     /// in after both workers are spawned.
-    pub(crate) compaction_sender: Option<crossbeam_channel::Sender<crate::compaction_worker::CompactionCommand>>,
+    pub(crate) compaction_sender:
+        Option<crossbeam_channel::Sender<crate::compaction_worker::CompactionCommand>>,
     /// Sender used to wake or shut down the blob GC worker.  Filled in after
     /// the worker is spawned.
     pub(crate) blob_gc_sender: Option<crossbeam_channel::Sender<crate::blob_gc::BlobGcCommand>>,
@@ -1203,7 +1279,8 @@ impl EngineState {
             let live = zombie.version_set.live_file_numbers();
             let current = zombie.version_set.current_file_numbers();
             // Only retired versions (snapshots) can keep files alive now.
-            let retired: std::collections::HashSet<_> = live.difference(&current).copied().collect();
+            let retired: std::collections::HashSet<_> =
+                live.difference(&current).copied().collect();
             let to_delete: Vec<u64> = zombie
                 .obsolete_files
                 .pending()
@@ -1248,12 +1325,25 @@ impl crate::blob::BlobOwner for BlobGcOwner {
         cf_id: ColumnFamilyId,
         key: &[u8],
         blob_ref: BlobRef,
-        snapshot: SequenceNumber,
+        snapshots: &[SequenceNumber],
     ) -> bool {
-        match self.lookup_blob_ref(cf_id, key, snapshot) {
-            Ok(Some(r)) => r == blob_ref,
-            _ => false,
+        // A blob is live if it is visible at any live snapshot.
+        for &snapshot in snapshots {
+            match self.lookup_blob_ref(cf_id, key, snapshot) {
+                Ok(Some(r)) if r == blob_ref => return true,
+                Ok(_) => continue,
+                Err(_) => return false,
+            }
         }
+        false
+    }
+
+    fn may_delete_files(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        // Any registered snapshot pins an engine view that may reference blob
+        // files that are no longer reachable from the current LSM.  Defer
+        // physical deletion until all snapshots are dropped.
+        state.snapshots.all().is_empty()
     }
 
     fn rewrite_blob(
@@ -1264,7 +1354,7 @@ impl crate::blob::BlobOwner for BlobGcOwner {
         seq: SequenceNumber,
     ) -> Result<()> {
         let new_ref = self.blob_store.put(cf_id, key, value, seq)?;
-        let mem = self.pending.entry(cf_id).or_insert_with(MemTable::new);
+        let mem = self.pending.entry(cf_id).or_default();
         mem.put_blob_ref(key, seq, &new_ref.encode());
         Ok(())
     }
@@ -1276,8 +1366,19 @@ impl crate::blob::BlobOwner for BlobGcOwner {
         let mut state = self.state.lock().unwrap();
         let path = state.path.clone();
         let manifest = Arc::clone(&state.manifest);
-        let last_sequence = state.seq_allocator.current();
-        let to_flush: Vec<(ColumnFamilyId, MemTable, crate::FileNumber, Arc<crate::version_set::VersionSet>, Arc<crate::metrics::Metrics>, crate::options::LsmOptions)> = self
+        let smallest_snapshot = state
+            .snapshots
+            .oldest()
+            .unwrap_or_else(|| state.seq_allocator.completed());
+        #[allow(clippy::type_complexity)]
+        let to_flush: Vec<(
+            ColumnFamilyId,
+            MemTable,
+            crate::FileNumber,
+            Arc<crate::version_set::VersionSet>,
+            Arc<crate::metrics::Metrics>,
+            crate::options::LsmOptions,
+        )> = self
             .pending
             .drain()
             .filter_map(|(cf_id, mem)| {
@@ -1300,10 +1401,10 @@ impl crate::blob::BlobOwner for BlobGcOwner {
                 &version_set,
                 &manifest,
                 &mem,
-                last_sequence,
                 file_number,
                 &metrics,
                 cf_id,
+                smallest_snapshot,
             )?;
         }
         Ok(())
@@ -1339,8 +1440,7 @@ impl BlobGcOwner {
         }
         for file in version.levels[0].iter().rev() {
             let file_path = sstable_path(&path, file.number);
-            let mut reader =
-                SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
+            let mut reader = SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
             if let Some(Some((ty, val))) = reader.get_with_type(key, snapshot)? {
                 return Ok(extract_blob_ref(ty, Some(val)));
             }
@@ -1353,8 +1453,7 @@ impl BlobGcOwner {
                     continue;
                 }
                 let file_path = sstable_path(&path, file.number);
-                let mut reader =
-                    SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
+                let mut reader = SSTableReader::open(file_path, file.number, Some(caches.clone()))?;
                 if let Some(Some((ty, val))) = reader.get_with_type(key, snapshot)? {
                     return Ok(extract_blob_ref(ty, Some(val)));
                 }

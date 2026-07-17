@@ -191,8 +191,7 @@ fn range_tombstones_carried_through_compaction() {
         let got = engine.get(&[i]).unwrap();
         if (3..7).contains(&i) {
             assert_eq!(
-                got,
-                None,
+                got, None,
                 "key {} should still be range-deleted after compaction",
                 i
             );

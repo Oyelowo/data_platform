@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 
-use super::block::{BlockBuilder, BlockIterator};
+use super::block::{BlockBuilder, BlockComparator, BlockIterator};
 use super::format::BlockHandle;
 
 /// Separator key used in index entries.
@@ -20,7 +20,7 @@ pub struct IndexBuilder {
 impl IndexBuilder {
     pub fn new(restart_interval: usize) -> Self {
         Self {
-            block_builder: BlockBuilder::new(restart_interval),
+            block_builder: BlockBuilder::new(restart_interval, BlockComparator::Bytewise),
         }
     }
 
@@ -97,7 +97,7 @@ pub struct IndexIterator {
 impl IndexIterator {
     pub fn new(data: Bytes) -> Self {
         Self {
-            inner: BlockIterator::new(data),
+            inner: BlockIterator::new(data, BlockComparator::Bytewise),
         }
     }
 

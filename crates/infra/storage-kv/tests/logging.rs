@@ -42,7 +42,10 @@ fn engine_accepts_custom_logger() {
 
     let engine = LsmEngine::open(dir.path(), opts).unwrap();
     engine.put(b"a", b"1").unwrap();
-    assert_eq!(engine.get(b"a").unwrap(), Some(bytes::Bytes::from_static(b"1")));
+    assert_eq!(
+        engine.get(b"a").unwrap(),
+        Some(bytes::Bytes::from_static(b"1"))
+    );
 
     // Normal operations do not produce errors, so the capture logger should be
     // empty (or contain only messages we explicitly sent in the test).

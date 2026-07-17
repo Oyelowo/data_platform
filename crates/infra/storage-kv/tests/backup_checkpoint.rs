@@ -88,7 +88,9 @@ fn multi_column_family_backup() {
     let restore = tempfile::tempdir().unwrap();
     let engine = LsmEngine::open(dir.path(), LsmOptions::default()).unwrap();
 
-    let cf1 = engine.create_column_family("cf1", LsmOptions::default()).unwrap();
+    let cf1 = engine
+        .create_column_family("cf1", LsmOptions::default())
+        .unwrap();
     engine.put_cf(&cf1, b"cf1-key", b"cf1-value").unwrap();
     engine.put(b"default-key", b"default-value").unwrap();
     engine.sync().unwrap();
@@ -257,7 +259,9 @@ fn restore_is_independent_of_backup() {
     engine.sync().unwrap();
     engine.create_backup("independent").unwrap();
 
-    engine.restore_backup("independent", restore.path()).unwrap();
+    engine
+        .restore_backup("independent", restore.path())
+        .unwrap();
 
     // Mutating the restored engine must not affect the backup.
     let restored = LsmEngine::open(restore.path(), LsmOptions::default()).unwrap();

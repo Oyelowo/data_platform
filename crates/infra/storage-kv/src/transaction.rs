@@ -1,6 +1,6 @@
 //! LSM transactions.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,8 +9,8 @@ use bytes::Bytes;
 use crate::cache::BlockCaches;
 use crate::column_family::{ColumnFamilyHandle, ColumnFamilyId};
 use crate::engine::LsmEngineInner;
-use crate::txn_cursor::TxnCursor;
 use crate::memtable::MemTable;
+use crate::txn_cursor::TxnCursor;
 use crate::version::Version;
 use crate::{Error, Result, SequenceNumber};
 
@@ -87,7 +87,12 @@ impl LsmTransaction {
         // alive.
         let view = {
             let mut state = inner.state.lock().unwrap();
-            state.snapshots.register(sequence);
+            // TODO: compute the blob files referenced by this snapshot's pinned
+            // view and pass them to register so future GC can delete files not
+            // referenced by any pinned view.  For now we pass an empty set and
+            // rely on BlobGcOwner::may_delete_files to defer all deletions while
+            // snapshots are alive.
+            state.snapshots.register(sequence, HashSet::new());
             let mut cf_views = HashMap::new();
             for cf in state.column_families.iter() {
                 let view = CfSnapshotView {
@@ -259,7 +264,8 @@ impl storage_traits::Transaction for LsmTransaction {
         if let Some(local) = self.local_get(0, key) {
             return Ok(local);
         }
-        self.inner.get_with_view(key, self.sequence, &self.view.default)
+        self.inner
+            .get_with_view(key, self.sequence, &self.view.default)
     }
 
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {

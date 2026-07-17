@@ -36,11 +36,7 @@ pub trait Engine: Send + Sync + 'static {
     ///
     /// `None` for `start` means "from the first key"; `None` for `end` means
     /// "to the last key".
-    fn scan(
-        &self,
-        start: Option<&[u8]>,
-        end: Option<&[u8]>,
-    ) -> Result<Self::Cursor, Self::Error>;
+    fn scan(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<Self::Cursor, Self::Error>;
 
     /// Return engine statistics.
     fn stats(&self) -> Result<EngineStats, Self::Error>;

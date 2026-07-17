@@ -198,11 +198,14 @@ fn cf_txn_scan_read_your_writes_range_delete() {
         .map(|(k, _)| k)
         .collect();
 
-    assert_eq!(rows, vec![
-        bytes::Bytes::from_static(b"a"),
-        bytes::Bytes::from_static(b"d"),
-        bytes::Bytes::from_static(b"e"),
-    ]);
+    assert_eq!(
+        rows,
+        vec![
+            bytes::Bytes::from_static(b"a"),
+            bytes::Bytes::from_static(b"d"),
+            bytes::Bytes::from_static(b"e"),
+        ]
+    );
 }
 
 #[test]
@@ -251,13 +254,16 @@ fn cf_txn_scan_interleaved_keys() {
         .map(|(k, _)| k)
         .collect();
 
-    assert_eq!(rows, vec![
-        bytes::Bytes::from_static(b"a"),
-        bytes::Bytes::from_static(b"b"),
-        bytes::Bytes::from_static(b"c"),
-        bytes::Bytes::from_static(b"d"),
-        bytes::Bytes::from_static(b"e"),
-    ]);
+    assert_eq!(
+        rows,
+        vec![
+            bytes::Bytes::from_static(b"a"),
+            bytes::Bytes::from_static(b"b"),
+            bytes::Bytes::from_static(b"c"),
+            bytes::Bytes::from_static(b"d"),
+            bytes::Bytes::from_static(b"e"),
+        ]
+    );
 }
 
 #[test]
@@ -327,11 +333,14 @@ fn cf_txn_scan_seek_with_buffered_writes() {
         .map(|(k, _)| k)
         .collect();
 
-    assert_eq!(rows, vec![
-        bytes::Bytes::from_static(b"c"),
-        bytes::Bytes::from_static(b"d"),
-        bytes::Bytes::from_static(b"e"),
-    ]);
+    assert_eq!(
+        rows,
+        vec![
+            bytes::Bytes::from_static(b"c"),
+            bytes::Bytes::from_static(b"d"),
+            bytes::Bytes::from_static(b"e"),
+        ]
+    );
 }
 
 #[test]

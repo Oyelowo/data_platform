@@ -3,10 +3,10 @@
 use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 use rand::RngCore;
 use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering as MemOrdering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering as MemOrdering};
 
-use crate::node::{mark_shared, unmark_shared, Node, MARK_TAG};
+use crate::node::{MARK_TAG, Node, mark_shared, unmark_shared};
 
 /// Maximum height of any node tower.
 const MAX_HEIGHT: usize = 32;
@@ -117,8 +117,7 @@ where
                 // level 0. If this fails, another thread changed the list and
                 // we retry the whole operation.
                 let pred0 = pos.preds[0];
-                if unsafe { pred0.deref() }
-                    .next[0]
+                if unsafe { pred0.deref() }.next[0]
                     .compare_exchange(n, new, MemOrdering::SeqCst, MemOrdering::Relaxed, &guard)
                     .is_err()
                 {
@@ -153,8 +152,7 @@ where
                 new.deref().next[0].store(pos.succs[0], MemOrdering::Relaxed);
             }
 
-            if unsafe { pos.preds[0].deref() }
-                .next[0]
+            if unsafe { pos.preds[0].deref() }.next[0]
                 .compare_exchange(
                     pos.succs[0],
                     new,
@@ -249,11 +247,15 @@ where
 
             let key = node.key();
 
-            if let Some(s) = start && key < s {
+            if let Some(s) = start
+                && key < s
+            {
                 curr = next;
                 continue;
             }
-            if let Some(e) = end && key >= e {
+            if let Some(e) = end
+                && key >= e
+            {
                 break;
             }
 
@@ -361,8 +363,7 @@ where
                             // via `is_marked` and help complete the physical
                             // deletion so searches cannot get trapped behind a
                             // deleted predecessor.
-                            let marked = next.tag() == MARK_TAG
-                                || (level > 0 && node.is_marked());
+                            let marked = next.tag() == MARK_TAG || (level > 0 && node.is_marked());
                             if marked {
                                 let unmarked_next = unmark_shared(next);
                                 let _ = pred_node.next[level].compare_exchange(
@@ -401,11 +402,7 @@ where
 
     /// Return the found node from a search position, if it matches the key and
     /// is not marked.
-    fn found_node<'g>(
-        &self,
-        pos: &Position<'g, K, V>,
-        key: &K,
-    ) -> Option<Shared<'g, Node<K, V>>> {
+    fn found_node<'g>(&self, pos: &Position<'g, K, V>, key: &K) -> Option<Shared<'g, Node<K, V>>> {
         unsafe { pos.succs[0].as_ref() }.and_then(|node| {
             if node.key() == key && !node.is_marked() {
                 Some(pos.succs[0])
@@ -438,8 +435,7 @@ where
                     node.deref().next[level].store(succ, MemOrdering::Relaxed);
                 }
 
-                if pred_node
-                    .next[level]
+                if pred_node.next[level]
                     .compare_exchange(succ, node, MemOrdering::SeqCst, MemOrdering::Relaxed, guard)
                     .is_ok()
                 {

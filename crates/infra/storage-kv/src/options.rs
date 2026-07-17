@@ -92,6 +92,17 @@ pub struct LsmOptions {
     /// Interval between automatic blob GC passes in milliseconds.  `0` disables
     /// the background worker; explicit `schedule()` calls still run GC.
     pub blob_gc_interval_ms: u64,
+
+    /// Number of threads used for blob GC file scanning.  `0` disables parallel
+    /// scanning (single-threaded).  The default is capped at 4 to avoid
+    /// overwhelming the I/O subsystem.
+    pub blob_gc_threads: usize,
+
+    /// Global garbage ratio above which the background blob GC worker runs
+    /// additional passes back-to-back instead of waiting for the regular
+    /// interval.  Expressed as garbage bytes / total blob bytes.  `0` disables
+    /// forced GC; the regular `blob_gc_interval_ms` interval is still honored.
+    pub blob_gc_force_threshold: f64,
 }
 
 impl LsmOptions {
@@ -132,6 +143,11 @@ impl LsmOptions {
                 "blob_gc_ratio must be in [0, 1]".into(),
             ));
         }
+        if self.blob_gc_force_threshold < 0.0 || self.blob_gc_force_threshold > 1.0 {
+            return Err(crate::Error::InvalidArgument(
+                "blob_gc_force_threshold must be in [0, 1]".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -163,6 +179,8 @@ impl Default for LsmOptions {
             blob_file_size: 64 * 1024 * 1024,
             blob_gc_ratio: 0.5,
             blob_gc_interval_ms: 30_000,
+            blob_gc_threads: std::thread::available_parallelism().map_or(1, |n| n.get().min(4)),
+            blob_gc_force_threshold: 0.0,
         }
     }
 }

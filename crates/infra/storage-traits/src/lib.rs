@@ -28,9 +28,9 @@ pub mod transaction;
 
 pub use blob::BlobStore;
 pub use columnar::{ColumnarEngine, Predicate};
-pub use cursor::Cursor;
 #[cfg(feature = "async")]
 pub use cursor::AsyncCursor;
+pub use cursor::Cursor;
 pub use engine::Engine;
 pub use error::{BoundKind, Error, Result};
 pub use indexed::IndexedEngine;

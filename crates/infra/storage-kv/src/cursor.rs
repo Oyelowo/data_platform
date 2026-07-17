@@ -11,7 +11,9 @@ use crate::cache::BlockCaches;
 use crate::column_family::ColumnFamilyHandle;
 use crate::engine::LsmEngineInner;
 use crate::immutable::sstable_path;
-use crate::internal_key::{RangeTombstone, ValueType, extract_user_key, parse_internal_key};
+use crate::internal_key::{
+    RangeTombstone, ValueType, build_internal_key, extract_user_key, parse_internal_key,
+};
 use crate::memtable::MemTable;
 use crate::merge_iter::{InternalIterator, MergeIterator};
 use crate::sstable::reader::SSTableReader;
@@ -108,18 +110,15 @@ impl LsmCursor {
         end: Option<Vec<u8>>,
         snapshot: SequenceNumber,
     ) -> Result<Self> {
-        let (children, range_tombstones) = build_children(
-            memtable,
-            immutable,
-            version,
-            path,
-            caches,
-            start.as_deref(),
-        )?;
+        let (children, range_tombstones) =
+            build_children(memtable, immutable, version, path, caches, start.as_deref())?;
 
         let mut merge = MergeIterator::new(children)?;
         if let Some(s) = start.as_deref() {
-            merge.seek(s)?;
+            // Seek using a max-sequence internal key so that the merge iterator
+            // lands on the newest version of the start user key.
+            let target = build_internal_key(s, u64::MAX, ValueType::Value);
+            merge.seek(&target)?;
         } else {
             merge.seek_to_first()?;
         }
@@ -242,7 +241,8 @@ impl storage_traits::Cursor for LsmCursor {
 
     fn seek(&mut self, key: &[u8]) -> Result<()> {
         self.finished = false;
-        self.inner.seek(key)?;
+        let target = build_internal_key(key, u64::MAX, ValueType::Value);
+        self.inner.seek(&target)?;
         self.skip_filtered()
     }
 
@@ -286,7 +286,7 @@ fn build_children(
         for file in &version.levels[level] {
             // If we have bounds, skip files that cannot contain keys in range.
             if let Some(s) = start
-                && file.largest.as_slice() < s
+                && extract_user_key(&file.largest) < s
             {
                 continue;
             }
@@ -303,11 +303,7 @@ fn build_children(
 
 /// Resolve a raw cursor value: inline values are copied, deletion tombstones
 /// cannot reach here, and blob references are decoded and fetched.
-fn resolve_cursor_value(
-    ty: ValueType,
-    value: &[u8],
-    blob_store: &BlobStore,
-) -> Result<Bytes> {
+fn resolve_cursor_value(ty: ValueType, value: &[u8], blob_store: &BlobStore) -> Result<Bytes> {
     match ty {
         ValueType::Value => Ok(Bytes::copy_from_slice(value)),
         ValueType::BlobRef => {

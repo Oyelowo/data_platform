@@ -79,8 +79,7 @@ fn contention_overwrite() {
     }
 
     // Every key 0..16 must be present with some value.
-    let snapshot: std::collections::BTreeMap<usize, usize> =
-        map.iter().into_iter().collect();
+    let snapshot: std::collections::BTreeMap<usize, usize> = map.iter().into_iter().collect();
     for k in 0..16 {
         assert!(snapshot.contains_key(&k), "missing key {}", k);
     }
