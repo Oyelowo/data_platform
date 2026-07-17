@@ -27,7 +27,7 @@ pub mod stats;
 pub mod transaction;
 
 pub use blob::BlobStore;
-pub use columnar::{ColumnarEngine, Predicate};
+pub use columnar::{ColumnarEngine, ColumnBatch, Predicate, ScanResult};
 #[cfg(feature = "async")]
 pub use cursor::AsyncCursor;
 pub use cursor::Cursor;

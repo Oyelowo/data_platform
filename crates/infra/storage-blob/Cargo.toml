@@ -1,0 +1,19 @@
+[package]
+name = "storage-blob"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Content-addressed object store implementing storage_traits::BlobStore."
+license.workspace = true
+
+[dependencies]
+storage-traits = { path = "../storage-traits" }
+storage-wal = { path = "../storage-wal" }
+bytes = "1.10"
+thiserror = "2.0"
+crc32c = "0.6"
+dashmap = "6.1"
+
+[dev-dependencies]
+storage-testkit = { path = "../storage-testkit" }
+tempfile = "3.19"

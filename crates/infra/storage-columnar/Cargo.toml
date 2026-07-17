@@ -1,0 +1,27 @@
+[package]
+name = "storage-columnar"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Arrow/Parquet-backed analytical columnar engine implementing storage_traits::ColumnarEngine."
+license.workspace = true
+
+[dependencies]
+storage-traits = { path = "../storage-traits" }
+storage-wal = { path = "../storage-wal" }
+arrow = "54"
+parquet = "54"
+arrow-schema = "54"
+arrow-array = "54"
+arrow-cast = "54"
+arrow-ipc = "54"
+bytes = { version = "1.10", features = ["serde"] }
+thiserror = "2.0"
+dashmap = "6.1"
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+storage-testkit = { path = "../storage-testkit" }
+tempfile = "3.19"

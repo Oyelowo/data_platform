@@ -7,6 +7,8 @@ members = [
     "storage-memory",
     "storage-wal",
     "storage-kv",
+    "storage-blob",
+    "storage-columnar",
     # "object_store",
     # "distributed_storages",
     # "consensus",

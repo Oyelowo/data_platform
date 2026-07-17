@@ -5,5 +5,7 @@
 
 #![warn(missing_docs)]
 
+pub use storage_blob::{BlobStoreImpl, BlobStoreOptions};
+pub use storage_columnar::{ColumnarEngineImpl, ColumnarOptions};
 pub use storage_memory::{MemoryEngine, MemoryTransaction};
 pub use storage_traits::*;

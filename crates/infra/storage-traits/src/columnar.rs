@@ -4,6 +4,14 @@ use bytes::Bytes;
 
 use crate::error::Result;
 
+/// A column-oriented batch of rows.
+///
+/// Each tuple is `(column_name, values)` where `None` represents a SQL NULL.
+pub type ColumnBatch = Vec<(String, Vec<Option<Bytes>>)>;
+
+/// Result of a columnar scan: projected columns in the requested order.
+pub type ScanResult = Vec<(String, Vec<Option<Bytes>>)>;
+
 /// A predicate expression for pushdown.
 ///
 /// This is intentionally a minimal enum. More operators are added as engines
@@ -47,12 +55,15 @@ pub trait ColumnarEngine: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Ingest a batch of rows.
-    fn ingest(&self, columns: Vec<(String, Vec<Bytes>)>) -> Result<(), Self::Error>;
+    ///
+    /// `None` represents a SQL-style NULL. `Some(Bytes::new())` is a valid empty
+    /// string or binary value.
+    fn ingest(&self, columns: ColumnBatch) -> Result<(), Self::Error>;
 
     /// Scan columns matching `projection`, filtering by `predicate`.
     fn scan(
         &self,
         projection: &[&str],
         predicate: &Predicate,
-    ) -> Result<Vec<(String, Vec<Bytes>)>, Self::Error>;
+    ) -> Result<ScanResult, Self::Error>;
 }
