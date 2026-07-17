@@ -12,7 +12,6 @@ mod pattern;
 mod query;
 mod query_select;
 mod stmt;
-mod token_tree;
 mod types;
 
 #[cfg(test)]

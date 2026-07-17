@@ -20,7 +20,6 @@ fn debug_pub_const() {
             let ns_name = match ns {
                 crate::namespaces::Namespace::Value => "Value",
                 crate::namespaces::Namespace::Type => "Type",
-                crate::namespaces::Namespace::Macro => "Macro",
             };
             for (name, def_id) in map {
                 println!("  {}: {} -> {:?}", ns_name, name.as_str(&interner), def_id);

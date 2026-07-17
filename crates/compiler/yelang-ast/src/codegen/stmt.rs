@@ -15,11 +15,6 @@ impl Codegen for Stmt {
             StmtKind::Let(let_stmt) => let_stmt.codegen(f, interner),
             StmtKind::Item(item) => item.codegen(f, interner),
             StmtKind::Empty => Ok(()),
-            StmtKind::MacroInvocation(inv) => {
-                inv.path.codegen(f, interner)?;
-                write!(f, "!")?;
-                write!(f, "{}", inv.args.render(interner))
-            }
         }
     }
 }

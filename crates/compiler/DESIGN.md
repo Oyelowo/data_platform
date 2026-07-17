@@ -1,6 +1,8 @@
 # Yelang Compiler Design Document
 ## Phase: Name Resolution & HIR
 
+> **Note (2026-07-17):** User-defined macros have been removed from the active design. See `notes/architectures/adr_no_user_defined_macros.md`. Built-in decorators/derives are handled directly by the compiler; user extensibility will be provided by `comptime` after the backend is ready.
+
 ---
 
 ## 1. Architecture Decisions
@@ -9,11 +11,10 @@
 
 | Mechanism | Phase | Example |
 |---|---|---|
-| Built-in decorators | Early expansion | `@repr(C)`, `@no_std` |
-| User-defined macros | AST→AST transformation | `@derive(Show)`, `@table` |
-| CTFE (`comptime`) | Type-check time | `comptime compute_schema()` |
+| Built-in decorators | Early expansion / HIR lowering | `@repr(C)`, `@no_std`, `@derive(Clone)` |
+| CTFE (`comptime`) | Type-check / codegen time | `comptime compute_schema()` |
 
-Decorators/macros are **erased before HIR**. No runtime reflection.
+Built-in decorators are **erased before HIR**. No runtime reflection.
 
 ### 1.2 Module System
 
@@ -33,21 +34,20 @@ BodyId = HirId                  -- executable code
 
 ### 1.4 Namespaces
 
-Three namespaces, no lifetime namespace:
+Two namespaces, no lifetime namespace and no macro namespace:
 - `ValueNS` -- variables, functions, constants
 - `TypeNS` -- types, traits, modules
-- `MacroNS` -- macros, decorators
 
 ### 1.5 Resolution Pipeline
 
 ```
 AST
   ↓
-Early Resolution (modules, imports, macro names)
-  ↓
-Macro Expansion (iterative)
+Early Resolution (modules, imports)
   ↓
 Late Resolution (all paths in exprs, types, patterns)
+  ↓
+Built-in attribute/derive lowering (direct HIR generation)
   ↓
 AST → HIR Lowering (desugar + resolve names to DefIds)
   ↓
@@ -81,15 +81,11 @@ HIR must accommodate:
 ## 2. Crate Graph
 
 ```
-yelang-util          (wrapper types: FxHashMap, SlotMap, etc.)
-  ↑
 yelang-interner      (string interning)
   ↑
 yelang-lexer         (tokenization)
   ↑
 yelang-ast           (AST types + parser)
-  ↑
-yelang-macro         (macro expansion + hygiene)
   ↑
 yelang-resolve       (name resolution: DefId, ribs, scopes)
   ↑
@@ -110,7 +106,7 @@ yelang-hir           (HIR types + lowering)
 | Imports | 10 | `use`, `use as`, `use *` |
 | Generics | 8 | `fn id<T>(x: T) -> T` |
 | Traits | 8 | `impl`, trait method call |
-| Macros/decorators | 6 | `@derive`, `@repr` |
+| Built-in decorators/derives | 6 | `@derive(Clone)`, `@repr` |
 | Error cases | 12 | Undefined, ambiguous, cycle |
 
 ### 3.2 HIR Lowering Tests (yelang-hir)
@@ -122,7 +118,7 @@ yelang-hir           (HIR types + lowering)
 | Type lowering | 8 | Path, tuple, fn ptr, anon struct |
 | Pattern lowering | 6 | Binding, struct, tuple |
 | Desugaring | 8 | For, while, try, async |
-| Decorator expansion | 4 | `@derive` generates impls |
+| Built-in derive lowering | 4 | `@derive(Clone)` generates impls |
 
 ---
 

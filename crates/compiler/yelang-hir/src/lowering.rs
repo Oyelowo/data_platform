@@ -126,8 +126,6 @@ fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {
         AstItemKind::Static(_) => DefKind::Static,
         AstItemKind::Impl(_) => DefKind::Impl,
         AstItemKind::Use(_) => DefKind::Use,
-        AstItemKind::MacroDef(_) => return None,
-        AstItemKind::MacroInvocation(_) => return None,
     })
 }
 
@@ -141,7 +139,6 @@ fn item_name(item: &AstItem) -> Option<Symbol> {
         AstItemKind::Module(m) => m.name.symbol,
         AstItemKind::Const(c) => c.name.symbol,
         AstItemKind::Static(s) => s.name.symbol,
-        AstItemKind::Impl(_) | AstItemKind::Use(_) | AstItemKind::MacroDef(_) => return None,
-        AstItemKind::MacroInvocation(_) => return None,
+        AstItemKind::Impl(_) | AstItemKind::Use(_) => return None,
     })
 }

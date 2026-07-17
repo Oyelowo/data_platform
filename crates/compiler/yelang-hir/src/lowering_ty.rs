@@ -93,12 +93,6 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
         yelang_ast::TypeKind::Infer => TyKind::Infer,
         yelang_ast::TypeKind::Never => TyKind::Tuple { tys: vec![] },
         yelang_ast::TypeKind::Error => TyKind::Err,
-        yelang_ast::TypeKind::MacroInvocation(_) => {
-            // Unexpanded macro invocations should have produced an error during
-            // macro expansion; lower them to an error type so later phases can
-            // continue.
-            TyKind::Err
-        }
     };
 
     Ty { kind, span }

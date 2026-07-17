@@ -267,10 +267,6 @@ pub trait Visitor: Sized {
         walk_await_expr(self, expr)
     }
 
-    fn visit_macro_invocation(&mut self, inv: &MacroInvocation) -> ControlFlow<()> {
-        walk_macro_invocation(self, inv)
-    }
-
     fn visit_grouped_expr(&mut self, grouped: &GroupedExpr) -> ControlFlow<()> {
         walk_grouped_expr(self, grouped)
     }

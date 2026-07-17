@@ -27,11 +27,6 @@ mod types;
 pub mod validation;
 pub mod visit;
 
-/// Token tree types used for macro arguments and macro expansion.
-pub mod token_tree {
-    pub use yelang_macro_core::token_tree::*;
-}
-
 #[cfg(test)]
 mod test;
 

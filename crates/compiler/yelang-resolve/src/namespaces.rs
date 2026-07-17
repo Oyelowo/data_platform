@@ -2,7 +2,6 @@
 pub enum Namespace {
     Value,
     Type,
-    Macro,
 }
 
 impl std::fmt::Display for Namespace {
@@ -10,7 +9,6 @@ impl std::fmt::Display for Namespace {
         match self {
             Namespace::Value => write!(f, "value"),
             Namespace::Type => write!(f, "type"),
-            Namespace::Macro => write!(f, "macro"),
         }
     }
 }

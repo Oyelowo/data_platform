@@ -28,11 +28,6 @@ pub fn fold_stmt<F: Folder + ?Sized>(f: &mut F, node: Stmt) -> Stmt {
         StmtKind::Let(l) => StmtKind::Let(Box::new(f.fold_let_stmt(*l))),
         StmtKind::Item(i) => StmtKind::Item(Box::new(f.fold_item(*i))),
         StmtKind::Empty => StmtKind::Empty,
-        StmtKind::MacroInvocation(i) => StmtKind::MacroInvocation(crate::expr::MacroInvocation {
-            path: f.fold_path(i.path),
-            args: i.args,
-            span: i.span,
-        }),
     };
 
     Stmt {

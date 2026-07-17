@@ -9,9 +9,9 @@ use super::types::{Expr, ExprKind, Restrictions};
 use crate::{
     ArrayAccess, ArrayIndex, AssignEqExpr, AssignOpExpr, Associativity, AtomicExpr, BinaryExpr,
     BindAtExpr, CallArgs, CallExpr, DestructureAssignExpr, Document, DocumentAccess,
-    ExprPathSegment, Ident, InfixOp, IntegerLit, IsTypeExpr, LetExpr, MacroInvocation,
-    MemberAccess, MethodCallExpr, Pattern, PatternKind, Precedence, PrecedenceExt, RangeExpr,
-    RangeOp, T, TernaryExpr, TrySafeAccess, Type, TypeAscription, TypeCast,
+    ExprPathSegment, Ident, InfixOp, IntegerLit, IsTypeExpr, LetExpr, MemberAccess, MethodCallExpr,
+    Pattern, PatternKind, Precedence, PrecedenceExt, RangeExpr, RangeOp, T, TernaryExpr,
+    TrySafeAccess, Type, TypeAscription, TypeCast,
 };
 use yelang_lexer::Span;
 use yelang_lexer::{
@@ -255,28 +255,6 @@ impl Expr {
 
         loop {
             let checkpoint = stream.checkpoint();
-
-            // Macro invocation: `assert!(true)`, `vec![1, 2]`, `macro! { stmt }`
-            // Only valid when `!` immediately follows a simple path expression.
-            if matches!(
-                stream.peek().map(|t| t.kind()),
-                Some(crate::tokenizer::TokenKind::Bang)
-            ) {
-                if let ExprKind::Path(path) = &base.kind {
-                    stream.advance(); // consume `!`
-                    let args = crate::expr::macro_invocation::parse_macro_args(stream)?;
-                    let span = stream.span_since(checkpoint);
-                    base = Expr {
-                        kind: ExprKind::MacroInvocation(MacroInvocation {
-                            path: path.clone(),
-                            args,
-                            span,
-                        }),
-                        span,
-                    };
-                    continue;
-                }
-            }
 
             let Ok(op) = stream.parse::<PostfixOp>() else {
                 break;

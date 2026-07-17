@@ -137,11 +137,6 @@ impl Codegen for Expr {
                 expr.codegen(f, interner)?;
                 write!(f, ".await")
             }
-            ExprKind::MacroInvocation(inv) => {
-                inv.path.codegen(f, interner)?;
-                write!(f, "!")?;
-                inv.args.codegen(f, interner)
-            }
             ExprKind::Err => write!(f, "/* error */"),
             ExprKind::Dummy => write!(f, "/* dummy */"),
         }

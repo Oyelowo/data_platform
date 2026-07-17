@@ -236,13 +236,6 @@ impl<'a> DefCollector<'a> {
             ),
             ItemKind::Impl(i) => self.collect_impl(i, item.span, item.visibility.clone()),
             ItemKind::Use(u) => self.collect_use(u, item.span, item.visibility.clone()),
-            ItemKind::MacroDef(_) => {
-                // Macro definitions are consumed by the macro expansion phase
-                // and do not reach name resolution.
-            }
-            ItemKind::MacroInvocation(_) => {
-                // Unexpanded macro invocations do not define names.
-            }
         }
     }
 

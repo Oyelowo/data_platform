@@ -4,8 +4,8 @@ use yelang_ast::Ident;
 use yelang_lexer::Span;
 
 use crate::hir::{
-    Body, EnumDef, FnSig, Generics, Impl, MacroDef, Mutability, Trait, Ty, UseKind, UsePath,
-    VariantData, Visibility,
+    Body, EnumDef, FnSig, Generics, Impl, Mutability, Trait, Ty, UseKind, UsePath, VariantData,
+    Visibility,
 };
 use crate::ids::{BodyId, DefId};
 
@@ -66,6 +66,4 @@ pub enum ItemKind {
     Mod { items: Vec<DefId> },
     /// Use declaration.
     Use { path: UsePath, kind: UseKind },
-    /// Macro definition.
-    Macro { def: MacroDef },
 }

@@ -5,7 +5,6 @@ use yelang_lexer::Span;
 use crate::{
     def_collector::Definition,
     error::ResolutionError,
-    hygiene::{is_visible, is_visible_for_item},
     lang_items::LangItems,
     module_tree::ModuleTree,
     namespaces::Namespace,
@@ -19,15 +18,10 @@ pub struct Resolver<'a> {
     pub next_local_id: u32,
     pub value_ribs: Vec<Rib>,
     pub type_ribs: Vec<Rib>,
-    pub macro_ribs: Vec<Rib>,
     pub unresolved_imports: Vec<crate::imports::UnresolvedImport>,
     pub errors: Vec<ResolutionError>,
     pub definitions: FxHashMap<DefId, Definition>,
     pub current_module: DefId,
-    /// Optional macro hygiene data. When present, name lookup respects the
-    /// transparency of macro expansion marks between a use site and the
-    /// definition site.
-    pub hygiene: Option<&'a yelang_macro_core::HygieneData>,
     /// Maps type name ( Symbol) to the DefId of impl blocks for that type
     pub inherent_impls: FxHashMap<Symbol, Vec<DefId>>,
     /// Maps (trait_name, type_name) to DefId of trait impl blocks
@@ -64,7 +58,6 @@ impl<'a> Resolver<'a> {
             next_local_id: 1,
             value_ribs: Vec::new(),
             type_ribs: Vec::new(),
-            macro_ribs: Vec::new(),
             unresolved_imports: Vec::new(),
             errors: Vec::new(),
             definitions,
@@ -77,37 +70,26 @@ impl<'a> Resolver<'a> {
             lang_items,
             enum_variants,
             def_resolutions: FxHashMap::default(),
-            hygiene: None,
         }
-    }
-
-    pub fn with_hygiene(mut self, hygiene: &'a yelang_macro_core::HygieneData) -> Self {
-        self.hygiene = Some(hygiene);
-        self
     }
 
     pub fn push_rib(&mut self, kind: crate::rib::RibKind) {
         self.value_ribs.push(Rib::new(kind));
         self.type_ribs.push(Rib::new(kind));
-        self.macro_ribs.push(Rib::new(kind));
     }
 
     pub fn pop_rib(&mut self) {
         self.value_ribs.pop();
         self.type_ribs.pop();
-        self.macro_ribs.pop();
     }
 
     pub fn resolve_name(&self, ns: Namespace, name: Symbol, use_span: Span) -> Option<Resolution> {
         let ribs = match ns {
             Namespace::Value => &self.value_ribs,
             Namespace::Type => &self.type_ribs,
-            Namespace::Macro => &self.macro_ribs,
         };
         for rib in ribs.iter().rev() {
-            if let Some((res, def_span)) = rib.get_with_span(ns, name)
-                && is_visible(self.hygiene, use_span, def_span, ns)
-            {
+            if let Some((res, _)) = rib.get_with_span(ns, name) {
                 return Some(res);
             }
         }
@@ -143,15 +125,8 @@ impl<'a> Resolver<'a> {
         None
     }
 
-    fn resolve_visible_module_item(&self, def_id: DefId, use_span: Span) -> Option<Resolution> {
-        if let Some(def) = self.definitions.get(&def_id) {
-            if is_visible_for_item(self.hygiene, use_span, def.span) {
-                return Some(Resolution::Def { def_id });
-            }
-            None
-        } else {
-            Some(Resolution::Def { def_id })
-        }
+    fn resolve_visible_module_item(&self, def_id: DefId, _use_span: Span) -> Option<Resolution> {
+        Some(Resolution::Def { def_id })
     }
 
     pub fn resolve_name_in_module(
@@ -159,21 +134,12 @@ impl<'a> Resolver<'a> {
         module_id: DefId,
         ns: Namespace,
         name: Symbol,
-        use_span: Span,
+        _use_span: Span,
     ) -> Option<DefId> {
         self.module_tree
             .modules
             .get(&module_id)
             .and_then(|m| m.get_item(ns, name))
-            .and_then(|def_id| {
-                self.definitions.get(&def_id).and_then(|def| {
-                    if is_visible_for_item(self.hygiene, use_span, def.span) {
-                        Some(def_id)
-                    } else {
-                        None
-                    }
-                })
-            })
     }
 
     pub fn next_local_id(&mut self) -> u32 {

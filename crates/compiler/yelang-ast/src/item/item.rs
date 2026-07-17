@@ -9,7 +9,6 @@ use crate::{Path, TokenKind};
 use yelang_lexer::{ParseTokenStream, Span, TokenResult, TokenStream, match_map};
 
 use super::*;
-use crate::Codegen;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
@@ -51,11 +50,6 @@ pub enum ItemKind {
     Impl(Box<Impl>),
     /// Use declaration
     Use(Use),
-    /// Declarative macro definition: `macro name { ... }`
-    MacroDef(Box<MacroDef>),
-
-    /// Macro invocation in item position: `my_macro! { ... }`.
-    MacroInvocation(crate::expr::MacroInvocation),
 }
 
 impl ParseTokenStream<crate::tokenizer::TokenKind> for ItemKind {
@@ -98,11 +92,6 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for ItemKind {
                         .map(|s| ItemKind::Static(Box::new(s)));
                 }
                 TokenKind::Use => return stream.parse::<Use>().map(ItemKind::Use),
-                TokenKind::Macro => {
-                    return stream
-                        .parse::<MacroDef>()
-                        .map(|m| ItemKind::MacroDef(Box::new(m)));
-                }
                 TokenKind::Mod => return stream.parse::<ModDef>().map(ItemKind::Module),
                 TokenKind::Impl => {
                     return stream.parse::<Impl>().map(|i| ItemKind::Impl(Box::new(i)));
@@ -119,22 +108,6 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for ItemKind {
                 _ => {}
             }
         }
-
-        // Macro invocation in item position: `my_macro! { ... }`.
-        // A bare Path is not otherwise a valid item, so any `path!` here is a macro call.
-        let checkpoint = stream.checkpoint();
-        if let Ok(path) = stream.parse::<Path>() {
-            if stream.peek().map(|t| t.kind()) == Some(&TokenKind::Bang) {
-                stream.advance(); // consume `!`
-                let args = crate::expr::parse_macro_args(stream)?;
-                return Ok(ItemKind::MacroInvocation(crate::expr::MacroInvocation {
-                    path,
-                    args,
-                    span: stream.span_since(checkpoint),
-                }));
-            }
-        }
-        stream.restore(checkpoint);
 
         // Fallback (keeps behavior for any future/odd item forms).
         match_map!(

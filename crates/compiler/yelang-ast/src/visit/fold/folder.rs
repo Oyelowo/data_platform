@@ -280,10 +280,6 @@ pub trait Folder: Sized {
         fold_await_expr(self, expr)
     }
 
-    fn fold_macro_invocation(&mut self, node: MacroInvocation) -> MacroInvocation {
-        super::expr::fold_macro_invocation(self, node)
-    }
-
     fn fold_grouped_expr(&mut self, node: GroupedExpr) -> GroupedExpr {
         fold_grouped_expr(self, node)
     }

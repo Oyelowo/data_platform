@@ -1,12 +1,8 @@
 // use crate::ast::{StructuralField, TypeOperator};
-use crate::Codegen;
 use crate::item::TypeBinderParams;
 use crate::{FunctionType, StructuralField, TypeOperator};
 use crate::{Literal, T};
-use crate::{
-    Path,
-    expr::{Expr, MacroInvocation, parse_macro_args},
-};
+use crate::{Path, expr::Expr};
 use yelang_lexer::{ParseTokenStream, SeparatedList, Span, TokenResult, TokenStream, match_map};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,9 +166,6 @@ pub enum TypeKind {
     /// Trait object type: `dyn Trait`.
     DynTrait(Path),
 
-    /// Macro invocation in type position: `MyType!()`.
-    MacroInvocation(super::super::expr::MacroInvocation),
-
     /// Error type for parser recovery
     Error,
 }
@@ -268,23 +261,6 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for Type {
                 (T![dyn], Path) => |(_, path)| TypeKind::DynTrait(path),
                 Path => |path| TypeKind::Named(path)
             )?;
-
-            // A path followed by `!` is a type-position macro invocation.
-            let kind = if let TypeKind::Named(path) = kind {
-                if stream.peek().map(|t| t.kind()) == Some(&crate::tokenizer::TokenKind::Bang) {
-                    stream.advance(); // consume `!`
-                    let args = parse_macro_args(stream)?;
-                    TypeKind::MacroInvocation(MacroInvocation {
-                        path,
-                        args,
-                        span: stream.span_since(checkpoint),
-                    })
-                } else {
-                    TypeKind::Named(path)
-                }
-            } else {
-                kind
-            };
 
             Ok(Type {
                 kind,
@@ -417,23 +393,6 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for TypeAtom {
             (T![dyn], Path) => |(_, path)| TypeKind::DynTrait(path),
             Path => |path| TypeKind::Named(path)
         )?;
-
-        // A path followed by `!` is a type-position macro invocation.
-        let kind = if let TypeKind::Named(path) = kind {
-            if stream.peek().map(|t| t.kind()) == Some(&crate::tokenizer::TokenKind::Bang) {
-                stream.advance(); // consume `!`
-                let args = parse_macro_args(stream)?;
-                TypeKind::MacroInvocation(MacroInvocation {
-                    path,
-                    args,
-                    span: stream.span_since(checkpoint),
-                })
-            } else {
-                TypeKind::Named(path)
-            }
-        } else {
-            kind
-        };
 
         Ok(TypeAtom(Type {
             kind,

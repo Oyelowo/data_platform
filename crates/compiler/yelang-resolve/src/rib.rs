@@ -43,7 +43,6 @@ pub enum RibKind {
     Loop,
     Pat,
     Opaque,
-    Macro,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

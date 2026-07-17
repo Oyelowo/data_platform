@@ -32,12 +32,6 @@ pub fn fold_item<F: Folder + ?Sized>(f: &mut F, node: Item) -> Item {
         ItemKind::Impl(i) => ItemKind::Impl(Box::new(f.fold_impl(*i))),
         ItemKind::Use(u) => ItemKind::Use(f.fold_use(u)),
         ItemKind::Module(m) => ItemKind::Module(f.fold_module(m)),
-        ItemKind::MacroDef(def) => ItemKind::MacroDef(def),
-        ItemKind::MacroInvocation(inv) => ItemKind::MacroInvocation(expr::MacroInvocation {
-            path: f.fold_path(inv.path),
-            args: inv.args,
-            span: inv.span,
-        }),
     };
 
     Item {
@@ -251,11 +245,6 @@ pub fn fold_type<F: Folder + ?Sized>(f: &mut F, ty: Type) -> Type {
         }),
         TypeKind::ImplTrait(path) => TypeKind::ImplTrait(f.fold_path(path)),
         TypeKind::DynTrait(path) => TypeKind::DynTrait(f.fold_path(path)),
-        TypeKind::MacroInvocation(inv) => TypeKind::MacroInvocation(expr::MacroInvocation {
-            path: f.fold_path(inv.path),
-            args: inv.args,
-            span: inv.span,
-        }),
         TypeKind::Error => TypeKind::Error,
     };
 
@@ -319,11 +308,6 @@ pub fn fold_pattern<F: Folder + ?Sized>(f: &mut F, pat: Pattern) -> Pattern {
             end: range.end.map(|expr| Box::new(f.fold_expr(*expr))),
         }),
         PatternKind::Grouped(pat) => PatternKind::Grouped(Box::new(f.fold_pattern(*pat))),
-        PatternKind::MacroInvocation(inv) => PatternKind::MacroInvocation(expr::MacroInvocation {
-            path: f.fold_path(inv.path),
-            args: inv.args,
-            span: inv.span,
-        }),
     };
 
     Pattern {

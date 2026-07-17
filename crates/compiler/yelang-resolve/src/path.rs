@@ -38,12 +38,6 @@ fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Opt
                 first_span,
             )
             .map(|def_id| Resolution::Def { def_id })
-    } else if first.ident.origin == yelang_ast::tokenizer::IdentOrigin::Crate {
-        // `$crate` expands to a path anchored at the macro's defining crate. In
-        // single-crate mode this is the crate root; multi-crate builds can refine
-        // this via `ident.crate_ref` once crate ids flow through expansion.
-        current_module = resolver.module_tree.root.def_id;
-        None
     } else if first_str == "crate" {
         current_module = resolver.module_tree.root.def_id;
         None

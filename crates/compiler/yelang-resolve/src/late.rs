@@ -62,12 +62,6 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ItemKind::Static(s) => self.resolve_static(s),
             ItemKind::Impl(i) => self.resolve_impl(i),
             ItemKind::Use(_) => {}
-            ItemKind::MacroDef(_) => {
-                // Macro definitions are removed before name resolution.
-            }
-            ItemKind::MacroInvocation(_) => {
-                // Unexpanded macro invocations do not need name resolution.
-            }
         }
     }
 
@@ -490,11 +484,6 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ExprKind::Await(e) => {
                 self.resolve_expr(e);
             }
-            ExprKind::MacroInvocation(inv) => {
-                self.resolve_value_path(&inv.path);
-                // Arguments are raw tokens; they are resolved after macro expansion
-                // produces ordinary AST nodes.
-            }
             ExprKind::Err => {}
             ExprKind::Dummy => {}
             ExprKind::Async(async_expr) => {
@@ -565,12 +554,8 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ItemKind::Static(s) => {
                 self.add_value_binding(s.name.symbol, s.name.span());
             }
-            ItemKind::Impl(_) | ItemKind::Use(_) | ItemKind::MacroDef(_) => {
+            ItemKind::Impl(_) | ItemKind::Use(_) => {
                 // Impls have no namespace binding; uses are resolved separately.
-                // Macro definitions are removed before name resolution.
-            }
-            ItemKind::MacroInvocation(_) => {
-                // Unexpanded macro invocations do not hoist names.
             }
         }
     }
@@ -592,10 +577,6 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_item(item);
             }
             StmtKind::Empty => {}
-            StmtKind::MacroInvocation(_) => {
-                // Unexpanded macro invocations in statement position do not
-                // need name resolution; they are reported by the macro expander.
-            }
         }
     }
 
@@ -663,10 +644,6 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_pattern(pat);
             }
             PatternKind::Absent => {}
-            PatternKind::MacroInvocation(_) => {
-                // Unexpanded macro invocations in pattern position do not need
-                // name resolution.
-            }
         }
     }
 
@@ -744,10 +721,6 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 self.resolve_type_path(path);
             }
             TypeKind::Error => {}
-            TypeKind::MacroInvocation(_) => {
-                // Unexpanded macro invocations in type position do not need
-                // name resolution.
-            }
         }
     }
 

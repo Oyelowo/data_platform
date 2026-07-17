@@ -110,11 +110,6 @@ impl Codegen for Type {
                 write!(f, "dyn ")?;
                 path.codegen(f, interner)
             }
-            TypeKind::MacroInvocation(inv) => {
-                inv.path.codegen(f, interner)?;
-                write!(f, "!")?;
-                write!(f, "{}", inv.args.render(interner))
-            }
             TypeKind::Error => write!(f, "/* error type */"),
         }
     }

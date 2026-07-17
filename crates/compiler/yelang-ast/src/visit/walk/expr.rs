@@ -55,7 +55,6 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) -> ControlFlow<()> {
         ExprKind::Dummy => ControlFlow::Continue(()),
         ExprKind::Gen(g) => v.visit_gen_expr(g),
         ExprKind::Await(a) => v.visit_await_expr(a),
-        ExprKind::MacroInvocation(m) => v.visit_macro_invocation(m),
     }
 }
 
@@ -408,8 +407,4 @@ pub fn walk_continue_expr<V: Visitor>(
 ) -> ControlFlow<()> {
     // Default implementation: no-op since continue has no sub-expressions
     ControlFlow::Continue(())
-}
-
-pub fn walk_macro_invocation<V: Visitor>(v: &mut V, inv: &MacroInvocation) -> ControlFlow<()> {
-    v.visit_path(&inv.path)
 }

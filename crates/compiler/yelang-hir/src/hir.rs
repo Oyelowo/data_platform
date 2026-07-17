@@ -257,13 +257,6 @@ pub enum UseKind {
     Nested { items: Vec<UsePath> },
 }
 
-/// Macro definition item.
-#[derive(Debug, Clone)]
-pub struct MacroDef {
-    pub body: BodyId,
-    pub span: Span,
-}
-
 /// Foreign item in an `extern` block.
 #[derive(Debug, Clone)]
 pub struct ForeignItem {

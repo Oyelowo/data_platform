@@ -334,14 +334,6 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
             // Lower list comprehension to a desugared loop.
             lower_comprehension_expr(ctx, comp, span)
         }
-        AstExprKind::MacroInvocation(_inv) => {
-            // Macros should have been expanded before HIR lowering.
-            ctx.error(LoweringError::UnsupportedAst {
-                kind: "macro invocation (should have been expanded)".to_string(),
-                span,
-            });
-            ExprKind::Err
-        }
         AstExprKind::Err => ExprKind::Err,
         AstExprKind::Dummy => ExprKind::Err,
         _ => {
@@ -579,21 +571,6 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                 },
             }),
         },
-        yelang_ast::StmtKind::MacroInvocation(_) => {
-            // Residual unexpanded statement macros produce no HIR. They are
-            // reported as errors by the macro expansion phase.
-            StmtKind::Expr {
-                expr: Box::new(Expr {
-                    hir_id: ctx.next_hir_id(),
-                    kind: ExprKind::Tuple { exprs: vec![] },
-                    span,
-                    ty: Ty {
-                        kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-                        span,
-                    },
-                }),
-            }
-        }
     };
 
     Stmt { kind, span }
