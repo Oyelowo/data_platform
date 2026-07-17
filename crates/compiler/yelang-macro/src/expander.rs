@@ -18,6 +18,7 @@ use crate::eager::{
 };
 use crate::error::ExpandError;
 use crate::matcher::{MacroKind, try_match_matcher, try_match_rule};
+use crate::parse_macro_output;
 use crate::proc_macro::{
     InProcessExecutor, InProcessProcMacro, ProcMacroRuntime, core_to_wire,
     wire_diagnostics_to_errors, wire_to_core,
@@ -388,7 +389,7 @@ impl<'a> MacroExpander<'a> {
         // Item-position macro invocation: expand to items.
         if let ItemKind::MacroInvocation(inv) = &item.kind {
             match self.expand_macro_invocation(inv) {
-                Ok(stream) => match parse_items_from_token_stream(
+                Ok(stream) => match parse_macro_output::parse_items_from_macro_stream(
                     &stream,
                     self.interner,
                     &self.eager_context(),
@@ -628,7 +629,7 @@ impl<'a> MacroExpander<'a> {
         match &ty.kind {
             TypeKind::MacroInvocation(inv) => {
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_type_from_token_stream(
+                    Ok(stream) => match parse_macro_output::parse_type_from_macro_stream(
                         &stream,
                         self.interner,
                         &self.eager_context(),
@@ -964,7 +965,7 @@ impl<'a> MacroExpander<'a> {
         match &pat.pattern {
             PatternKind::MacroInvocation(inv) => {
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_pattern_from_token_stream(
+                    Ok(stream) => match parse_macro_output::parse_pattern_from_macro_stream(
                         &stream,
                         self.interner,
                         &self.eager_context(),
@@ -1183,7 +1184,7 @@ impl<'a> MacroExpander<'a> {
                 }
 
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_stmts_from_token_stream(
+                    Ok(stream) => match parse_macro_output::parse_stmts_from_macro_stream(
                         &stream,
                         self.interner,
                         &self.eager_context(),
@@ -1308,7 +1309,7 @@ impl<'a> MacroExpander<'a> {
                     return (recursed, true);
                 }
                 match self.expand_macro_invocation(inv) {
-                    Ok(stream) => match parse_expr_from_token_stream(
+                    Ok(stream) => match parse_macro_output::parse_expr_from_macro_stream(
                         &stream,
                         self.interner,
                         &self.eager_context(),
@@ -2047,10 +2048,13 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_in_process_attr(mac, proc_args, proc_item, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => {
-                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
-                        .unwrap_or_else(|reason| {
-                            self.errors.push(
+                Ok(stream) => parse_macro_output::parse_items_from_macro_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
                         ExpandError::malformed_macro_args(
                             format!(
                                 "attribute macro `{}` expansion did not produce valid items: {}",
@@ -2060,9 +2064,8 @@ impl<'a> MacroExpander<'a> {
                         )
                         .with_backtrace(self.backtrace()),
                     );
-                            vec![item.clone()]
-                        })
-                }
+                    vec![item.clone()]
+                }),
                 Err(e) => {
                     self.errors.push(e);
                     vec![item.clone()]
@@ -2100,10 +2103,13 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_server_attr(&mac, attr_args_stream, item_stream, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => {
-                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
-                        .unwrap_or_else(|reason| {
-                            self.errors.push(
+                Ok(stream) => parse_macro_output::parse_items_from_macro_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
                         ExpandError::malformed_macro_args(
                             format!(
                                 "attribute macro `{}` expansion did not produce valid items: {}",
@@ -2113,9 +2119,8 @@ impl<'a> MacroExpander<'a> {
                         )
                         .with_backtrace(self.backtrace()),
                     );
-                            vec![item.clone()]
-                        })
-                }
+                    vec![item.clone()]
+                }),
                 Err(e) => {
                     self.errors.push(e);
                     vec![item.clone()]
@@ -2190,8 +2195,11 @@ impl<'a> MacroExpander<'a> {
         };
 
         self.after_expand();
-        match parse_items_from_token_stream(&expanded_stream, self.interner, &self.eager_context())
-        {
+        match parse_macro_output::parse_items_from_macro_stream(
+            &expanded_stream,
+            self.interner,
+            &self.eager_context(),
+        ) {
             Ok(items) => Some(items),
             Err(reason) => {
                 self.errors.push(
@@ -2337,10 +2345,13 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_in_process_derive(mac, proc_item, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => {
-                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
-                        .unwrap_or_else(|reason| {
-                            self.errors.push(
+                Ok(stream) => parse_macro_output::parse_items_from_macro_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
                         ExpandError::malformed_macro_args(
                             format!(
                                 "derive macro `{}` expansion did not produce valid items: {}",
@@ -2350,9 +2361,8 @@ impl<'a> MacroExpander<'a> {
                         )
                         .with_backtrace(self.backtrace()),
                     );
-                            vec![]
-                        })
-                }
+                    vec![]
+                }),
                 Err(e) => {
                     self.errors.push(e);
                     vec![]
@@ -2391,22 +2401,24 @@ impl<'a> MacroExpander<'a> {
             let result = self.expand_server_derive(&mac, item_stream, span);
             self.after_expand();
             return Some(match result {
-                Ok(stream) => {
-                    parse_items_from_token_stream(&stream, self.interner, &self.eager_context())
-                        .unwrap_or_else(|reason| {
-                            self.errors.push(
-                            ExpandError::malformed_macro_args(
-                                format!(
-                                    "derive macro `{}` expansion did not produce valid items: {}",
-                                    trait_name, reason
-                                ),
-                                span,
-                            )
-                            .with_backtrace(self.backtrace()),
-                        );
-                            vec![]
-                        })
-                }
+                Ok(stream) => parse_macro_output::parse_items_from_macro_stream(
+                    &stream,
+                    self.interner,
+                    &self.eager_context(),
+                )
+                .unwrap_or_else(|reason| {
+                    self.errors.push(
+                        ExpandError::malformed_macro_args(
+                            format!(
+                                "derive macro `{}` expansion did not produce valid items: {}",
+                                trait_name, reason
+                            ),
+                            span,
+                        )
+                        .with_backtrace(self.backtrace()),
+                    );
+                    vec![]
+                }),
                 Err(e) => {
                     self.errors.push(e);
                     vec![]
@@ -2473,8 +2485,11 @@ impl<'a> MacroExpander<'a> {
         };
 
         self.after_expand();
-        match parse_items_from_token_stream(&expanded_stream, self.interner, &self.eager_context())
-        {
+        match parse_macro_output::parse_items_from_macro_stream(
+            &expanded_stream,
+            self.interner,
+            &self.eager_context(),
+        ) {
             Ok(items) => Some(items),
             Err(reason) => {
                 self.errors.push(
@@ -2649,7 +2664,7 @@ impl<'a> MacroExpander<'a> {
         });
         let generated_ctx = self
             .hygiene
-            .apply_mark(parent_ctx, expn_id, Transparency::Opaque);
+            .apply_mark(parent_ctx, expn_id, Transparency::Mixed);
 
         self.hygiene_stack.push(generated_ctx);
 
@@ -3035,105 +3050,6 @@ fn expand_eager_builtin_to_stream(
     span: yelang_lexer::Span,
 ) -> Result<yelang_macro_core::token_tree::TokenStream, ExpandError> {
     crate::eager::expand_eager_builtin(builtin, args, ctx, span)
-}
-
-fn parse_expr_from_token_stream(
-    stream: &yelang_macro_core::token_tree::TokenStream,
-    interner: &Interner,
-    ctx: &EagerContext<'_>,
-) -> Result<Expr, String> {
-    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
-    let rendered = stream.render(interner);
-    let local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
-        .map_err(|e| format!("tokenize: {}", e))?;
-    let expr = lex.parse::<Expr>().map_err(|e| e.to_string())?;
-    if !lex.is_eof() {
-        return Err("trailing tokens after expression".to_string());
-    }
-    // Replace the local interner symbols with the original interner's symbols.
-    // The parsed expression carries symbol ids from `local_interner`; since the
-    // original interner was cloned, the same text gets the same ids, so the
-    // expression is valid in the original interner.
-    let _ = local_interner;
-    Ok(expr)
-}
-
-/// Parse a token stream produced by a macro transcriber into a list of items.
-fn parse_items_from_token_stream(
-    stream: &yelang_macro_core::token_tree::TokenStream,
-    interner: &Interner,
-    ctx: &EagerContext<'_>,
-) -> Result<Vec<Item>, String> {
-    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
-    let rendered = stream.render(interner);
-    let local_interner = interner.clone();
-    let mut lex =
-        TokenKind::tokenize(&rendered, &local_interner).map_err(|e| format!("tokenize: {}", e))?;
-    let program = lex.parse::<Program>().map_err(|e| e.to_string())?;
-    if !lex.is_eof() {
-        return Err("trailing tokens after items".to_string());
-    }
-    let _ = local_interner;
-    Ok(program.items)
-}
-
-/// Parse a token stream produced by a macro transcriber into a sequence of statements.
-fn parse_stmts_from_token_stream(
-    stream: &yelang_macro_core::token_tree::TokenStream,
-    interner: &Interner,
-    ctx: &EagerContext<'_>,
-) -> Result<Vec<Stmt>, String> {
-    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
-    let rendered = stream.render(interner);
-    let local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
-        .map_err(|e| format!("tokenize: {}", e))?;
-    let mut stmts = vec![];
-    while !lex.is_eof() {
-        let stmt = lex.parse::<Stmt>().map_err(|e| e.to_string())?;
-        stmts.push(stmt);
-    }
-    let _ = local_interner;
-    Ok(stmts)
-}
-
-/// Parse a token stream produced by a macro transcriber into a single type.
-fn parse_type_from_token_stream(
-    stream: &yelang_macro_core::token_tree::TokenStream,
-    interner: &Interner,
-    ctx: &EagerContext<'_>,
-) -> Result<Type, String> {
-    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
-    let rendered = stream.render(interner);
-    let local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
-        .map_err(|e| format!("tokenize: {}", e))?;
-    let ty = lex.parse::<Type>().map_err(|e| e.to_string())?;
-    if !lex.is_eof() {
-        return Err("trailing tokens after type".to_string());
-    }
-    let _ = local_interner;
-    Ok(ty)
-}
-
-/// Parse a token stream produced by a macro transcriber into a single pattern.
-fn parse_pattern_from_token_stream(
-    stream: &yelang_macro_core::token_tree::TokenStream,
-    interner: &Interner,
-    ctx: &EagerContext<'_>,
-) -> Result<Pattern, String> {
-    let stream = expand_eager_macros_in_stream(stream, ctx).map_err(|e| e.to_string())?;
-    let rendered = stream.render(interner);
-    let local_interner = interner.clone();
-    let mut lex = yelang_ast::TokenKind::tokenize(&rendered, &local_interner)
-        .map_err(|e| format!("tokenize: {}", e))?;
-    let pat = lex.parse::<Pattern>().map_err(|e| e.to_string())?;
-    if !lex.is_eof() {
-        return Err("trailing tokens after pattern".to_string());
-    }
-    let _ = local_interner;
-    Ok(pat)
 }
 
 /// Peel an `unsafe(...)` attribute wrapper, returning the inner attribute and

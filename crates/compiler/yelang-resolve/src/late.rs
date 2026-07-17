@@ -12,11 +12,10 @@ use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
 use crate::{
-    def_collector::DefKind,
     error::ResolutionError,
     namespaces::Namespace,
-    path::{resolve_path, resolve_type_path, resolve_value_path},
-    rib::{Resolution, Rib, RibKind},
+    path::{resolve_type_path, resolve_value_path},
+    rib::{Resolution, RibKind},
     scope::Resolver,
 };
 
@@ -839,17 +838,17 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         self.resolver.pop_rib();
     }
 
-    fn add_value_binding(&mut self, name: Symbol, _span: Span) {
+    fn add_value_binding(&mut self, name: Symbol, span: Span) {
         let local_id = self.resolver.next_local_id();
         if let Some(rib) = self.resolver.value_ribs.last_mut() {
-            rib.insert(Namespace::Value, name, Resolution::Local { local_id });
+            rib.insert(Namespace::Value, name, Resolution::Local { local_id }, span);
         }
     }
 
-    fn add_type_binding(&mut self, name: Symbol, _span: Span) {
+    fn add_type_binding(&mut self, name: Symbol, span: Span) {
         let local_id = self.resolver.next_local_id();
         if let Some(rib) = self.resolver.type_ribs.last_mut() {
-            rib.insert(Namespace::Type, name, Resolution::Local { local_id });
+            rib.insert(Namespace::Type, name, Resolution::Local { local_id }, span);
         }
     }
 

@@ -24,13 +24,19 @@ pub fn resolve_path(resolver: &Resolver, path: &Path, ns: Namespace) -> Option<R
 fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Option<Resolution> {
     let first = &path.segments[0];
     let first_str = first.ident.as_str(resolver.interner);
+    let first_span = first.ident.span();
 
     let mut current_module = resolver.current_module;
 
     // Handle the first segment.
     let first_res = if path.is_absolute {
         resolver
-            .resolve_name_in_module(resolver.module_tree.root.def_id, ns, first.ident.symbol)
+            .resolve_name_in_module(
+                resolver.module_tree.root.def_id,
+                ns,
+                first.ident.symbol,
+                first_span,
+            )
             .map(|def_id| Resolution::Def { def_id })
     } else if first.ident.origin == yelang_ast::tokenizer::IdentOrigin::Crate {
         // `$crate` expands to a path anchored at the macro's defining crate. In
@@ -47,7 +53,7 @@ fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Opt
         // paths, try the local scope first; otherwise fall through to the
         // anchor logic below.
         if path.segments.len() == 1 {
-            if let Some(res) = resolver.resolve_name(ns, first.ident.symbol) {
+            if let Some(res) = resolver.resolve_name(ns, first.ident.symbol, first_span) {
                 return Some(res);
             }
         }
@@ -64,18 +70,21 @@ fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Opt
     } else {
         // Try local ribs first, then module.
         // For value paths, also try the type namespace (e.g. modules are types).
-        resolver.resolve_name(ns, first.ident.symbol).or_else(|| {
-            resolver
-                .resolve_name_in_module(current_module, ns, first.ident.symbol)
-                .or_else(|| {
-                    resolver.resolve_name_in_module(
-                        current_module,
-                        Namespace::Type,
-                        first.ident.symbol,
-                    )
-                })
-                .map(|def_id| Resolution::Def { def_id })
-        })
+        resolver
+            .resolve_name(ns, first.ident.symbol, first_span)
+            .or_else(|| {
+                resolver
+                    .resolve_name_in_module(current_module, ns, first.ident.symbol, first_span)
+                    .or_else(|| {
+                        resolver.resolve_name_in_module(
+                            current_module,
+                            Namespace::Type,
+                            first.ident.symbol,
+                            first_span,
+                        )
+                    })
+                    .map(|def_id| Resolution::Def { def_id })
+            })
     };
 
     match first_res {
@@ -87,10 +96,16 @@ fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Opt
             // Continue resolving remaining segments through the module tree.
             let mut current = def_id;
             for seg in &path.segments[1..] {
+                let seg_span = seg.ident.span();
                 let next = resolver
-                    .resolve_name_in_module(current, ns, seg.ident.symbol)
+                    .resolve_name_in_module(current, ns, seg.ident.symbol, seg_span)
                     .or_else(|| {
-                        resolver.resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
+                        resolver.resolve_name_in_module(
+                            current,
+                            Namespace::Type,
+                            seg.ident.symbol,
+                            seg_span,
+                        )
                     });
                 match next {
                     Some(d) => current = d,
@@ -106,26 +121,30 @@ fn resolve_path_standard(resolver: &Resolver, path: &Path, ns: Namespace) -> Opt
                     return None;
                 }
                 let second = &path.segments[1];
+                let second_span = second.ident.span();
                 let second_res = resolver
-                    .resolve_name_in_module(current_module, ns, second.ident.symbol)
+                    .resolve_name_in_module(current_module, ns, second.ident.symbol, second_span)
                     .or_else(|| {
                         resolver.resolve_name_in_module(
                             current_module,
                             Namespace::Type,
                             second.ident.symbol,
+                            second_span,
                         )
                     });
                 match second_res {
                     Some(def_id) => {
                         let mut cur = def_id;
                         for seg in &path.segments[2..] {
+                            let seg_span = seg.ident.span();
                             let next = resolver
-                                .resolve_name_in_module(cur, ns, seg.ident.symbol)
+                                .resolve_name_in_module(cur, ns, seg.ident.symbol, seg_span)
                                 .or_else(|| {
                                     resolver.resolve_name_in_module(
                                         cur,
                                         Namespace::Type,
                                         seg.ident.symbol,
+                                        seg_span,
                                     )
                                 });
                             match next {

@@ -2,6 +2,7 @@ pub mod associated;
 pub mod def_collector;
 pub mod early;
 pub mod error;
+pub mod hygiene;
 pub mod imports;
 pub mod lang_items;
 pub mod late;
@@ -20,6 +21,7 @@ pub use associated::*;
 pub use def_collector::*;
 pub use early::*;
 pub use error::*;
+pub use hygiene::*;
 pub use imports::*;
 pub use late::*;
 pub use module_tree::*;
@@ -46,6 +48,26 @@ pub struct ResolvedCrate {
 
 /// The main entry point for name resolution.
 pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> ResolvedCrate {
+    resolve_crate_internal(ast, interner, None)
+}
+
+/// Resolve a crate with an external macro hygiene table.
+///
+/// This entry point is used after macro expansion, when every identifier span
+/// carries a syntax context that must be respected during name lookup.
+pub fn resolve_crate_with_hygiene(
+    ast: &yelang_ast::Program,
+    interner: &Interner,
+    hygiene: &yelang_macro_core::HygieneData,
+) -> ResolvedCrate {
+    resolve_crate_internal(ast, interner, Some(hygiene))
+}
+
+fn resolve_crate_internal(
+    ast: &yelang_ast::Program,
+    interner: &Interner,
+    hygiene: Option<&yelang_macro_core::HygieneData>,
+) -> ResolvedCrate {
     let collector = def_collector::DefCollector::new(interner).collect(ast);
 
     // Merge prelude definitions into the main definitions map so that
@@ -65,6 +87,9 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         collector.lang_items,
         collector.enum_variants,
     );
+    if let Some(hygiene) = hygiene {
+        resolver = resolver.with_hygiene(hygiene);
+    }
     resolver.errors = collector.errors;
     // Transfer impl indexes from collector to resolver
     resolver.inherent_impls = collector.inherent_impls;

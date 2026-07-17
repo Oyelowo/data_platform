@@ -81,46 +81,61 @@ fn resolve_type_prefix_to_def_id(resolver: &Resolver, path: &Path) -> Option<Def
 
     let first = &path.segments[0];
     let first_str = first.ident.as_str(resolver.interner);
+    let first_span = first.ident.span();
     let ns = Namespace::Type;
 
     let (mut current, start_idx) = if path.is_absolute {
         let def_id = resolver
-            .resolve_name_in_module(resolver.module_tree.root.def_id, ns, first.ident.symbol)
+            .resolve_name_in_module(
+                resolver.module_tree.root.def_id,
+                ns,
+                first.ident.symbol,
+                first_span,
+            )
             .or_else(|| {
                 resolver.resolve_name_in_module(
                     resolver.module_tree.root.def_id,
                     Namespace::Value,
                     first.ident.symbol,
+                    first_span,
                 )
             })?;
         (def_id, 1)
     } else if first_str == "crate" {
+        let second = path.segments.get(1)?;
+        let second_span = second.ident.span();
         let def_id = resolver
             .resolve_name_in_module(
                 resolver.module_tree.root.def_id,
                 ns,
-                path.segments.get(1)?.ident.symbol,
+                second.ident.symbol,
+                second_span,
             )
             .or_else(|| {
                 resolver.resolve_name_in_module(
                     resolver.module_tree.root.def_id,
                     Namespace::Value,
-                    path.segments.get(1)?.ident.symbol,
+                    second.ident.symbol,
+                    second_span,
                 )
             })?;
         (def_id, 2)
     } else if first_str == "self" {
+        let second = path.segments.get(1)?;
+        let second_span = second.ident.span();
         let def_id = resolver
             .resolve_name_in_module(
                 resolver.current_module,
                 ns,
-                path.segments.get(1)?.ident.symbol,
+                second.ident.symbol,
+                second_span,
             )
             .or_else(|| {
                 resolver.resolve_name_in_module(
                     resolver.current_module,
                     Namespace::Value,
-                    path.segments.get(1)?.ident.symbol,
+                    second.ident.symbol,
+                    second_span,
                 )
             })?;
         (def_id, 2)
@@ -131,31 +146,40 @@ fn resolve_type_prefix_to_def_id(resolver: &Resolver, path: &Path) -> Option<Def
             .get(&resolver.current_module)
             .and_then(|m| m.parent)
             .unwrap_or(resolver.module_tree.root.def_id);
+        let second = path.segments.get(1)?;
+        let second_span = second.ident.span();
         let def_id = resolver
-            .resolve_name_in_module(module, ns, path.segments.get(1)?.ident.symbol)
+            .resolve_name_in_module(module, ns, second.ident.symbol, second_span)
             .or_else(|| {
                 resolver.resolve_name_in_module(
                     module,
                     Namespace::Value,
-                    path.segments.get(1)?.ident.symbol,
+                    second.ident.symbol,
+                    second_span,
                 )
             })?;
         (def_id, 2)
     } else {
         let def_id = resolver
-            .resolve_name(ns, first.ident.symbol)
+            .resolve_name(ns, first.ident.symbol, first_span)
             .and_then(|res| match res {
                 Resolution::Def { def_id } => Some(def_id),
                 _ => None,
             })
             .or_else(|| {
                 resolver
-                    .resolve_name_in_module(resolver.current_module, ns, first.ident.symbol)
+                    .resolve_name_in_module(
+                        resolver.current_module,
+                        ns,
+                        first.ident.symbol,
+                        first_span,
+                    )
                     .or_else(|| {
                         resolver.resolve_name_in_module(
                             resolver.current_module,
                             Namespace::Value,
                             first.ident.symbol,
+                            first_span,
                         )
                     })
             })?;
@@ -163,10 +187,16 @@ fn resolve_type_prefix_to_def_id(resolver: &Resolver, path: &Path) -> Option<Def
     };
 
     for seg in &path.segments[start_idx..path.segments.len() - 1] {
+        let seg_span = seg.ident.span();
         let next = resolver
-            .resolve_name_in_module(current, ns, seg.ident.symbol)
+            .resolve_name_in_module(current, ns, seg.ident.symbol, seg_span)
             .or_else(|| {
-                resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol)
+                resolver.resolve_name_in_module(
+                    current,
+                    Namespace::Value,
+                    seg.ident.symbol,
+                    seg_span,
+                )
             })?;
         current = next;
     }

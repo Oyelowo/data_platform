@@ -5,6 +5,7 @@ use yelang_lexer::Span;
 use crate::{
     def_collector::Definition,
     error::ResolutionError,
+    hygiene::{is_visible, is_visible_for_item},
     lang_items::LangItems,
     module_tree::ModuleTree,
     namespaces::Namespace,
@@ -23,6 +24,10 @@ pub struct Resolver<'a> {
     pub errors: Vec<ResolutionError>,
     pub definitions: FxHashMap<DefId, Definition>,
     pub current_module: DefId,
+    /// Optional macro hygiene data. When present, name lookup respects the
+    /// transparency of macro expansion marks between a use site and the
+    /// definition site.
+    pub hygiene: Option<&'a yelang_macro_core::HygieneData>,
     /// Maps type name ( Symbol) to the DefId of impl blocks for that type
     pub inherent_impls: FxHashMap<Symbol, Vec<DefId>>,
     /// Maps (trait_name, type_name) to DefId of trait impl blocks
@@ -72,7 +77,13 @@ impl<'a> Resolver<'a> {
             lang_items,
             enum_variants,
             def_resolutions: FxHashMap::default(),
+            hygiene: None,
         }
+    }
+
+    pub fn with_hygiene(mut self, hygiene: &'a yelang_macro_core::HygieneData) -> Self {
+        self.hygiene = Some(hygiene);
+        self
     }
 
     pub fn push_rib(&mut self, kind: crate::rib::RibKind) {
@@ -87,48 +98,60 @@ impl<'a> Resolver<'a> {
         self.macro_ribs.pop();
     }
 
-    pub fn resolve_name(&self, ns: Namespace, name: Symbol) -> Option<Resolution> {
+    pub fn resolve_name(&self, ns: Namespace, name: Symbol, use_span: Span) -> Option<Resolution> {
         let ribs = match ns {
             Namespace::Value => &self.value_ribs,
             Namespace::Type => &self.type_ribs,
             Namespace::Macro => &self.macro_ribs,
         };
         for rib in ribs.iter().rev() {
-            if let Some(res) = rib.get(ns, name) {
+            if let Some((res, def_span)) = rib.get_with_span(ns, name)
+                && is_visible(self.hygiene, use_span, def_span, ns)
+            {
                 return Some(res);
             }
         }
         // Look up in the current module and its ancestors.
         let mut module_id = self.current_module;
-        loop {
-            if let Some(module) = self.module_tree.modules.get(&module_id) {
-                // Check primary namespace first.
-                if let Some(def_id) = module.get_item(ns, name) {
-                    return Some(Resolution::Def { def_id });
-                }
-                // For value namespace, also check type namespace (modules are types).
-                if ns == Namespace::Value {
-                    if let Some(def_id) = module.get_item(Namespace::Type, name) {
-                        return Some(Resolution::Def { def_id });
-                    }
-                }
-                if let Some(parent) = module.parent {
-                    module_id = parent;
-                } else {
-                    break;
-                }
+        while let Some(module) = self.module_tree.modules.get(&module_id) {
+            // Check primary namespace first.
+            if let Some(def_id) = module.get_item(ns, name)
+                && let Some(res) = self.resolve_visible_module_item(def_id, use_span)
+            {
+                return Some(res);
+            }
+            // For value namespace, also check type namespace (modules are types).
+            if ns == Namespace::Value
+                && let Some(def_id) = module.get_item(Namespace::Type, name)
+                && let Some(res) = self.resolve_visible_module_item(def_id, use_span)
+            {
+                return Some(res);
+            }
+            if let Some(parent) = module.parent {
+                module_id = parent;
             } else {
                 break;
             }
         }
         // Final fallback: check the prelude. Prelude items are shadowable by
         // any rib or module item, matching Rust semantics (RFC 1560).
-        if let Some(prelude) = &self.prelude {
-            if let Some(def_id) = prelude.items.get(&ns).and_then(|m| m.get(&name)).copied() {
-                return Some(Resolution::Def { def_id });
-            }
+        if let Some(prelude) = &self.prelude
+            && let Some(def_id) = prelude.items.get(&ns).and_then(|m| m.get(&name)).copied()
+        {
+            return Some(Resolution::Def { def_id });
         }
         None
+    }
+
+    fn resolve_visible_module_item(&self, def_id: DefId, use_span: Span) -> Option<Resolution> {
+        if let Some(def) = self.definitions.get(&def_id) {
+            if is_visible_for_item(self.hygiene, use_span, def.span) {
+                return Some(Resolution::Def { def_id });
+            }
+            None
+        } else {
+            Some(Resolution::Def { def_id })
+        }
     }
 
     pub fn resolve_name_in_module(
@@ -136,11 +159,21 @@ impl<'a> Resolver<'a> {
         module_id: DefId,
         ns: Namespace,
         name: Symbol,
+        use_span: Span,
     ) -> Option<DefId> {
         self.module_tree
             .modules
             .get(&module_id)
             .and_then(|m| m.get_item(ns, name))
+            .and_then(|def_id| {
+                self.definitions.get(&def_id).and_then(|def| {
+                    if is_visible_for_item(self.hygiene, use_span, def.span) {
+                        Some(def_id)
+                    } else {
+                        None
+                    }
+                })
+            })
     }
 
     pub fn next_local_id(&mut self) -> u32 {

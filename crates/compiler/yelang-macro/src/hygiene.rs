@@ -376,4 +376,90 @@ mod tests {
         // Should not panic even though parent expn 99 is missing.
         merge_payload(&fresh, &payload);
     }
+
+    #[test]
+    fn merge_payload_cycle_in_context_chain_does_not_hang() {
+        let payload = WireHygienePayload {
+            contexts: vec![
+                WireSyntaxContext {
+                    id: 2,
+                    parent: Some(2),
+                    outer_expn: None,
+                    transparency: WireTransparency::Opaque,
+                },
+                WireSyntaxContext {
+                    id: 3,
+                    parent: Some(2),
+                    outer_expn: None,
+                    transparency: WireTransparency::Opaque,
+                },
+            ],
+            expansions: vec![],
+        };
+        let fresh = HygieneData::new();
+        // Should terminate even though context 2 is its own ancestor.
+        merge_payload(&fresh, &payload);
+        let ctx = fresh.syntax_context_data(SyntaxContextId::new(3));
+        assert!(ctx.is_some());
+        assert_eq!(ctx.unwrap().parent, Some(SyntaxContextId::new(2)));
+    }
+
+    #[test]
+    fn merge_payload_context_with_missing_outer_expn_does_not_panic() {
+        let payload = WireHygienePayload {
+            contexts: vec![WireSyntaxContext {
+                id: 2,
+                parent: Some(1),
+                outer_expn: Some(42),
+                transparency: WireTransparency::Opaque,
+            }],
+            expansions: vec![],
+        };
+        let fresh = HygieneData::new();
+        merge_payload(&fresh, &payload);
+        let ctx = fresh.syntax_context_data(SyntaxContextId::new(2));
+        assert!(ctx.is_some());
+        assert!(ctx.unwrap().outer_expn.is_none());
+    }
+
+    #[test]
+    fn merge_payload_duplicate_contexts_last_write_wins() {
+        let payload = WireHygienePayload {
+            contexts: vec![
+                WireSyntaxContext {
+                    id: 2,
+                    parent: Some(1),
+                    outer_expn: None,
+                    transparency: WireTransparency::Opaque,
+                },
+                WireSyntaxContext {
+                    id: 2,
+                    parent: Some(1),
+                    outer_expn: None,
+                    transparency: WireTransparency::Transparent,
+                },
+            ],
+            expansions: vec![],
+        };
+        let fresh = HygieneData::new();
+        merge_payload(&fresh, &payload);
+        let ctx = fresh
+            .syntax_context_data(SyntaxContextId::new(2))
+            .expect("context present");
+        assert_eq!(ctx.transparency, Transparency::Transparent);
+    }
+
+    #[test]
+    fn payload_from_stream_survives_missing_context_data() {
+        // A token whose span references a context that has no data in the
+        // hygiene table should simply be omitted from the payload.
+        let interner = Interner::new();
+        let hygiene = HygieneData::new();
+        let stream = TokenStream::from_vec(vec![TokenTree::Ident(Ident::new(
+            interner.get_or_intern("x"),
+            Span::default().with_ctx(SyntaxContextId::new(999)),
+        ))]);
+        let payload = payload_from_stream_with_spans(&stream, &[], &hygiene);
+        assert!(!payload.contexts.iter().any(|c| c.id == 999));
+    }
 }

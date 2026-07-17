@@ -23,6 +23,7 @@ mod error;
 mod expander;
 mod hygiene;
 mod matcher;
+mod parse_macro_output;
 mod paste;
 pub mod proc_macro;
 mod quote;

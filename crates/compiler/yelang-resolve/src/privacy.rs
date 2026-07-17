@@ -157,6 +157,7 @@ fn resolve_visibility_path(
 
     let first = &path.segments[0];
     let first_str = first.ident.as_str(resolver.interner);
+    let first_span = first.ident.span();
 
     let mut current = resolver.module_tree.root.def_id;
 
@@ -175,9 +176,14 @@ fn resolve_visibility_path(
         // Start from the defining module
         current = def_module;
         let found = resolver
-            .resolve_name_in_module(current, Namespace::Type, first.ident.symbol)
+            .resolve_name_in_module(current, Namespace::Type, first.ident.symbol, first_span)
             .or_else(|| {
-                resolver.resolve_name_in_module(current, Namespace::Value, first.ident.symbol)
+                resolver.resolve_name_in_module(
+                    current,
+                    Namespace::Value,
+                    first.ident.symbol,
+                    first_span,
+                )
             });
         match found {
             Some(id) => current = id,
@@ -186,10 +192,16 @@ fn resolve_visibility_path(
     }
 
     for seg in &path.segments[1..] {
+        let seg_span = seg.ident.span();
         let found = resolver
-            .resolve_name_in_module(current, Namespace::Type, seg.ident.symbol)
+            .resolve_name_in_module(current, Namespace::Type, seg.ident.symbol, seg_span)
             .or_else(|| {
-                resolver.resolve_name_in_module(current, Namespace::Value, seg.ident.symbol)
+                resolver.resolve_name_in_module(
+                    current,
+                    Namespace::Value,
+                    seg.ident.symbol,
+                    seg_span,
+                )
             });
         match found {
             Some(id) => current = id,

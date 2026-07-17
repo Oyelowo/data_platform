@@ -2,6 +2,7 @@ mod associated;
 mod basic;
 mod errors;
 mod generics;
+mod hygiene;
 mod imports;
 mod label;
 mod lang_items;

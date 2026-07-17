@@ -1145,6 +1145,7 @@ dependencies = [
  "yelang-ast",
  "yelang-interner",
  "yelang-lexer",
+ "yelang-macro-core",
 ]
 
 [[package]]
