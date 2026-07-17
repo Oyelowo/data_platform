@@ -134,7 +134,7 @@ pub fn expand_item_derives(
                         span: generated_item.span,
                     });
                 }
-                ctx.crate_hir.items.insert(def_id, generated_item);
+                ctx.crate_hir.items.insert(def_id, Some(generated_item));
             }
         }
     }

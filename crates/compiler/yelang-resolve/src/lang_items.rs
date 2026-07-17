@@ -11,7 +11,7 @@
 //! Lang items are loaded lazily: the compiler emits an error only when a
 //! required lang item is needed but not found.
 
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap, IndexVec};
 use yelang_interner::{Interner, Symbol};
 
 /// A language item — an item that the compiler knows about by name rather than
@@ -346,18 +346,20 @@ fn expr_to_string(expr: &yelang_ast::Expr, interner: &Interner) -> Option<String
 /// Produce a `LangItems` registry pre-populated with all primitive types.
 ///
 /// This is the principled replacement for ad-hoc `seed_primitives()`.
-/// Each primitive gets a synthetic `DefId` and is registered as a lang item.
+/// Each primitive is allocated directly into the shared `definitions` arena and
+/// registered as a lang item.  The returned `Vec<(DefId, Namespace)>` should be
+/// added to the root module namespace by the caller.
 pub fn seed_primitive_lang_items(
     interner: &Interner,
-    next_def_id: &mut u32,
-) -> (LangItems, Vec<(DefId, crate::def_collector::Definition)>) {
+    definitions: &mut IndexVec<DefId, crate::def_collector::Definition>,
+) -> (LangItems, Vec<(DefId, crate::namespaces::Namespace)>) {
     use crate::def_collector::{DefKind, Definition};
     use crate::namespaces::Namespace;
     use yelang_ast::Visibility;
     use yelang_lexer::Span;
 
     let mut registry = LangItems::new();
-    let mut definitions = Vec::new();
+    let mut to_add = Vec::new();
 
     let primitives: &[(LangItem, DefKind, Namespace)] = &[
         // Integer primitives
@@ -384,22 +386,21 @@ pub fn seed_primitive_lang_items(
 
     for &(lang_item, kind, ns) in primitives {
         let name = interner.get_or_intern(lang_item.name());
-        let def_id = DefId::new(*next_def_id);
-        *next_def_id += 1;
-
-        let def = Definition {
-            def_id,
+        let def_id = definitions.push(Definition {
+            // Patched to the real key after allocation.
+            def_id: DefId::new(1),
             name,
             span: Span::default(),
             kind,
             parent: None,
             visibility: Visibility::Public(Span::default()),
             lang_item: Some(lang_item),
-        };
+        });
+        definitions[def_id].def_id = def_id;
 
         registry.insert(lang_item, def_id);
-        definitions.push((def_id, def));
+        to_add.push((def_id, ns));
     }
 
-    (registry, definitions)
+    (registry, to_add)
 }

@@ -114,7 +114,7 @@ fn is_float(ty: &crate::hir_ty::Ty, ctx: &crate::derive::context::DeriveContext<
         ..
     } = &ty.kind
     {
-        if let Some(def) = ctx.ctx.resolved.definitions.get(def_id) {
+        if let Some(def) = ctx.ctx.resolved.definitions.get(*def_id) {
             if let Some(li) = def.lang_item {
                 return matches!(li, LangItem::F32 | LangItem::F64);
             }

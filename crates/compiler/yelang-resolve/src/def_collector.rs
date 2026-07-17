@@ -1,4 +1,4 @@
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap, IndexVec};
 use yelang_ast::Visibility;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
@@ -64,8 +64,7 @@ use yelang_interner::Interner;
 
 pub struct DefCollector<'a> {
     interner: &'a Interner,
-    next_def_id: u32,
-    pub definitions: FxHashMap<DefId, Definition>,
+    pub definitions: IndexVec<DefId, Definition>,
     pub module_tree: ModuleTree,
     pub current_module: DefId,
     pub errors: Vec<ResolutionError>,
@@ -86,46 +85,35 @@ pub struct DefCollector<'a> {
 
 impl<'a> DefCollector<'a> {
     pub fn new(interner: &'a Interner) -> Self {
-        let root_id = DefId::new(1);
+        let mut definitions = IndexVec::new();
         let root_name = interner.get_or_intern("crate");
+        let root_id = definitions.push(Definition {
+            // Patched to the real key after allocation.
+            def_id: DefId::new(1),
+            name: root_name,
+            span: Span::default(),
+            kind: DefKind::Module,
+            parent: None,
+            visibility: Visibility::Public(Span::default()),
+            lang_item: None,
+        });
+        definitions[root_id].def_id = root_id;
+
         let root_node = ModuleNode::new(
             root_id,
             root_name,
             None,
             Visibility::Public(Span::default()),
         );
-        let mut definitions = FxHashMap::new();
-        definitions.insert(
-            root_id,
-            Definition {
-                def_id: root_id,
-                name: root_name,
-                span: Span::default(),
-                kind: DefKind::Module,
-                parent: None,
-                visibility: Visibility::Public(Span::default()),
-                lang_item: None,
-            },
-        );
-        let mut next_def_id = 2;
-        let prelude = Some(Prelude::new(interner, &mut next_def_id));
-        let mut lang_items = LangItems::new();
-        // Merge prelude lang items and enum variants into the registries
-        // immediately so they are available throughout resolution.
-        if let Some(p) = &prelude {
-            for (def_id, def) in &p.definitions {
-                if let Some(li) = def.lang_item {
-                    lang_items.insert(li, *def_id);
-                }
-            }
-        }
-        let enum_variants = prelude
-            .as_ref()
-            .map(|p| p.enum_variants.clone())
-            .unwrap_or_default();
+
+        let (prelude, prelude_lang_items, prelude_enum_variants) =
+            Prelude::new(interner, &mut definitions);
+        let prelude = Some(prelude);
+        let lang_items = prelude_lang_items;
+        let enum_variants = prelude_enum_variants;
+
         let mut collector = Self {
             interner,
-            next_def_id,
             definitions,
             module_tree: ModuleTree::new(root_node),
             current_module: root_id,
@@ -142,7 +130,8 @@ impl<'a> DefCollector<'a> {
     }
 
     fn seed_primitives(&mut self) {
-        let (registry, defs) = seed_primitive_lang_items(self.interner, &mut self.next_def_id);
+        let (registry, to_add) =
+            seed_primitive_lang_items(self.interner, &mut self.definitions);
         // Merge primitive lang items into the existing registry (which already
         // contains prelude lang items). Detect duplicates just in case.
         for (li, def_id) in registry.iter() {
@@ -152,33 +141,21 @@ impl<'a> DefCollector<'a> {
                     span: Span::default(),
                     original_span: self
                         .definitions
-                        .get(&old)
+                        .get(old)
                         .map(|d| d.span)
                         .unwrap_or_else(Span::default),
                 });
             }
         }
-        for (def_id, def) in defs {
-            let name = def.name;
-            self.definitions.insert(def_id, def);
-            self.add_to_module(
-                crate::namespaces::Namespace::Type,
-                name,
-                def_id,
-                Span::default(),
-            );
+        for (def_id, ns) in to_add {
+            let name = self.definitions[def_id].name;
+            self.add_to_module(ns, name, def_id, Span::default());
         }
     }
 
     pub fn collect(mut self, program: &yelang_ast::Program) -> Self {
         self.collect_items(&program.items);
         self
-    }
-
-    fn next_def_id(&mut self) -> DefId {
-        let id = DefId::new(self.next_def_id);
-        self.next_def_id += 1;
-        id
     }
 
     fn collect_items(&mut self, items: &[Item]) {
@@ -251,10 +228,14 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = func.name.symbol;
-        self.add_def_with_lang_item(def_id, name, span, DefKind::Fn, visibility, lang_item);
-        self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
+        let def_id = self.add_def_with_lang_item(
+            func.name.symbol,
+            span,
+            DefKind::Fn,
+            visibility,
+            lang_item,
+        );
+        self.add_to_module(crate::namespaces::Namespace::Value, func.name.symbol, def_id, span);
     }
 
     fn collect_struct(
@@ -264,26 +245,20 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = s.name.symbol;
-        self.add_def_with_lang_item(
-            def_id,
-            name,
+        let def_id = self.add_def_with_lang_item(
+            s.name.symbol,
             span,
             DefKind::Struct,
             visibility.clone(),
             lang_item,
         );
-        self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
+        self.add_to_module(crate::namespaces::Namespace::Type, s.name.symbol, def_id, span);
 
         // Collect struct fields as definitions with their own visibility
         if let yelang_ast::StructFields::Named(fields) = &s.fields {
             for field in fields {
-                let fdef_id = self.next_def_id();
-                let fname = field.name.symbol;
                 self.add_def(
-                    fdef_id,
-                    fname,
+                    field.name.symbol,
                     field.span,
                     DefKind::Field,
                     field.visibility.clone(),
@@ -300,35 +275,26 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = e.name.symbol;
-        self.add_def_with_lang_item(
-            def_id,
-            name,
+        let def_id = self.add_def_with_lang_item(
+            e.name.symbol,
             span,
             DefKind::Enum,
             visibility.clone(),
             lang_item,
         );
-        self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
+        self.add_to_module(crate::namespaces::Namespace::Type, e.name.symbol, def_id, span);
+
         // Variants are definitions in both the type and value namespaces.
         // Inherit visibility from the parent enum.
         let mut variant_map = FxHashMap::default();
         for variant in &e.variants {
-            let vdef_id = self.next_def_id();
             let vname = variant.name.symbol;
             let variant_vis = if visibility.is_public() {
                 Visibility::Public(variant.span)
             } else {
                 visibility.clone()
             };
-            self.add_def(
-                vdef_id,
-                vname,
-                variant.span,
-                DefKind::EnumVariant,
-                variant_vis,
-            );
+            let vdef_id = self.add_def(vname, variant.span, DefKind::EnumVariant, variant_vis);
             self.add_to_module(
                 crate::namespaces::Namespace::Type,
                 vname,
@@ -353,17 +319,14 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = ta.name.symbol;
-        self.add_def_with_lang_item(
-            def_id,
-            name,
+        let def_id = self.add_def_with_lang_item(
+            ta.name.symbol,
             span,
             DefKind::TypeAlias,
             visibility,
             lang_item,
         );
-        self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
+        self.add_to_module(crate::namespaces::Namespace::Type, ta.name.symbol, def_id, span);
     }
 
     fn collect_trait(
@@ -373,10 +336,14 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = t.name.symbol;
-        self.add_def_with_lang_item(def_id, name, span, DefKind::Trait, visibility, lang_item);
-        self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
+        let def_id = self.add_def_with_lang_item(
+            t.name.symbol,
+            span,
+            DefKind::Trait,
+            visibility,
+            lang_item,
+        );
+        self.add_to_module(crate::namespaces::Namespace::Type, t.name.symbol, def_id, span);
     }
 
     fn collect_module(
@@ -386,13 +353,11 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         _attributes: &[yelang_ast::Attribute],
     ) {
-        let def_id = self.next_def_id();
-        let name = m.name.symbol;
-        let parent = self.current_module;
-        self.add_def(def_id, name, span, DefKind::Module, visibility.clone());
-        self.add_to_module(crate::namespaces::Namespace::Type, name, def_id, span);
+        let def_id = self.add_def(m.name.symbol, span, DefKind::Module, visibility.clone());
+        self.add_to_module(crate::namespaces::Namespace::Type, m.name.symbol, def_id, span);
 
-        let mut node = ModuleNode::new(def_id, name, Some(parent), visibility);
+        let parent = self.current_module;
+        let mut node = ModuleNode::new(def_id, m.name.symbol, Some(parent), visibility);
         let old_module = self.current_module;
         self.current_module = def_id;
 
@@ -424,10 +389,14 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = c.name.symbol;
-        self.add_def_with_lang_item(def_id, name, span, DefKind::Const, visibility, lang_item);
-        self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
+        let def_id = self.add_def_with_lang_item(
+            c.name.symbol,
+            span,
+            DefKind::Const,
+            visibility,
+            lang_item,
+        );
+        self.add_to_module(crate::namespaces::Namespace::Value, c.name.symbol, def_id, span);
     }
 
     fn collect_static(
@@ -437,17 +406,20 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.next_def_id();
-        let name = s.name.symbol;
-        self.add_def_with_lang_item(def_id, name, span, DefKind::Static, visibility, lang_item);
-        self.add_to_module(crate::namespaces::Namespace::Value, name, def_id, span);
+        let def_id = self.add_def_with_lang_item(
+            s.name.symbol,
+            span,
+            DefKind::Static,
+            visibility,
+            lang_item,
+        );
+        self.add_to_module(crate::namespaces::Namespace::Value, s.name.symbol, def_id, span);
     }
 
     fn collect_impl(&mut self, i: &Impl, span: Span, visibility: Visibility) {
-        let def_id = self.next_def_id();
         // Impl blocks don't have a single name; use a synthetic name.
         let name = self.interner.get_or_intern("<impl>");
-        self.add_def(def_id, name, span, DefKind::Impl, visibility);
+        let def_id = self.add_def(name, span, DefKind::Impl, visibility);
 
         // Extract type name from self_ty
         let type_name = Self::extract_type_name(&i.self_ty);
@@ -475,7 +447,6 @@ impl<'a> DefCollector<'a> {
         // Collect impl items
         let mut item_names = FxHashMap::default();
         for item in &i.items {
-            let item_def_id = self.next_def_id();
             let (item_name, item_kind, item_span) = match &item.item {
                 ImplItemKind::Method(fn_def) => {
                     (fn_def.name.symbol, DefKind::Fn, fn_def.name.span())
@@ -487,8 +458,7 @@ impl<'a> DefCollector<'a> {
                     (const_def.name.symbol, DefKind::Const, const_def.span)
                 }
             };
-            self.add_def(
-                item_def_id,
+            let item_def_id = self.add_def(
                 item_name,
                 item_span,
                 item_kind,
@@ -508,44 +478,41 @@ impl<'a> DefCollector<'a> {
     }
 
     fn collect_use(&mut self, _u: &Use, span: Span, visibility: Visibility) {
-        let def_id = self.next_def_id();
         let name = self.interner.get_or_intern("<use>");
-        self.add_def(def_id, name, span, DefKind::Use, visibility);
+        self.add_def(name, span, DefKind::Use, visibility);
         // Use items are resolved later during early resolution.
     }
 
     fn add_def(
         &mut self,
-        def_id: DefId,
         name: Symbol,
         span: Span,
         kind: DefKind,
         visibility: Visibility,
-    ) {
-        self.add_def_with_lang_item(def_id, name, span, kind, visibility, None);
+    ) -> DefId {
+        self.add_def_with_lang_item(name, span, kind, visibility, None)
     }
 
     fn add_def_with_lang_item(
         &mut self,
-        def_id: DefId,
         name: Symbol,
         span: Span,
         kind: DefKind,
         visibility: Visibility,
         lang_item: Option<LangItem>,
-    ) {
-        self.definitions.insert(
-            def_id,
-            Definition {
-                def_id,
-                name,
-                span,
-                kind,
-                parent: Some(self.current_module),
-                visibility,
-                lang_item,
-            },
-        );
+    ) -> DefId {
+        let def_id = self.definitions.push(Definition {
+            // Patched to the real key after allocation.
+            def_id: DefId::new(1),
+            name,
+            span,
+            kind,
+            parent: Some(self.current_module),
+            visibility,
+            lang_item,
+        });
+        self.definitions[def_id].def_id = def_id;
+
         if let Some(li) = lang_item {
             if let Some(old) = self.lang_items.insert(li, def_id) {
                 self.errors.push(ResolutionError::DuplicateLangItem {
@@ -553,12 +520,13 @@ impl<'a> DefCollector<'a> {
                     span,
                     original_span: self
                         .definitions
-                        .get(&old)
+                        .get(old)
                         .map(|d| d.span)
                         .unwrap_or_else(Span::default),
                 });
             }
         }
+        def_id
     }
 
     fn add_to_module(
@@ -572,7 +540,7 @@ impl<'a> DefCollector<'a> {
             if let Some(existing) = module.add_item(ns, name, def_id) {
                 let existing_span = self
                     .definitions
-                    .get(&existing)
+                    .get(existing)
                     .map(|d| d.span)
                     .unwrap_or_else(Span::default);
                 self.errors.push(ResolutionError::DuplicateDefinition {

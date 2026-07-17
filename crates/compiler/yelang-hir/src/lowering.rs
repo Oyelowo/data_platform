@@ -1,12 +1,11 @@
 //! Main lowering entry point and `LoweringContext`.
 
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::DefId;
 use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
-use yelang_lexer::Span;
 
 use crate::crate_hir::Crate;
-use crate::ids::{BodyId, HirId};
+use crate::ids::HirId;
 use crate::lowering_err::LoweringError;
 use crate::res::ResolvedCrate;
 
@@ -16,11 +15,12 @@ pub struct LoweringContext<'a> {
     pub resolved: &'a ResolvedCrate,
     pub crate_hir: Crate,
     pub next_hir_id: u32,
-    pub next_body_id: u32,
-    pub next_def_id: u32,
+    /// Number of synthetic `DefId`s allocated beyond the IDs produced during
+    /// name resolution. The first synthesized ID is `definitions.len() + 1`.
+    pub synthetic_def_count: u32,
     pub current_module: DefId,
     pub current_owner: DefId,
-    pub local_map: FxHashMap<Symbol, HirId>,
+    pub local_map: yelang_arena::FxHashMap<Symbol, HirId>,
     pub errors: Vec<LoweringError>,
     /// The `DefId` of the type that `Self` refers to inside the current
     /// `impl` or `trait` block. `None` when not inside such a block.
@@ -30,27 +30,15 @@ pub struct LoweringContext<'a> {
 impl<'a> LoweringContext<'a> {
     pub fn new(interner: &'a Interner, resolved: &'a ResolvedCrate) -> Self {
         let root_module = resolved.module_tree.root.def_id;
-        // DefIds are allocated by `yelang-resolve::def_collector`. Start HIR
-        // lowering's own DefId counter just above the highest existing ID so
-        // that synthesized items (e.g. derived impls) never collide with IDs
-        // produced during name resolution.
-        let next_def_id = resolved
-            .definitions
-            .keys()
-            .map(|d| d.raw())
-            .max()
-            .unwrap_or(0)
-            + 1;
         Self {
             interner,
             resolved,
             crate_hir: Crate::new(root_module),
             next_hir_id: 1,
-            next_body_id: 1,
-            next_def_id,
+            synthetic_def_count: 0,
             current_module: root_module,
             current_owner: root_module,
-            local_map: FxHashMap::new(),
+            local_map: yelang_arena::FxHashMap::new(),
             errors: Vec::new(),
             self_type: None,
         }
@@ -63,18 +51,13 @@ impl<'a> LoweringContext<'a> {
         id
     }
 
-    /// Allocate a fresh `BodyId`.
-    pub fn next_body_id(&mut self) -> BodyId {
-        let id = BodyId::new(self.next_body_id);
-        self.next_body_id += 1;
-        id
-    }
-
-    /// Allocate a fresh `DefId`.
-    pub fn next_def_id(&mut self) -> DefId {
-        let id = DefId::new(self.next_def_id);
-        self.next_def_id += 1;
-        id
+    /// Allocate a fresh synthetic `DefId` for compiler-generated items (e.g.
+    /// derived impls). Synthetic IDs are derived from the definition arena so
+    /// they never collide with user-defined or prelude definitions.
+    pub fn next_synthetic_def_id(&mut self) -> DefId {
+        let raw = self.resolved.definitions.len() as u32 + self.synthetic_def_count + 1;
+        self.synthetic_def_count += 1;
+        DefId::new(raw)
     }
 
     /// Record a lowering error.
@@ -116,13 +99,13 @@ pub(crate) fn lookup_item_def_id(ctx: &LoweringContext, item: &AstItem) -> Optio
     let expected_name = item_name(item)?;
     ctx.resolved
         .definitions
-        .iter()
+        .iter_enumerated()
         .find(|(_, def)| {
             def.parent == Some(ctx.current_module)
                 && def.name == expected_name
                 && def.kind == expected_kind
         })
-        .map(|(id, _)| *id)
+        .map(|(id, _)| id)
 }
 
 fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {

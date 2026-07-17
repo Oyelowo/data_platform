@@ -14,10 +14,10 @@ pub fn check_accessibility(
     resolver: &Resolver,
     def_id: DefId,
     use_module: DefId,
-    name: Symbol,
-    span: Span,
+    _name: Symbol,
+    _span: Span,
 ) -> bool {
-    let Some(def) = resolver.definitions.get(&def_id) else {
+    let Some(def) = resolver.definitions.get(def_id) else {
         return true;
     };
     let def_module = def.parent.unwrap_or(resolver.module_tree.root.def_id);
@@ -159,7 +159,7 @@ fn resolve_visibility_path(
     let first_str = first.ident.as_str(resolver.interner);
     let first_span = first.ident.span();
 
-    let mut current = resolver.module_tree.root.def_id;
+    let mut current;
 
     if first_str == "crate" {
         current = resolver.module_tree.root.def_id;
@@ -210,7 +210,7 @@ fn resolve_visibility_path(
     }
 
     // Verify it's a module
-    if let Some(def) = resolver.definitions.get(&current) {
+    if let Some(def) = resolver.definitions.get(current) {
         if matches!(def.kind, DefKind::Module) {
             return Some(current);
         }

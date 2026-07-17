@@ -293,14 +293,12 @@ pub fn let_stmt(
 
 /// Build a body from parameters and a value expression, and register it in the crate.
 pub fn make_body(ctx: &mut DeriveContext<'_, '_>, params: Vec<Param>, value: Expr) -> BodyId {
-    let body_id = ctx.next_body_id();
     let body = Body {
         params,
         value,
         span: ctx.derive_span,
     };
-    ctx.ctx.crate_hir.bodies.insert(body_id, body);
-    body_id
+    ctx.ctx.crate_hir.bodies.push(body)
 }
 
 /// Build a function parameter from a pattern and type.
@@ -400,7 +398,7 @@ pub fn impl_item(
     self_ty: Ty,
     items: Vec<ImplItem>,
 ) -> Item {
-    let def_id = ctx.next_def_id();
+    let def_id = ctx.next_synthetic_def_id();
     Item {
         def_id,
         ident: ident(ctx, "<derived impl>"),

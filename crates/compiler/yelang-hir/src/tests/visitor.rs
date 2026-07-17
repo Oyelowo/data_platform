@@ -3,10 +3,9 @@
 use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
-use yelang_lexer::TokenStream;
 
 use crate::crate_hir::Crate;
-use crate::hir::{Expr, ExprKind, Item, Stmt};
+use crate::hir::Expr;
 use crate::hir_body::Body;
 use crate::ids::BodyId;
 use crate::lowering::lower_crate;
@@ -24,7 +23,7 @@ impl<'hir> Visitor<'hir> for ExprCounter<'hir> {
     }
 
     fn visit_body_by_id(&mut self, body_id: BodyId) -> Option<&'hir Body> {
-        self.crate_hir.bodies.get(&body_id)
+        self.crate_hir.bodies.get(body_id)
     }
 }
 
@@ -49,7 +48,7 @@ fn stub_resolved() -> ResolvedCrate {
     let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
     ResolvedCrate {
         module_tree,
-        definitions: yelang_arena::FxHashMap::default(),
+        definitions: yelang_arena::IndexVec::default(),
         errors: vec![],
         def_resolutions: yelang_arena::FxHashMap::default(),
         enum_variants: yelang_arena::FxHashMap::default(),

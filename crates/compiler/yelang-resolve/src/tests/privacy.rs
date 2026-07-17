@@ -28,7 +28,7 @@ fn debug_pub_const() {
     }
 
     println!("\nDefinitions:");
-    for (id, def) in &resolved.definitions {
+    for (id, def) in resolved.definitions.iter_enumerated() {
         println!(
             "Def {:?}: {} (kind: {:?}, parent: {:?})",
             id,

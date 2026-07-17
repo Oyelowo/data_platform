@@ -1,4 +1,4 @@
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap, IndexVec};
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
 
@@ -20,7 +20,7 @@ pub struct Resolver<'a> {
     pub type_ribs: Vec<Rib>,
     pub unresolved_imports: Vec<crate::imports::UnresolvedImport>,
     pub errors: Vec<ResolutionError>,
-    pub definitions: FxHashMap<DefId, Definition>,
+    pub definitions: IndexVec<DefId, Definition>,
     pub current_module: DefId,
     /// Maps type name ( Symbol) to the DefId of impl blocks for that type
     pub inherent_impls: FxHashMap<Symbol, Vec<DefId>>,
@@ -47,7 +47,7 @@ impl<'a> Resolver<'a> {
     pub fn new(
         interner: &'a Interner,
         module_tree: ModuleTree,
-        definitions: FxHashMap<DefId, Definition>,
+        definitions: IndexVec<DefId, Definition>,
         prelude: Option<Prelude>,
         lang_items: LangItems,
         enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,

@@ -1,9 +1,9 @@
 //! Lowering of AST expressions to HIR expressions.
 
 use yelang_ast::{
-    BinaryExpr, BlockExpr, BreakExpr, CallExpr, ContinueExpr, Expr as AstExpr,
-    ExprKind as AstExprKind, FieldAssign, ForLoopExpr, IfExpr, Label, LoopExpr, MatchExpr,
-    StructExpr, UnaryExpr, WhileExpr,
+    BlockExpr, Expr as AstExpr,
+    ExprKind as AstExprKind, ForLoopExpr, IfExpr, MatchExpr,
+    StructExpr, WhileExpr,
 };
 use yelang_lexer::Span;
 
@@ -13,7 +13,6 @@ use crate::hir::{Arm, Block, CaptureClause, Expr, ExprKind, FieldExpr, Stmt, Stm
 use crate::hir_item::Item;
 use crate::hir_pat::Pat;
 use crate::hir_ty::Ty;
-use crate::ids::{BodyId, HirId};
 use crate::lowering::LoweringContext;
 use crate::lowering_err::LoweringError;
 use crate::res::Res;
@@ -166,15 +165,11 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     span,
                 },
             };
-            let body_id = ctx.next_body_id();
-            ctx.crate_hir.bodies.insert(
-                body_id,
-                crate::hir_body::Body {
-                    params: vec![],
-                    value: body_expr,
-                    span,
-                },
-            );
+            let body_id = ctx.crate_hir.bodies.push(crate::hir_body::Body {
+                params: vec![],
+                value: body_expr,
+                span,
+            });
             ExprKind::Closure {
                 params: vec![],
                 body: body_id,
@@ -397,7 +392,7 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
 
     let first = &path.segments[0];
     let first_str = first.ident.as_str(ctx.interner);
-    let mut current_module = ctx.current_module;
+    let current_module = ctx.current_module;
 
     // Handle path anchors.
     let (mut current, start_idx) = if path.is_absolute {
@@ -422,7 +417,6 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
                 m.get_item(Namespace::Type, second.ident.symbol)
                     .or_else(|| m.get_item(Namespace::Value, second.ident.symbol))
             })?;
-        current_module = ctx.resolved.module_tree.root.def_id;
         (def_id, 2)
     } else if first_str == "self" {
         if path.segments.len() == 1 {
@@ -457,7 +451,6 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
                 m.get_item(Namespace::Type, second.ident.symbol)
                     .or_else(|| m.get_item(Namespace::Value, second.ident.symbol))
             })?;
-        current_module = module;
         (def_id, 2)
     } else {
         let def_id = ctx
@@ -499,7 +492,7 @@ fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block {
     // block's trailing expression if it is not a `TermExpr`.
     let (stmts, expr) = if let Some(last) = stmts.last() {
         match &last.kind {
-            StmtKind::Expr { expr: e } => {
+            StmtKind::Expr { expr: _e } => {
                 let mut stmts = stmts;
                 let expr = stmts.pop().map(|s| match s.kind {
                     StmtKind::Expr { expr } => expr,
@@ -543,14 +536,14 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
             // just keeps a reference so the visitor can reach it.
             let def_id = match def_id {
                 Some(d) => d,
-                None => ctx.next_def_id(),
+                None => ctx.next_synthetic_def_id(),
             };
             StmtKind::Item {
                 item: ctx
                     .crate_hir
                     .items
-                    .get(&def_id)
-                    .cloned()
+                    .get(def_id)
+                    .and_then(|opt| opt.clone())
                     .unwrap_or_else(|| Item {
                         def_id,
                         ident: yelang_ast::Ident::new(yelang_interner::Symbol::from(0u32), span),
@@ -673,7 +666,7 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> ExprKind
         span: for_expr.pat.span,
     };
 
-    let iter_let = Stmt {
+    let _iter_let = Stmt {
         kind: StmtKind::Let {
             pat: iter_pat,
             ty: None,
@@ -880,8 +873,7 @@ fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr)
         span: lambda.header_span,
     };
 
-    let body_id = ctx.next_body_id();
-    ctx.crate_hir.bodies.insert(body_id, body);
+    let body_id = ctx.crate_hir.bodies.push(body);
 
     ExprKind::Closure {
         params: vec![], // params are stored in the Body
@@ -1005,7 +997,7 @@ fn lower_try_expr(
 }
 
 /// Desugar `expr.await` into a match expression.
-fn lower_await_expr(ctx: &mut LoweringContext, expr: &yelang_ast::Expr, span: Span) -> ExprKind {
+fn lower_await_expr(ctx: &mut LoweringContext, expr: &yelang_ast::Expr, _span: Span) -> ExprKind {
     let base = lower_expr(ctx, expr);
     // Simplified: just return the base expression.
     // In a full implementation this would desugar to poll-based logic.

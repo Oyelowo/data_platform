@@ -1,12 +1,8 @@
 use yelang_arena::DefId;
-use yelang_ast::item::{Const, Enum, Impl, Static, Struct, Trait, TypeAlias};
+use yelang_ast::item::{Enum, Struct, Trait, TypeAlias};
 use yelang_ast::{
-    Array, AssignEqExpr, AssignOpExpr, AsyncExpr, BinaryExpr, BlockExpr, BreakExpr, CallExpr,
-    ComprehensionExpr, ContinueExpr, DestructureAssignExpr, DocumentAccess, Expr, ExprKind,
-    FieldDef, FnDef, ForLoopExpr, GroupedExpr, Ident, IfExpr, IsTypeExpr, Item, ItemKind,
-    LambdaExpr, LetExpr, LetStmt, Literal, LoopExpr, MatchExpr, MemberAccess, MethodCallExpr,
-    ModKind, Object, Param, Path, Pattern, PatternKind, Program, RangeExpr, Stmt, StmtKind,
-    StructExpr, TupleExpr, Type, TypeKind, UnaryExpr, WhileExpr,
+    BlockExpr, BreakExpr, ContinueExpr, Expr, ExprKind, FnDef, Item, ItemKind,
+    ModKind, Param, Path, Pattern, PatternKind, Program, Stmt, StmtKind, Type, TypeKind,
 };
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
@@ -24,6 +20,7 @@ use crate::{
 struct BreakableScope {
     label: Option<Symbol>,
     is_loop: bool,
+    #[allow(dead_code)]
     span: Span,
 }
 
@@ -180,17 +177,17 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         }
     }
 
-    fn resolve_const(&mut self, c: &yelang_ast::Const) {
+    fn resolve_const(&mut self, c: &yelang_ast::item::Const) {
         self.resolve_type(&c.ty);
         self.resolve_expr(&c.value);
     }
 
-    fn resolve_static(&mut self, s: &yelang_ast::Static) {
+    fn resolve_static(&mut self, s: &yelang_ast::item::Static) {
         self.resolve_type(&s.ty);
         self.resolve_expr(&s.value);
     }
 
-    fn resolve_impl(&mut self, i: &yelang_ast::Impl) {
+    fn resolve_impl(&mut self, i: &yelang_ast::item::Impl) {
         self.push_rib(RibKind::Opaque);
         // `Self` is the type being implemented.
         let self_symbol = self.resolver.interner.get_or_intern("Self");
@@ -773,7 +770,7 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                     let def_module = self
                         .resolver
                         .definitions
-                        .get(def_id)
+                        .get(*def_id)
                         .and_then(|d| d.parent)
                         .unwrap_or(self.resolver.module_tree.root.def_id);
                     self.resolver.errors.push(ResolutionError::PrivacyError {

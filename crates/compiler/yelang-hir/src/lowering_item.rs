@@ -2,25 +2,22 @@
 
 use yelang_ast::item::{Enum as AstEnum, Struct as AstStruct};
 use yelang_ast::{
-    FnDef as AstFnDef, FnRefType, Item as AstItem, ItemKind as AstItemKind, Mutability,
+    FnDef as AstFnDef, FnRefType, Item as AstItem, ItemKind as AstItemKind,
 };
-use yelang_lexer::Span;
 
 use crate::hir::{
-    EnumDef, FieldDef, FnSig, GenericParam, Generics, Item, ItemKind, StructField, TraitBound,
+    EnumDef, FieldDef, FnSig, GenericParam, Generics, Item, ItemKind, StructField,
     VariantData, VariantDef, Visibility, WhereClause, WherePredicate,
 };
 use crate::hir_ty::Ty;
-use crate::ids::{BodyId, DefId};
+use crate::ids::DefId;
 use crate::lowering::LoweringContext;
-use crate::lowering_err::LoweringError;
-use crate::res::Res;
 
 /// Lower a single AST item into HIR.
 pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
     // Try to reuse the DefId assigned during name resolution.
     let def_id =
-        crate::lowering::lookup_item_def_id(ctx, item).unwrap_or_else(|| ctx.next_def_id());
+        crate::lowering::lookup_item_def_id(ctx, item).unwrap_or_else(|| ctx.next_synthetic_def_id());
     let prev_owner = ctx.current_owner;
     let prev_module = ctx.current_module;
     ctx.current_owner = def_id;
@@ -59,7 +56,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         span: item.span,
     };
 
-    ctx.crate_hir.items.insert(def_id, hir_item.clone());
+    ctx.crate_hir.items.insert(def_id, Some(hir_item.clone()));
 
     // Expand built-in derives and attributes for this item.
     crate::derive::expand_item_derives(ctx, item, &hir_item);
@@ -69,7 +66,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
     Some(def_id)
 }
 
-fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, def_id: DefId) -> ItemKind {
+fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> ItemKind {
     let sig = lower_fn_sig(ctx, &f.sig);
     let body_id = crate::lowering_body::lower_block_as_body(ctx, &f.body, &sig.inputs);
 
@@ -256,7 +253,7 @@ fn lower_trait_item(
 fn lower_impl_item(
     ctx: &mut LoweringContext,
     i: &yelang_ast::item::Impl,
-    def_id: DefId,
+    _def_id: DefId,
 ) -> ItemKind {
     let self_ty = crate::lowering_ty::lower_ty(ctx, &i.self_ty);
     let self_ty_def_id = match &self_ty.kind {

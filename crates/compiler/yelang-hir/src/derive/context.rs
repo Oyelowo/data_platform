@@ -151,14 +151,9 @@ impl<'a, 'b: 'a> DeriveContext<'a, 'b> {
         self.ctx.next_hir_id()
     }
 
-    /// Allocate a fresh `BodyId`.
-    pub fn next_body_id(&mut self) -> crate::ids::BodyId {
-        self.ctx.next_body_id()
-    }
-
-    /// Allocate a fresh `DefId`.
-    pub fn next_def_id(&mut self) -> DefId {
-        self.ctx.next_def_id()
+    /// Allocate a fresh synthetic `DefId` for a compiler-generated item.
+    pub fn next_synthetic_def_id(&mut self) -> DefId {
+        self.ctx.next_synthetic_def_id()
     }
 
     /// Intern a string into a symbol.

@@ -1,13 +1,52 @@
 use std::fmt;
 use std::num::NonZeroU32;
 
+use crate::index_vec::Idx;
+
 /// A newtype wrapper around a raw integer ID.
 ///
 /// Provides type safety so that `DefId` and `HirId` cannot be confused.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// The implementations of `Copy`, `Eq`, `Hash`, etc. do not require `T` to
+/// implement those traits because `Id<T>` owns only a `NonZeroU32` and a
+/// `PhantomData<T>` marker.
 pub struct Id<T> {
     raw: NonZeroU32,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Clone for Id<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Id<T> {}
+
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<T> Eq for Id<T> {}
+
+impl<T> PartialOrd for Id<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for Id<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.raw.cmp(&other.raw)
+    }
+}
+
+impl<T> std::hash::Hash for Id<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
 }
 
 impl<T> Id<T> {
@@ -63,6 +102,16 @@ impl<T> fmt::Display for Id<T> {
     }
 }
 
+impl<T> Idx for Id<T> {
+    fn from_usize(idx: usize) -> Self {
+        Self::new(u32::try_from(idx).expect("Id index overflow") + 1)
+    }
+
+    fn index(self) -> usize {
+        (self.raw() - 1) as usize
+    }
+}
+
 /// Tag types for `Id`.
 pub mod tags {
     /// Tag for `Id<TagDef>`.
@@ -77,21 +126,10 @@ pub mod tags {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagBody;
 
-    /// Tag for `Id<TagLocal>`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct TagLocal;
-
-    /// Tag for `Id<TagCrate>`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct TagCrate;
-
     /// Tag for `Id<TagSyntaxContext>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagSyntaxContext;
 }
-
-/// Type-safe crate ID.
-pub type CrateId = Id<tags::TagCrate>;
 
 /// Type-safe definition ID.
 pub type DefId = Id<tags::TagDef>;
@@ -101,9 +139,6 @@ pub type HirId = Id<tags::TagHir>;
 
 /// Type-safe body ID.
 pub type BodyId = Id<tags::TagBody>;
-
-/// Type-safe local variable ID.
-pub type LocalId = Id<tags::TagLocal>;
 
 #[cfg(test)]
 mod tests {

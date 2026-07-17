@@ -1,12 +1,9 @@
 //! Lowering of AST patterns to HIR patterns.
 
 use yelang_ast::Pattern as AstPat;
-use yelang_lexer::Span;
 
 use crate::hir_pat::{BindingMode, FieldPat, Pat, PatKind};
-use crate::ids::HirId;
 use crate::lowering::LoweringContext;
-use crate::res::Res;
 
 /// Lower an AST pattern to a HIR pattern.
 pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> Pat {

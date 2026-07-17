@@ -17,19 +17,19 @@ impl<'hir> Map<'hir> {
 
     /// Lookup an item by `DefId`.
     pub fn item(&self, def_id: DefId) -> Option<&Item> {
-        self.crate_hir.items.get(&def_id)
+        self.crate_hir.items.get(def_id).and_then(|opt| opt.as_ref())
     }
 
     /// Lookup a body by `BodyId`.
     pub fn body(&self, body_id: BodyId) -> Option<&Body> {
-        self.crate_hir.bodies.get(&body_id)
+        self.crate_hir.bodies.get(body_id)
     }
 
     /// Lookup an expression by `HirId`.
     ///
     /// This walks all bodies because expressions are not stored in a top-level map.
     pub fn expr(&self, hir_id: HirId) -> Option<&Expr> {
-        for (_id, body) in self.crate_hir.bodies.iter() {
+        for body in self.crate_hir.bodies.values() {
             if let Some(expr) = find_expr_in_expr(&body.value, hir_id) {
                 return Some(expr);
             }

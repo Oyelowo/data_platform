@@ -8,10 +8,12 @@
 
 mod arena;
 mod id;
+mod index_vec;
 mod map;
 mod set;
 
 pub use arena::*;
 pub use id::*;
+pub use index_vec::*;
 pub use map::*;
 pub use set::*;

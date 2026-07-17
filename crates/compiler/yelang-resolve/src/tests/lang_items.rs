@@ -53,7 +53,7 @@ fn primitive_definitions_have_lang_item_field() {
         .expect("i32 lang item");
     let def = collector
         .definitions
-        .get(&i32_def_id)
+        .get(i32_def_id)
         .expect("i32 definition");
     assert_eq!(def.lang_item, Some(LangItem::I32));
     assert_eq!(interner.resolve(&def.name), "i32");

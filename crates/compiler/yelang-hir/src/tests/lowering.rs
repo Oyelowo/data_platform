@@ -3,12 +3,10 @@
 use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Program;
 use yelang_interner::Interner;
-use yelang_lexer::{Span, TokenStream};
+use yelang_lexer::Span;
 
-use crate::crate_hir::Crate;
-use crate::hir::{ExprKind, ItemKind, StmtKind};
+use crate::hir::{ExprKind, ItemKind};
 use crate::lowering::lower_crate;
-use crate::map::Map;
 use crate::res::ResolvedCrate;
 
 fn parse_program(src: &str) -> (Program, Interner) {
@@ -33,7 +31,7 @@ fn stub_resolved() -> ResolvedCrate {
     let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
     ResolvedCrate {
         module_tree,
-        definitions: FxHashMap::default(),
+        definitions: yelang_arena::IndexVec::default(),
         errors: vec![],
         def_resolutions: FxHashMap::default(),
         enum_variants: FxHashMap::default(),
@@ -49,7 +47,7 @@ fn lower_simple_fn() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     assert_eq!(crate_hir.items.len(), 1);
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     assert!(matches!(item.kind, ItemKind::Fn { .. }));
 }
 
@@ -61,7 +59,7 @@ fn lower_struct_item() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     assert_eq!(crate_hir.items.len(), 1);
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     assert!(matches!(item.kind, ItemKind::Struct { .. }));
 }
 
@@ -73,7 +71,7 @@ fn lower_enum_item() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     assert_eq!(crate_hir.items.len(), 1);
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     assert!(matches!(item.kind, ItemKind::Enum { .. }));
 }
 
@@ -84,11 +82,11 @@ fn lower_binary_expr() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
 }
 
@@ -99,11 +97,11 @@ fn lower_call_expr() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
 }
 
@@ -121,10 +119,10 @@ fn lower_match_expr() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
 }

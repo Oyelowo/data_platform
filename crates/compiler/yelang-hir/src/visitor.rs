@@ -2,12 +2,12 @@
 
 use crate::crate_hir::Crate;
 use crate::hir::{
-    Arm, Block, Expr, ExprKind, FnSig, Generics, Impl, ImplItem, Item, ItemKind, Stmt, StmtKind,
-    Trait, TraitItem, Ty, TyKind,
+    Arm, Block, Expr, ExprKind, FnSig, Impl, Item, ItemKind, Stmt, StmtKind,
+    Trait, Ty, TyKind,
 };
 use crate::hir_body::Body;
 use crate::hir_pat::{Pat, PatKind};
-use crate::ids::{BodyId, DefId};
+use crate::ids::BodyId;
 
 /// Visitor over the HIR.
 pub trait Visitor<'hir>: Sized {
@@ -63,8 +63,10 @@ pub trait Visitor<'hir>: Sized {
 }
 
 pub fn walk_crate<'hir, V: Visitor<'hir>>(visitor: &mut V, crate_hir: &Crate) {
-    for (_def_id, item) in crate_hir.items.iter() {
-        visitor.visit_item(item);
+    for item in crate_hir.items.values() {
+        if let Some(item) = item {
+            visitor.visit_item(item);
+        }
     }
     for impl_ in &crate_hir.impls {
         visitor.visit_impl(impl_);
@@ -79,11 +81,11 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &Item) {
                 visitor.visit_body(body);
             }
         }
-        ItemKind::Struct { data, .. } => {
+        ItemKind::Struct { data: _, .. } => {
             // TODO: walk fields
         }
         ItemKind::Enum { def, .. } => {
-            for variant in &def.variants {
+            for _variant in &def.variants {
                 // TODO: walk variant data
             }
         }
@@ -94,7 +96,7 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &Item) {
             ..
         } => {
             visitor.visit_ty(self_ty);
-            if let Some(trait_ref) = of_trait {
+            if let Some(_trait_ref) = of_trait {
                 // TODO: walk trait ref
             }
             for impl_item in items {
@@ -383,7 +385,7 @@ pub fn walk_trait<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_: &Trait) {
                 }
             }
             crate::hir::TraitItemKind::Type { bounds, default } => {
-                for bound in bounds {
+                for _bound in bounds {
                     // TODO: walk bound
                 }
                 if let Some(ty) = default {

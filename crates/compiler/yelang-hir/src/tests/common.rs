@@ -1,9 +1,8 @@
 //! Shared test utilities for HIR lowering tests.
 
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap, IndexVec};
 use yelang_ast::Program;
 use yelang_interner::{Interner, Symbol};
-use yelang_lexer::TokenStream;
 
 use crate::res::ResolvedCrate;
 use yelang_resolve::DefKind;
@@ -30,7 +29,7 @@ pub fn stub_resolved() -> ResolvedCrate {
     let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
     ResolvedCrate {
         module_tree,
-        definitions: FxHashMap::default(),
+        definitions: IndexVec::default(),
         errors: vec![],
         def_resolutions: FxHashMap::default(),
         enum_variants: FxHashMap::default(),
@@ -50,25 +49,38 @@ pub fn resolved_with_defs(defs: &[(Symbol, DefKind)]) -> ResolvedCrate {
         yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
     );
 
-    let mut definitions = FxHashMap::default();
-    let mut def_id = DefId::new(2);
+    let mut definitions = IndexVec::default();
+
+    // Reserve DefId(1) for the synthetic root so that user definitions keep the
+    // expected IDs starting at DefId(2).
+    let root_def = yelang_resolve::def_collector::Definition {
+        def_id: root_id,
+        name: root_name,
+        span: yelang_lexer::Span::default(),
+        kind: yelang_resolve::DefKind::Module,
+        parent: None,
+        visibility: yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
+        lang_item: None,
+    };
+    let pushed_root = definitions.push(root_def);
+    definitions[pushed_root].def_id = pushed_root;
 
     for (name, kind) in defs {
-        let definition = yelang_resolve::def_collector::Definition {
-            def_id,
+        let def_id = definitions.push(yelang_resolve::def_collector::Definition {
+            def_id: DefId::new(1),
             name: *name,
             span: yelang_lexer::Span::default(),
             kind: *kind,
             parent: Some(root_id),
             visibility: yelang_ast::Visibility::Public(yelang_lexer::Span::default()),
             lang_item: None,
-        };
-        let ns = definition
+        });
+        definitions[def_id].def_id = def_id;
+
+        let ns = definitions[def_id]
             .namespace()
             .unwrap_or(yelang_resolve::Namespace::Type);
-        definitions.insert(def_id, definition);
         root_node.add_item(ns, *name, def_id);
-        def_id = DefId::new(def_id.raw() + 1);
     }
 
     let mut modules = FxHashMap::default();

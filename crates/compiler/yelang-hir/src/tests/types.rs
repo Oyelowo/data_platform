@@ -1,12 +1,12 @@
 //! Exhaustive tests for AST type -> HIR type lowering.
 
-use crate::hir::{GenericParam, ItemKind};
+use crate::hir::ItemKind;
 use crate::hir_ty::{TyKind, UtilityKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
 fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::FnSig {
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { sig, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -360,7 +360,7 @@ fn lower_fn_with_complex_generic_bounds() {
     let (program, interner) = parse_program(src);
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { generics, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -376,7 +376,7 @@ fn lower_hrtb_where_predicate() {
     let (program, interner) = parse_program(src);
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { generics, .. } = &item.kind else {
         panic!("expected fn")
     };

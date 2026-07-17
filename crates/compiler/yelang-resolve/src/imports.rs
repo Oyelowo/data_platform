@@ -35,7 +35,7 @@ fn resolve_import_tree(
                 if !crate::privacy::check_accessibility(resolver, def_id, module_id, name, span) {
                     let def_module = resolver
                         .definitions
-                        .get(&def_id)
+                        .get(def_id)
                         .and_then(|d| d.parent)
                         .unwrap_or(resolver.module_tree.root.def_id);
                     resolver.errors.push(ResolutionError::PrivacyError {
@@ -68,7 +68,7 @@ fn resolve_import_tree(
                 if !crate::privacy::check_accessibility(resolver, def_id, module_id, name, span) {
                     let def_module = resolver
                         .definitions
-                        .get(&def_id)
+                        .get(def_id)
                         .and_then(|d| d.parent)
                         .unwrap_or(resolver.module_tree.root.def_id);
                     resolver.errors.push(ResolutionError::PrivacyError {
@@ -213,7 +213,7 @@ fn resolve_import_path(
 
     if let Some(ns) = resolver
         .definitions
-        .get(&current)
+        .get(current)
         .and_then(|d| d.namespace())
     {
         return Some((ns, current));
@@ -284,7 +284,7 @@ fn resolve_glob_import(
         }
     }
 
-    let target_module = resolver.definitions.get(&current).and_then(|d| {
+    let target_module = resolver.definitions.get(current).and_then(|d| {
         if matches!(d.kind, crate::def_collector::DefKind::Module) {
             Some(current)
         } else {
@@ -319,7 +319,7 @@ fn add_imported_item(
         if let Some(existing) = module.add_item(ns, name, def_id) {
             let existing_span = resolver
                 .definitions
-                .get(&existing)
+                .get(existing)
                 .map(|d| d.span)
                 .unwrap_or_else(Span::default);
             resolver.errors.push(ResolutionError::DuplicateDefinition {

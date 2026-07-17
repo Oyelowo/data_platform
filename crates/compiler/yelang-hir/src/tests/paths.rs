@@ -18,7 +18,11 @@ fn lower_resolved_fn_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let items: Vec<_> = crate_hir.items.values().collect();
+    let items: Vec<_> = crate_hir
+        .items
+        .values()
+        .filter_map(|opt| opt.as_ref())
+        .collect();
     let bar = items
         .iter()
         .find(|i| matches!(&i.kind, ItemKind::Fn { .. }) && i.ident.as_str(&interner) == "bar")
@@ -27,7 +31,7 @@ fn lower_resolved_fn_path() {
     let ItemKind::Fn { body, .. } = &bar.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };
@@ -42,11 +46,11 @@ fn lower_unresolved_path_falls_back_to_err() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };
@@ -66,11 +70,11 @@ fn lower_absolute_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };
@@ -85,11 +89,11 @@ fn lower_crate_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };
@@ -104,11 +108,11 @@ fn lower_self_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };
@@ -123,11 +127,11 @@ fn lower_super_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };

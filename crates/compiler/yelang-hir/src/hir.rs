@@ -15,7 +15,7 @@ pub use crate::hir_struct::{FieldDef, StructField, VariantData};
 pub use crate::hir_ty::{Ty, TyKind};
 
 use crate::hir_ty::Const;
-use crate::ids::{BodyId, DefId, HirId};
+use crate::ids::BodyId;
 use crate::res::Res;
 
 /// Re-export commonly-used AST types that contain no unresolved names.

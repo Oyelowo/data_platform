@@ -9,61 +9,68 @@
 //! are not re-exported by glob imports and cannot be accessed through qualified
 //! paths such as `crate::Option`.
 
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap, IndexVec};
 use yelang_ast::Visibility;
 use yelang_interner::{Interner, Symbol};
 use yelang_lexer::Span;
 
 use crate::{
     def_collector::{DefKind, Definition},
-    lang_items::LangItem,
+    lang_items::{LangItem, LangItems},
     namespaces::Namespace,
 };
 
 /// Built-in prelude items injected into every module.
 ///
-/// These are placeholder definitions that resolve successfully during name
-/// resolution. Downstream phases (type checking, codegen) must recognize them
-/// as built-in types and provide their actual semantics.
+/// The prelude does *not* own `Definition` values.  They live in the shared
+/// `IndexVec<DefId, Definition>` arena owned by `DefCollector` so that every
+/// definition in the crate has a single, dense allocation discipline.
 #[derive(Debug, Clone)]
 pub struct Prelude {
     /// Map from namespace to (name symbol -> DefId) for prelude items.
     pub items: FxHashMap<Namespace, FxHashMap<Symbol, DefId>>,
-    /// The underlying definitions for all prelude items.
-    pub definitions: FxHashMap<DefId, Definition>,
     /// Enum variant mappings for prelude enums (`Option`, `Result`).
     pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
 }
 
 impl Prelude {
     /// Build the standard YeLang prelude.
-    pub fn new(interner: &Interner, next_def_id: &mut u32) -> Self {
+    ///
+    /// Definitions are allocated directly into the supplied `definitions` arena.
+    /// The returned `LangItems` registry contains all lang items discovered in
+    /// the prelude (e.g. `Box`, `Formatter`).
+    pub fn new(
+        interner: &Interner,
+        definitions: &mut IndexVec<DefId, Definition>,
+    ) -> (Self, LangItems, FxHashMap<DefId, FxHashMap<Symbol, DefId>>) {
         let mut items: FxHashMap<Namespace, FxHashMap<Symbol, DefId>> = FxHashMap::default();
-        let mut definitions: FxHashMap<DefId, Definition> = FxHashMap::default();
+        let mut lang_items = LangItems::new();
 
-        let mut add = |name: &str, kind: DefKind, ns: Namespace, lang_item: Option<LangItem>| {
-            let symbol = interner.get_or_intern(name);
-            let def_id = DefId::new(*next_def_id);
-            *next_def_id += 1;
+        let mut add =
+            |name: &str, kind: DefKind, ns: Namespace, lang_item: Option<LangItem>| -> DefId {
+                let symbol = interner.get_or_intern(name);
+                let def_id = definitions.push(Definition {
+                    // Patched to the real key after allocation.
+                    def_id: DefId::new(1),
+                    name: symbol,
+                    span: Span::default(),
+                    kind,
+                    parent: None,
+                    visibility: Visibility::Public(Span::default()),
+                    lang_item,
+                });
+                definitions[def_id].def_id = def_id;
 
-            let def = Definition {
-                def_id,
-                name: symbol,
-                span: Span::default(),
-                kind,
-                parent: None,
-                visibility: Visibility::Public(Span::default()),
-                lang_item,
+                if let Some(li) = lang_item {
+                    lang_items.insert(li, def_id);
+                }
+                items
+                    .entry(ns)
+                    .or_insert_with(FxHashMap::default)
+                    .insert(symbol, def_id);
+
+                def_id
             };
-
-            definitions.insert(def_id, def);
-            items
-                .entry(ns)
-                .or_insert_with(FxHashMap::default)
-                .insert(symbol, def_id);
-
-            def_id
-        };
 
         // Core data types (type namespace)
         add("Option", DefKind::Enum, Namespace::Type, None);
@@ -197,7 +204,6 @@ impl Prelude {
 
         let mut prelude = Self {
             items,
-            definitions,
             enum_variants: FxHashMap::default(),
         };
 
@@ -227,7 +233,8 @@ impl Prelude {
             prelude.enum_variants.insert(id, variants);
         }
 
-        prelude
+        let enum_variants = prelude.enum_variants.clone();
+        (prelude, lang_items, enum_variants)
     }
 }
 

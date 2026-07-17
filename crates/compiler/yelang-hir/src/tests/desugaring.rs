@@ -3,9 +3,8 @@
 use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
-use yelang_lexer::TokenStream;
 
-use crate::hir::{ExprKind, ItemKind, StmtKind};
+use crate::hir::{ExprKind, ItemKind};
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
 
@@ -30,7 +29,7 @@ fn stub_resolved() -> ResolvedCrate {
     let module_tree = yelang_resolve::ModuleTree::new(modules.get(&root_id).unwrap().clone());
     ResolvedCrate {
         module_tree,
-        definitions: yelang_arena::FxHashMap::default(),
+        definitions: yelang_arena::IndexVec::default(),
         errors: vec![],
         def_resolutions: yelang_arena::FxHashMap::default(),
         enum_variants: yelang_arena::FxHashMap::default(),
@@ -45,11 +44,11 @@ fn desugar_while() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
 
     // The body should contain a `loop` expression (desugared from `while`).
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
@@ -62,11 +61,11 @@ fn desugar_for() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
 }
 
@@ -78,11 +77,11 @@ fn desugar_try_operator() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
 }
 
@@ -101,10 +100,10 @@ fn desugar_let_chain() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     assert!(matches!(body.value.kind, ExprKind::Block { .. }));
 }

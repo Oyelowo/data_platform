@@ -3,7 +3,7 @@
 use yelang_ast::{Ident, Label};
 use yelang_lexer::Span;
 
-use crate::hir::{Arm, Block, CaptureClause, FieldExpr, FnSig, Lit, Stmt};
+use crate::hir::{Arm, Block, CaptureClause, FieldExpr, Lit};
 use crate::hir_body::Param;
 use crate::hir_pat::Pat;
 use crate::hir_ty::Ty;

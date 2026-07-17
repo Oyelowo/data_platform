@@ -41,6 +41,7 @@ fn find_impls_for_type<'a>(
     crate_hir
         .items
         .values()
+        .filter_map(|opt| opt.as_ref())
         .filter(|item| {
             if let ItemKind::Impl {
                 self_ty, of_trait, ..
@@ -50,7 +51,7 @@ fn find_impls_for_type<'a>(
                     crate::hir_ty::TyKind::Path { res, .. } => match res {
                         crate::res::Res::Def { def_id } => resolved
                             .definitions
-                            .get(def_id)
+                            .get(*def_id)
                             .map(|d| interner.resolve(&d.name))
                             .unwrap_or(""),
                         _ => "",
@@ -127,6 +128,7 @@ fn derive_eq_requires_partial_eq() {
     let point_impls: Vec<_> = crate_hir
         .items
         .values()
+        .filter_map(|opt| opt.as_ref())
         .filter(|item| matches!(item.kind, ItemKind::Impl { .. }))
         .collect();
     assert!(
@@ -254,6 +256,7 @@ fn derive_copy_rejects_non_copy_field() {
     let impls: Vec<_> = crate_hir
         .items
         .values()
+        .filter_map(|opt| opt.as_ref())
         .filter(|item| matches!(item.kind, ItemKind::Impl { .. }))
         .collect();
     assert!(
@@ -276,6 +279,7 @@ fn derive_eq_rejects_float_field() {
     let eq_impls: Vec<_> = crate_hir
         .items
         .values()
+        .filter_map(|opt| opt.as_ref())
         .filter(|item| {
             if let ItemKind::Impl { of_trait, .. } = &item.kind {
                 of_trait.is_some()

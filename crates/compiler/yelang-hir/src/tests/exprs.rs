@@ -1,15 +1,15 @@
 //! Exhaustive tests for AST expression -> HIR expression lowering.
 
-use crate::hir::{CaptureClause, ExprKind, ItemKind, StmtKind};
+use crate::hir::{ExprKind, ItemKind, StmtKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
 fn get_body_expr(crate_hir: &crate::Crate) -> &crate::hir::Expr {
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     &body.value
 }
 
@@ -442,11 +442,11 @@ fn lower_await_expr() {
     let (program, interner) = parse_program(src);
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
-    let item = crate_hir.items.values().next().unwrap();
+    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
-    let body = crate_hir.bodies.get(body).unwrap();
+    let body = crate_hir.bodies.get(*body).unwrap();
     let ExprKind::Block { block, .. } = &body.value.kind else {
         panic!("expected block")
     };

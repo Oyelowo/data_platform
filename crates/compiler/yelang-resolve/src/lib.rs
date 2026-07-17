@@ -28,16 +28,14 @@ pub use path::*;
 pub use rib::*;
 pub use scope::*;
 
-use yelang_arena::{DefId, FxHashMap};
+use yelang_arena::{DefId, FxHashMap, IndexVec};
 use yelang_interner::{Interner, Symbol};
-
-use crate::def_collector::Definition;
 
 /// Result of resolving a crate.
 #[derive(Debug, Clone)]
 pub struct ResolvedCrate {
     pub module_tree: ModuleTree,
-    pub definitions: FxHashMap<DefId, Definition>,
+    pub definitions: IndexVec<DefId, def_collector::Definition>,
     pub errors: Vec<ResolutionError>,
     /// Maps path spans to resolved DefIds for non-local paths.
     /// Populated during late resolution and consumed by HIR lowering.
@@ -56,30 +54,13 @@ pub struct ResolvedCrate {
 pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> ResolvedCrate {
     let collector = def_collector::DefCollector::new(interner).collect(ast);
 
-    // Merge prelude definitions into the main definitions map so that
-    // downstream passes can look them up by DefId.
-    let mut definitions = collector.definitions;
-    if let Some(prelude) = &collector.prelude {
-        for (def_id, def) in &prelude.definitions {
-            definitions.insert(*def_id, def.clone());
-        }
-    }
-
-    // Merge prelude enum variant mappings into the main registry.
-    let mut enum_variants = collector.enum_variants;
-    if let Some(prelude) = &collector.prelude {
-        for (def_id, variants) in &prelude.enum_variants {
-            enum_variants.insert(*def_id, variants.clone());
-        }
-    }
-
     let mut resolver = scope::Resolver::new(
         interner,
         collector.module_tree,
-        definitions,
+        collector.definitions,
         collector.prelude,
         collector.lang_items,
-        enum_variants,
+        collector.enum_variants,
     );
     resolver.errors = collector.errors;
     // Transfer impl indexes from collector to resolver

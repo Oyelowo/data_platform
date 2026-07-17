@@ -13,6 +13,8 @@ mod lowering;
 #[cfg(test)]
 mod paths;
 #[cfg(test)]
+mod storage_tests;
+#[cfg(test)]
 mod types;
 #[cfg(test)]
 mod visitor;

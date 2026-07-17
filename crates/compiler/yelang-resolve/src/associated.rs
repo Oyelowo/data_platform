@@ -54,7 +54,7 @@ fn resolve_inherent_associated_item(resolver: &Resolver, path: &Path) -> Option<
     // Check if the type prefix resolves to an enum, and if the item is a variant.
     // Handles `Enum::Variant` and `module::Enum::Variant`.
     if let Some(enum_def_id) = resolve_type_prefix_to_def_id(resolver, path) {
-        if let Some(def) = resolver.definitions.get(&enum_def_id) {
+        if let Some(def) = resolver.definitions.get(enum_def_id) {
             if def.kind == DefKind::Enum {
                 if let Some(variants) = resolver.enum_variants.get(&enum_def_id) {
                     if let Some(&variant_def_id) = variants.get(&item_name) {
