@@ -1,10 +1,13 @@
-//! YeLang prelude injection.
+//! YeLang prelude definitions.
 //!
-//! Following Rust's model (RFC 1560, RFC 0503), every module implicitly imports
-//! a set of standard items unless opted out with `@no_implicit_prelude`.
+//! Following Rust's model (RFC 1560, RFC 0503), every module implicitly has
+//! access to a set of standard items unless opted out with `@no_implicit_prelude`.
 //!
 //! Prelude names are checked as a final fallback during name resolution, meaning
 //! they can be shadowed by any local definition, import, or ancestor module item.
+//! They are intentionally *not* inserted into module namespace tables, so they
+//! are not re-exported by glob imports and cannot be accessed through qualified
+//! paths such as `crate::Option`.
 
 use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Visibility;
@@ -14,7 +17,6 @@ use yelang_lexer::Span;
 use crate::{
     def_collector::{DefKind, Definition},
     lang_items::LangItem,
-    module_tree::ModuleNode,
     namespaces::Namespace,
 };
 
@@ -29,6 +31,8 @@ pub struct Prelude {
     pub items: FxHashMap<Namespace, FxHashMap<Symbol, DefId>>,
     /// The underlying definitions for all prelude items.
     pub definitions: FxHashMap<DefId, Definition>,
+    /// Enum variant mappings for prelude enums (`Option`, `Result`).
+    pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
 }
 
 impl Prelude {
@@ -80,6 +84,20 @@ impl Prelude {
             DefKind::Struct,
             Namespace::Value,
             Some(LangItem::Box),
+        );
+
+        // Core formatter type used by derived `Debug` impls.
+        add(
+            "Formatter",
+            DefKind::Struct,
+            Namespace::Type,
+            Some(LangItem::Formatter),
+        );
+        add(
+            "Formatter",
+            DefKind::Struct,
+            Namespace::Value,
+            Some(LangItem::Formatter),
         );
 
         // Common traits (type namespace)
@@ -165,26 +183,51 @@ impl Prelude {
 
         // Common functions (value namespace)
         add("drop", DefKind::Fn, Namespace::Value, Some(LangItem::Drop));
-        add("Some", DefKind::EnumVariant, Namespace::Value, None);
-        add("None", DefKind::EnumVariant, Namespace::Value, None);
-        add("Ok", DefKind::EnumVariant, Namespace::Value, None);
-        add("Err", DefKind::EnumVariant, Namespace::Value, None);
+        let some_sym = interner.get_or_intern("Some");
+        let none_sym = interner.get_or_intern("None");
+        let ok_sym = interner.get_or_intern("Ok");
+        let err_sym = interner.get_or_intern("Err");
+        let some_id = add("Some", DefKind::EnumVariant, Namespace::Value, None);
+        let none_id = add("None", DefKind::EnumVariant, Namespace::Value, None);
+        let ok_id = add("Ok", DefKind::EnumVariant, Namespace::Value, None);
+        let err_id = add("Err", DefKind::EnumVariant, Namespace::Value, None);
 
-        Self { items, definitions }
-    }
+        let option_sym = interner.get_or_intern("Option");
+        let result_sym = interner.get_or_intern("Result");
 
-    /// Inject prelude items into a module node unless it has opted out.
-    pub fn inject_into(&self, module: &mut ModuleNode) {
-        for (ns, name_map) in &self.items {
-            for (symbol, def_id) in name_map {
-                // Only insert if the module doesn't already define this name
-                // in this namespace. This ensures explicit definitions shadow
-                // the prelude, matching Rust semantics.
-                if module.get_item(*ns, *symbol).is_none() {
-                    module.add_item(*ns, *symbol, *def_id);
-                }
-            }
+        let mut prelude = Self {
+            items,
+            definitions,
+            enum_variants: FxHashMap::default(),
+        };
+
+        // Register prelude enum variant mappings so that downstream passes can
+        // synthesize `Option::Some`, `Result::Ok`, etc., without re-resolving.
+        let option_id = prelude
+            .items
+            .get(&Namespace::Type)
+            .and_then(|m| m.get(&option_sym))
+            .copied();
+        let result_id = prelude
+            .items
+            .get(&Namespace::Type)
+            .and_then(|m| m.get(&result_sym))
+            .copied();
+
+        if let Some(id) = option_id {
+            let mut variants = FxHashMap::default();
+            variants.insert(some_sym, some_id);
+            variants.insert(none_sym, none_id);
+            prelude.enum_variants.insert(id, variants);
         }
+        if let Some(id) = result_id {
+            let mut variants = FxHashMap::default();
+            variants.insert(ok_sym, ok_id);
+            variants.insert(err_sym, err_id);
+            prelude.enum_variants.insert(id, variants);
+        }
+
+        prelude
     }
 }
 

@@ -29,7 +29,7 @@ pub use rib::*;
 pub use scope::*;
 
 use yelang_arena::{DefId, FxHashMap};
-use yelang_interner::Interner;
+use yelang_interner::{Interner, Symbol};
 
 use crate::def_collector::Definition;
 
@@ -42,6 +42,14 @@ pub struct ResolvedCrate {
     /// Maps path spans to resolved DefIds for non-local paths.
     /// Populated during late resolution and consumed by HIR lowering.
     pub def_resolutions: FxHashMap<yelang_lexer::Span, DefId>,
+    /// Maps enum `DefId` to a map of (variant name symbol -> variant `DefId`).
+    /// Used by downstream passes (e.g., built-in derive lowering) that synthesize
+    /// enum variant references without re-running name resolution.
+    pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
+    /// The built-in prelude. Kept available so that downstream phases (e.g.
+    /// built-in derive expansion) can look up prelude types and traits directly
+    /// without relying on them being present in any module's namespace table.
+    pub prelude: Option<crate::prelude::Prelude>,
 }
 
 /// The main entry point for name resolution.
@@ -57,13 +65,21 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         }
     }
 
+    // Merge prelude enum variant mappings into the main registry.
+    let mut enum_variants = collector.enum_variants;
+    if let Some(prelude) = &collector.prelude {
+        for (def_id, variants) in &prelude.enum_variants {
+            enum_variants.insert(*def_id, variants.clone());
+        }
+    }
+
     let mut resolver = scope::Resolver::new(
         interner,
         collector.module_tree,
         definitions,
         collector.prelude,
         collector.lang_items,
-        collector.enum_variants,
+        enum_variants,
     );
     resolver.errors = collector.errors;
     // Transfer impl indexes from collector to resolver
@@ -82,5 +98,7 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         definitions: resolver.definitions,
         errors: resolver.errors,
         def_resolutions: resolver.def_resolutions,
+        enum_variants: resolver.enum_variants,
+        prelude: resolver.prelude,
     }
 }

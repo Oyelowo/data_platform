@@ -36,6 +36,8 @@ fn stub_resolved() -> ResolvedCrate {
         definitions: FxHashMap::default(),
         errors: vec![],
         def_resolutions: FxHashMap::default(),
+        enum_variants: FxHashMap::default(),
+        prelude: None,
     }
 }
 

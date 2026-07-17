@@ -59,7 +59,11 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         span: item.span,
     };
 
-    ctx.crate_hir.items.insert(def_id, hir_item);
+    ctx.crate_hir.items.insert(def_id, hir_item.clone());
+
+    // Expand built-in derives and attributes for this item.
+    crate::derive::expand_item_derives(ctx, item, &hir_item);
+
     ctx.current_owner = prev_owner;
     ctx.current_module = prev_module;
     Some(def_id)
@@ -258,6 +262,7 @@ fn lower_impl_item(
     let self_ty_def_id = match &self_ty.kind {
         crate::hir_ty::TyKind::Path {
             res: crate::res::Res::Def { def_id },
+            ..
         } => Some(*def_id),
         _ => None,
     };

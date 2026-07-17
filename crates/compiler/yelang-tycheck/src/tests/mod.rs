@@ -1327,6 +1327,7 @@ fn cast_returns_target_type() {
             res: Res::PrimTy {
                 ty: yelang_hir::res::PrimTy::Int(yelang_hir::res::IntTy::I64),
             },
+            args: vec![],
         },
         span: dummy_span(),
     };
@@ -1533,6 +1534,7 @@ fn body_check_params_and_expr() {
                 res: Res::PrimTy {
                     ty: yelang_hir::res::PrimTy::Int(yelang_hir::res::IntTy::I32),
                 },
+                args: vec![],
             },
             span: dummy_span(),
         },

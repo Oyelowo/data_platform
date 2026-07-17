@@ -4,6 +4,7 @@
 //! and syntax sugar (`for`, `while`, `?`, `async`, let-chains) is desugared.
 
 pub mod crate_hir;
+pub mod derive;
 pub mod hir;
 pub mod hir_body;
 pub mod hir_expr;

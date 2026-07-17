@@ -33,6 +33,8 @@ fn stub_resolved() -> ResolvedCrate {
         definitions: yelang_arena::FxHashMap::default(),
         errors: vec![],
         def_resolutions: yelang_arena::FxHashMap::default(),
+        enum_variants: yelang_arena::FxHashMap::default(),
+        prelude: None,
     }
 }
 

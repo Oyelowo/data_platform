@@ -17,8 +17,12 @@ pub struct Ty {
 /// Kinds of types.
 #[derive(Debug, Clone)]
 pub enum TyKind {
-    /// Resolved path type.
-    Path { res: Res },
+    /// Resolved path type, optionally with generic arguments.
+    ///
+    /// Examples:
+    /// - `i32` -> `Path { res: PrimTy(Int(I32)), args: [] }`
+    /// - `Vec<T>` -> `Path { res: Def(Vec), args: [T] }`
+    Path { res: Res, args: Vec<Ty> },
     /// Tuple type: `(i32, bool)`
     Tuple { tys: Vec<Ty> },
     /// Array type: `[T; N]`

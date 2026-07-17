@@ -17,6 +17,7 @@ pub struct LoweringContext<'a> {
     pub crate_hir: Crate,
     pub next_hir_id: u32,
     pub next_body_id: u32,
+    pub next_def_id: u32,
     pub current_module: DefId,
     pub current_owner: DefId,
     pub local_map: FxHashMap<Symbol, HirId>,
@@ -29,12 +30,24 @@ pub struct LoweringContext<'a> {
 impl<'a> LoweringContext<'a> {
     pub fn new(interner: &'a Interner, resolved: &'a ResolvedCrate) -> Self {
         let root_module = resolved.module_tree.root.def_id;
+        // DefIds are allocated by `yelang-resolve::def_collector`. Start HIR
+        // lowering's own DefId counter just above the highest existing ID so
+        // that synthesized items (e.g. derived impls) never collide with IDs
+        // produced during name resolution.
+        let next_def_id = resolved
+            .definitions
+            .keys()
+            .map(|d| d.raw())
+            .max()
+            .unwrap_or(0)
+            + 1;
         Self {
             interner,
             resolved,
             crate_hir: Crate::new(root_module),
             next_hir_id: 1,
             next_body_id: 1,
+            next_def_id,
             current_module: root_module,
             current_owner: root_module,
             local_map: FxHashMap::new(),
@@ -59,8 +72,8 @@ impl<'a> LoweringContext<'a> {
 
     /// Allocate a fresh `DefId`.
     pub fn next_def_id(&mut self) -> DefId {
-        let id = DefId::new(self.next_body_id);
-        self.next_body_id += 1;
+        let id = DefId::new(self.next_def_id);
+        self.next_def_id += 1;
         id
     }
 
@@ -99,7 +112,6 @@ pub fn lower_crate(program: &Program, resolved: &ResolvedCrate, interner: &Inter
 /// Look up the `DefId` for an AST item within the current module.
 /// Matches by parent module, name, and kind.
 pub(crate) fn lookup_item_def_id(ctx: &LoweringContext, item: &AstItem) -> Option<DefId> {
-    use yelang_resolve::DefKind;
     let expected_kind = item_def_kind(&item.kind)?;
     let expected_name = item_name(item)?;
     ctx.resolved

@@ -92,6 +92,7 @@ pub enum LangItem {
     // ------------------------------------------------------------------------
     Box,         // `Box<T>` — owned heap allocation
     PhantomData, // variance / dropck marker
+    Formatter,   // `fmt::Formatter` used by derived `Debug` impls
 
     // ------------------------------------------------------------------------
     // Panic / unwinding
@@ -170,6 +171,7 @@ impl LangItem {
             // Special types
             "owned_box" => Box,
             "phantom_data" => PhantomData,
+            "formatter" => Formatter,
 
             // Panic / runtime
             "panic" => Panic,
@@ -235,6 +237,7 @@ impl LangItem {
             IntoIterator => "into_iterator",
             Box => "owned_box",
             PhantomData => "phantom_data",
+            Formatter => "formatter",
             Panic => "panic",
             PanicBoundsCheck => "panic_bounds_check",
             DropInPlace => "drop_in_place",
@@ -254,7 +257,7 @@ impl LangItem {
                 "operator trait"
             }
             Drop | Clone | Default | Debug | Display | Iterator | IntoIterator => "standard trait",
-            Box | PhantomData => "special type",
+            Box | PhantomData | Formatter => "special type",
             Panic | PanicBoundsCheck | DropInPlace => "panic/unwinding item",
             Start => "runtime entry point",
         }

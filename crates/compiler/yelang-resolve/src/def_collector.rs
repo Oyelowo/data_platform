@@ -59,7 +59,7 @@ use crate::{
     prelude::Prelude,
 };
 use yelang_ast::item::{Const, Enum, Impl, ImplItemKind, Static, Struct, Trait, TypeAlias, Use};
-use yelang_ast::{FnDef, Ident, Item, ItemKind, ModDef, ModKind, Type, TypeKind};
+use yelang_ast::{FnDef, Item, ItemKind, ModDef, ModKind, Type, TypeKind};
 use yelang_interner::Interner;
 
 pub struct DefCollector<'a> {
@@ -110,7 +110,8 @@ impl<'a> DefCollector<'a> {
         let mut next_def_id = 2;
         let prelude = Some(Prelude::new(interner, &mut next_def_id));
         let mut lang_items = LangItems::new();
-        // Merge prelude lang items into the registry immediately.
+        // Merge prelude lang items and enum variants into the registries
+        // immediately so they are available throughout resolution.
         if let Some(p) = &prelude {
             for (def_id, def) in &p.definitions {
                 if let Some(li) = def.lang_item {
@@ -118,6 +119,10 @@ impl<'a> DefCollector<'a> {
                 }
             }
         }
+        let enum_variants = prelude
+            .as_ref()
+            .map(|p| p.enum_variants.clone())
+            .unwrap_or_default();
         let mut collector = Self {
             interner,
             next_def_id,
@@ -130,7 +135,7 @@ impl<'a> DefCollector<'a> {
             impl_item_names: FxHashMap::default(),
             prelude,
             lang_items,
-            enum_variants: FxHashMap::default(),
+            enum_variants,
         };
         collector.seed_primitives();
         collector
@@ -185,7 +190,7 @@ impl<'a> DefCollector<'a> {
     fn collect_item(&mut self, item: &Item) {
         let lang_item = extract_lang_item_name(&item.attributes, self.interner);
         // Register lang item immediately so we can detect duplicates.
-        if let Some((li, _name_sym)) = lang_item {
+        if let Some((_li, _name_sym)) = lang_item {
             // We don't know the def_id yet; we'll register it in the specific collector.
         }
         match &item.kind {

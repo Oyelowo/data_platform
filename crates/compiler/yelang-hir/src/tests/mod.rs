@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod common;
 #[cfg(test)]
+mod derive_tests;
+#[cfg(test)]
 mod desugaring;
 #[cfg(test)]
 mod exprs;

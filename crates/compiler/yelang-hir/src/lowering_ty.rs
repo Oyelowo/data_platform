@@ -6,13 +6,41 @@ use crate::hir::{GenericParam, TraitBound};
 use crate::hir_ty::{AnonField, Const, ConstKind, Ty, TyKind, UtilityKind};
 use crate::lowering::LoweringContext;
 
+/// Extract and lower type-only generic arguments from an AST path.
+///
+/// Const generic arguments and associated type bindings are parsed but not
+/// yet represented in HIR; they are dropped here and will be handled once the
+/// type system supports them.
+fn lower_generic_args_from_path(ctx: &mut LoweringContext, path: &yelang_ast::Path) -> Vec<Ty> {
+    let mut args = Vec::new();
+    for segment in &path.segments {
+        let Some(seg_args) = &segment.args else {
+            continue;
+        };
+        match seg_args {
+            yelang_ast::GenericArgs::AngleBracketed(ab) => {
+                for arg in &ab.args {
+                    if let yelang_ast::AngleBracketedArg::Type(ty) = arg {
+                        args.push(lower_ty(ctx, ty));
+                    }
+                }
+            }
+            // Parenthesized args are function-trait sugar; the trait path itself
+            // is resolved, so no extra type args are emitted here.
+            yelang_ast::GenericArgs::Parenthesized(_) => {}
+        }
+    }
+    args
+}
+
 /// Lower an AST type to a HIR type.
 pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
     let span = ty.span;
     let kind = match &ty.kind {
         yelang_ast::TypeKind::Named(path) => {
             let res = crate::lowering_expr::resolve_ast_path(ctx, path);
-            TyKind::Path { res }
+            let args = lower_generic_args_from_path(ctx, path);
+            TyKind::Path { res, args }
         }
         yelang_ast::TypeKind::Tuple(tys) => TyKind::Tuple {
             tys: tys.iter().map(|t| lower_ty(ctx, t)).collect(),
