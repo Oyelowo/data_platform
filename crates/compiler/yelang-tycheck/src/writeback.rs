@@ -5,7 +5,7 @@
  * variables and applying default fallback (int -> i32, float -> f64).
  */
 
-use yelang_arena::HirId;
+use yelang_hir::ids::{ExprId, PatId};
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{InferTy, Ty, TyKind};
 
@@ -14,7 +14,7 @@ use crate::fn_ctxt::FnCtxt;
 /// Write inferred types back to the results tables.
 pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
     // Resolve expression types
-    let expr_entries: Vec<(HirId, Ty<'tcx>)> = fcx
+    let expr_entries: Vec<(ExprId, Ty<'tcx>)> = fcx
         .results
         .expr_types
         .iter()
@@ -26,7 +26,7 @@ pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
     }
 
     // Resolve pattern types
-    let pat_entries: Vec<(HirId, Ty<'tcx>)> = fcx
+    let pat_entries: Vec<(PatId, Ty<'tcx>)> = fcx
         .results
         .pat_types
         .iter()
@@ -38,7 +38,7 @@ pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
     }
 
     // Resolve local types
-    let local_entries: Vec<(HirId, Ty<'tcx>)> = fcx
+    let local_entries: Vec<(PatId, Ty<'tcx>)> = fcx
         .results
         .local_types
         .iter()

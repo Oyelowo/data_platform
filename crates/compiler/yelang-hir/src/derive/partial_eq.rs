@@ -9,10 +9,9 @@ use crate::derive::helpers::{
     make_body, match_expr, method_impl_item, other_param, path_pat, self_expr, self_param,
     struct_pat, tuple_struct_pat, wildcard_false_arm,
 };
-use crate::hir::{Arm, Expr, ImplItem, Item, Pat};
-use crate::hir_pat::PatKind;
+use crate::hir::{Arm, Expr, ImplItem, Item};
+use crate::ids::{ExprId, PatId, TyId};
 use crate::hir_struct::VariantData;
-use crate::hir_ty::Ty;
 
 /// Expand `#[derive(PartialEq)]` for a struct or enum.
 pub fn derive_partial_eq(
@@ -35,14 +34,14 @@ pub fn derive_partial_eq(
         }
     };
 
-    let self_ty = adt.self_ty();
-    let ref_self_ty = Ty {
-        kind: crate::hir_ty::TyKind::Ref {
+    let self_ty = adt.self_ty(ctx);
+    let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
+        crate::hir_ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
-            ty: Box::new(self_ty.clone()),
+            ty: self_ty,
         },
-        span: ctx.derive_span,
-    };
+        ctx.derive_span,
+    );
 
     let eq_method = eq_method(ctx, adt.def_id, &adt, ref_self_ty);
 
@@ -53,31 +52,35 @@ fn eq_method(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
-    ref_self_ty: Ty,
+    ref_self_ty: TyId,
 ) -> ImplItem {
-    let self_param = self_param(ctx, ref_self_ty.clone());
+    let self_param = self_param(ctx, ref_self_ty);
     let other_param = other_param(ctx, self_def_id);
-    let bool_ty = Ty {
-        kind: crate::hir_ty::TyKind::Path {
+    let bool_ty = ctx.ctx.crate_hir.alloc_ty(
+        crate::hir_ty::Ty::Path {
             res: crate::res::Res::PrimTy {
                 ty: crate::res::PrimTy::Bool,
             },
             args: vec![],
         },
-        span: ctx.derive_span,
-    };
-    let sig = fn_sig(vec![ref_self_ty.clone(), ref_self_ty], bool_ty);
+        ctx.derive_span,
+    );
+    let sig = fn_sig(vec![ref_self_ty, ref_self_ty], bool_ty);
 
     let body_value = match &adt.shape {
-        AdtShape::Struct(data) => eq_struct_expr(ctx, self_def_id, data),
-        AdtShape::Enum(def) => eq_enum_expr(ctx, self_def_id, adt.def_id, def),
+        AdtShape::Struct(data) => eq_struct_expression(ctx, self_def_id, data),
+        AdtShape::Enum(def) => eq_enum_expression(ctx, self_def_id, adt.def_id, def),
     };
 
     let body_id = make_body(ctx, vec![self_param, other_param], body_value);
     method_impl_item(ctx, "eq", sig, body_id)
 }
 
-fn eq_struct_expr(ctx: &mut DeriveContext<'_, '_>, self_def_id: DefId, data: &VariantData) -> Expr {
+fn eq_struct_expression(
+    ctx: &mut DeriveContext<'_, '_>,
+    self_def_id: DefId,
+    data: &VariantData,
+) -> ExprId {
     match data {
         VariantData::Unit => bool_expr(ctx, true),
         _ => {
@@ -87,8 +90,8 @@ fn eq_struct_expr(ctx: &mut DeriveContext<'_, '_>, self_def_id: DefId, data: &Va
             let comparisons: Vec<_> = fields
                 .iter()
                 .map(|field| {
-                    let left = access_field(ctx, self_recv.clone(), field);
-                    let right = access_field(ctx, other_recv.clone(), field);
+                    let left = access_field(ctx, self_recv, field);
+                    let right = access_field(ctx, other_recv, field);
                     bin_op_expr(ctx, yelang_ast::BinaryOp::Eq, left, right)
                 })
                 .collect();
@@ -104,17 +107,17 @@ fn eq_struct_expr(ctx: &mut DeriveContext<'_, '_>, self_def_id: DefId, data: &Va
     }
 }
 
-fn eq_enum_expr(
+fn eq_enum_expression(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     enum_def_id: DefId,
     def: &crate::hir::EnumDef,
-) -> Expr {
+) -> ExprId {
     let self_recv = self_expr(ctx, self_def_id);
     let other_recv = expr_other(ctx);
     let scrutinee = expr(
         ctx,
-        crate::hir::ExprKind::Tuple {
+        Expr::Tuple {
             exprs: vec![self_recv, other_recv],
         },
         ctx.derive_span,
@@ -129,13 +132,12 @@ fn eq_enum_expr(
                 .unwrap_or(enum_def_id);
             let (left_pat, right_pat, bindings) =
                 variant_eq_patterns(ctx, variant_def_id, &variant.data);
-            let tuple_pat = Pat {
-                hir_id: ctx.next_hir_id(),
-                kind: PatKind::Tuple {
+            let tuple_pat = ctx.ctx.crate_hir.alloc_pat(
+                crate::hir_pat::Pat::Tuple {
                     pats: vec![left_pat, right_pat],
                 },
-                span: ctx.derive_span,
-            };
+                ctx.derive_span,
+            );
             let body = eq_variant_body(ctx, &variant.data, &bindings);
             arm(ctx, tuple_pat, body)
         })
@@ -155,7 +157,7 @@ fn variant_eq_patterns(
     ctx: &mut DeriveContext<'_, '_>,
     variant_def_id: DefId,
     data: &VariantData,
-) -> (Pat, Pat, Vec<BindingPair>) {
+) -> (PatId, PatId, Vec<BindingPair>) {
     match data {
         VariantData::Unit => (
             path_pat(
@@ -244,7 +246,7 @@ fn eq_variant_body(
     ctx: &mut DeriveContext<'_, '_>,
     data: &VariantData,
     bindings: &[BindingPair],
-) -> Expr {
+) -> ExprId {
     match data {
         VariantData::Unit => bool_expr(ctx, true),
         _ => {
@@ -268,25 +270,25 @@ fn eq_variant_body(
     }
 }
 
-fn expr_other(ctx: &mut DeriveContext<'_, '_>) -> Expr {
-    let other_hir_id = ctx.ctx.local(ctx.intern("other")).expect("other param");
+fn expr_other(ctx: &mut DeriveContext<'_, '_>) -> ExprId {
+    let other_pat_id = ctx.ctx.local(ctx.intern("other")).expect("other param");
     expr(
         ctx,
-        crate::hir::ExprKind::Path {
+        Expr::Path {
             res: crate::res::Res::Local {
-                hir_id: other_hir_id,
+                pat_id: other_pat_id,
             },
         },
         ctx.derive_span,
     )
 }
 
-fn local_expr(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> Expr {
-    let hir_id = ctx.ctx.local(name).expect("local binding");
+fn local_expr(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> ExprId {
+    let pat_id = ctx.ctx.local(name).expect("local binding");
     expr(
         ctx,
-        crate::hir::ExprKind::Path {
-            res: crate::res::Res::Local { hir_id },
+        Expr::Path {
+            res: crate::res::Res::Local { pat_id },
         },
         ctx.derive_span,
     )

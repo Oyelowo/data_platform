@@ -9,9 +9,9 @@ use crate::derive::helpers::{
     make_body, match_expr, method_call_expr, method_impl_item, path_pat, self_expr, self_param,
     struct_literal, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
-use crate::hir::{Arm, Expr, ImplItem, Item, Pat};
+use crate::hir::{Arm, Expr, ImplItem, Item};
+use crate::ids::{ExprId, PatId, TyId};
 use crate::hir_struct::VariantData;
-use crate::hir_ty::Ty;
 
 /// Expand `#[derive(Clone)]` for a struct or enum.
 pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]) -> Option<Item> {
@@ -31,16 +31,16 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
         }
     };
 
-    let self_ty = adt.self_ty();
-    let ref_self_ty = Ty {
-        kind: crate::hir_ty::TyKind::Ref {
+    let self_ty = adt.self_ty(ctx);
+    let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
+        crate::hir_ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
-            ty: Box::new(self_ty.clone()),
+            ty: self_ty,
         },
-        span: ctx.derive_span,
-    };
+        ctx.derive_span,
+    );
 
-    let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty.clone());
+    let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty);
 
     Some(impl_item(ctx, clone_trait, self_ty, vec![clone_method]))
 }
@@ -49,11 +49,11 @@ fn clone_method(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
-    ref_self_ty: Ty,
-    receiver_ty: Ty,
+    ref_self_ty: TyId,
+    receiver_ty: TyId,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
-    let sig = fn_sig(vec![self_param.ty.clone()], receiver_ty);
+    let sig = fn_sig(vec![self_param.ty], receiver_ty);
 
     let body_value = match &adt.shape {
         AdtShape::Struct(data) => clone_struct_expr(ctx, self_def_id, data),
@@ -68,7 +68,7 @@ fn clone_struct_expr(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     data: &VariantData,
-) -> Expr {
+) -> ExprId {
     match data {
         VariantData::Struct { fields } => {
             let self_recv = self_expr(ctx, self_def_id);
@@ -77,11 +77,11 @@ fn clone_struct_expr(
                 .map(|f| {
                     let access = access_field(
                         ctx,
-                        self_recv.clone(),
+                        self_recv,
                         &FieldView {
                             ident: Some(f.ident),
                             index: 0,
-                            ty: &f.ty,
+                            ty: f.ty,
                         },
                     );
                     (f.ident, method_call_expr(ctx, access, "clone", vec![]))
@@ -101,14 +101,14 @@ fn clone_struct_expr(
                 .iter()
                 .enumerate()
                 .map(|(i, _)| {
-                    let access = tuple_field_expr(ctx, self_recv.clone(), i);
+                    let access = tuple_field_expr(ctx, self_recv, i);
                     method_call_expr(ctx, access, "clone", vec![])
                 })
                 .collect();
             // Tuple struct literal: `Self(a, b)`.
             let func = expr(
                 ctx,
-                crate::hir::ExprKind::Path {
+                Expr::Path {
                     res: crate::res::Res::SelfTy {
                         def_id: self_def_id,
                     },
@@ -117,8 +117,8 @@ fn clone_struct_expr(
             );
             expr(
                 ctx,
-                crate::hir::ExprKind::Call {
-                    func: Box::new(func),
+                Expr::Call {
+                    func,
                     args: cloned_fields,
                 },
                 ctx.derive_span,
@@ -128,7 +128,7 @@ fn clone_struct_expr(
             // `Self` resolves to the unit struct value.
             expr(
                 ctx,
-                crate::hir::ExprKind::Path {
+                Expr::Path {
                     res: crate::res::Res::SelfTy {
                         def_id: self_def_id,
                     },
@@ -144,7 +144,7 @@ fn clone_enum_expr(
     self_def_id: DefId,
     enum_def_id: DefId,
     def: &crate::hir::EnumDef,
-) -> Expr {
+) -> ExprId {
     let scrutinee = self_expr(ctx, self_def_id);
     let arms: Vec<Arm> = def
         .variants
@@ -174,7 +174,7 @@ fn variant_binding_pattern(
     ctx: &mut DeriveContext<'_, '_>,
     variant_def_id: DefId,
     data: &VariantData,
-) -> (Pat, Vec<FieldBinding>) {
+) -> (PatId, Vec<FieldBinding>) {
     match data {
         VariantData::Unit => (
             path_pat(
@@ -244,11 +244,11 @@ fn clone_variant_expr(
     variant_def_id: DefId,
     data: &VariantData,
     bindings: &[FieldBinding],
-) -> Expr {
+) -> ExprId {
     match data {
         VariantData::Unit => expr(
             ctx,
-            crate::hir::ExprKind::Path {
+            Expr::Path {
                 res: crate::res::Res::Def {
                     def_id: variant_def_id,
                 },
@@ -280,12 +280,12 @@ fn clone_variant_expr(
 }
 
 /// Build `local.clone()`.
-fn clone_local(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> Expr {
-    let hir_id = ctx.ctx.local(name).expect("binding hir_id");
+fn clone_local(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> ExprId {
+    let pat_id = ctx.ctx.local(name).expect("binding pat_id");
     let access = expr(
         ctx,
-        crate::hir::ExprKind::Path {
-            res: crate::res::Res::Local { hir_id },
+        Expr::Path {
+            res: crate::res::Res::Local { pat_id },
         },
         ctx.derive_span,
     );

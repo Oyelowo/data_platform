@@ -3,7 +3,7 @@
 //! `Res` describes how a name was resolved: to a definition, a local variable,
 //! a primitive type, etc.
 
-use crate::ids::HirId;
+use crate::ids::PatId;
 use yelang_arena::DefId;
 
 /// How a path was resolved.
@@ -11,8 +11,8 @@ use yelang_arena::DefId;
 pub enum Res {
     /// Resolved to a definition.
     Def { def_id: DefId },
-    /// Resolved to a local variable.
-    Local { hir_id: HirId },
+    /// Resolved to a local variable (the binding pattern).
+    Local { pat_id: PatId },
     /// Primitive type (`i32`, `bool`, etc.).
     PrimTy { ty: PrimTy },
     /// `Self` in an impl or trait.

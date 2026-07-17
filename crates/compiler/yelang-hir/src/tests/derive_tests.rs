@@ -3,6 +3,7 @@
 use crate::crate_hir::Crate;
 use crate::hir::ItemKind;
 use crate::hir_item::Item;
+use crate::hir_ty::Ty;
 use crate::lowering::{LoweringContext, lower_crate};
 use crate::lowering_err::LoweringError;
 use crate::res::ResolvedCrate;
@@ -47,8 +48,9 @@ fn find_impls_for_type<'a>(
                 self_ty, of_trait, ..
             } = &item.kind
             {
-                let name = match &self_ty.kind {
-                    crate::hir_ty::TyKind::Path { res, .. } => match res {
+                let ty = crate_hir.tys.get(*self_ty).expect("impl self type");
+                let name = match ty {
+                    Ty::Path { res, .. } => match res {
                         crate::res::Res::Def { def_id } => resolved
                             .definitions
                             .get(*def_id)

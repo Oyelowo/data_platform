@@ -4,17 +4,13 @@
  * within a function body.
  */
 
-use yelang_arena::HirId;
 use yelang_ast::BinaryOp;
-use yelang_hir::hir::{Arm, Block, Expr, ExprKind, FieldExpr, Lit, Stmt, StmtKind};
-use yelang_hir::hir_pat::Pat;
+use yelang_hir::hir::{Arm, Block, Expr, FieldExpr, Stmt};
+use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use yelang_hir::res::Res;
 use yelang_ty::generic::GenericArg;
-use yelang_ty::list::List;
-use yelang_ty::primitive::{FloatTy, IntTy};
+use yelang_ty::primitive::IntTy;
 use yelang_ty::ty::{InferTy, Mutability, Ty, TyKind, TypeAndMut};
-
-use yelang_infer::error::TypeError;
 
 use crate::coerce::Coerce;
 use crate::fn_ctxt::{BreakableKind, BreakableScope, FnCtxt};
@@ -22,17 +18,24 @@ use crate::hir_ty_lower::lower_hir_ty;
 use crate::pat::check_pat;
 
 /// Type-check a function body.
-pub fn check_body<'tcx>(fcx: &mut FnCtxt<'tcx>, body: &yelang_hir::hir_body::Body) {
+pub fn check_body<'tcx>(fcx: &mut FnCtxt<'tcx>, body_id: BodyId) {
     fcx.push_scope();
+
+    let body = fcx
+        .crate_hir
+        .bodies
+        .get(body_id)
+        .expect("BodyId should be valid")
+        .clone();
 
     // Check parameters: introduce local variables for each param
     for param in &body.params {
-        let param_ty = lower_hir_ty(&param.ty, fcx);
-        check_pat(fcx, &param.pat, param_ty);
+        let param_ty = lower_hir_ty_id(fcx, param.ty);
+        check_pat(fcx, param.pat, param_ty);
     }
 
     // Check the body expression
-    let body_ty = check_expr(fcx, &body.value);
+    let body_ty = check_expr(fcx, body.value);
 
     // Coerce body type to return type
     let _ = fcx.coerce(body_ty, fcx.return_ty);
@@ -41,48 +44,54 @@ pub fn check_body<'tcx>(fcx: &mut FnCtxt<'tcx>, body: &yelang_hir::hir_body::Bod
 }
 
 /// Type-check an expression and return its inferred type.
-pub fn check_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr) -> Ty<'tcx> {
-    let ty = check_expr_kind(fcx, &expr.kind, expr.hir_id);
-    fcx.record_expr_ty(expr.hir_id, ty);
+pub fn check_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, expr_id: ExprId) -> Ty<'tcx> {
+    let expr = fcx
+        .crate_hir
+        .exprs
+        .get(expr_id)
+        .expect("ExprId should be valid")
+        .clone();
+    let ty = check_expr_value(fcx, &expr, expr_id);
+    fcx.record_expr_ty(expr_id, ty);
     ty
 }
 
-fn check_expr_kind<'tcx>(fcx: &mut FnCtxt<'tcx>, kind: &ExprKind, hir_id: HirId) -> Ty<'tcx> {
-    match kind {
-        ExprKind::Lit { lit } => check_literal(fcx, lit),
-        ExprKind::Path { res } => check_path(fcx, res),
-        ExprKind::Binary { op, left, right } => check_binary(fcx, *op, left, right),
-        ExprKind::Unary { op, expr } => check_unary(fcx, *op, expr),
-        ExprKind::Call { func, args } => check_call(fcx, func, args),
-        ExprKind::MethodCall {
+fn check_expr_value<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, _expr_id: ExprId) -> Ty<'tcx> {
+    match expr {
+        Expr::Lit { lit } => check_literal(fcx, lit),
+        Expr::Path { res } => check_path(fcx, res),
+        Expr::Binary { op, left, right } => check_binary(fcx, *op, *left, *right),
+        Expr::Unary { op, expr } => check_unary(fcx, *op, *expr),
+        Expr::Call { func, args } => check_call(fcx, *func, args),
+        Expr::MethodCall {
             receiver,
             method: _,
             args,
             ..
-        } => check_method_call(fcx, receiver, args),
-        ExprKind::Field { expr, field } => check_field(fcx, expr, field),
-        ExprKind::Index { expr, index } => check_index(fcx, expr, index),
-        ExprKind::Assign { left, right } => check_assign(fcx, left, right),
-        ExprKind::Block { block } => check_block(fcx, block),
-        ExprKind::Loop { block, label } => check_loop(fcx, block, label.as_ref()),
-        ExprKind::Break { label, expr } => check_break(fcx, label.as_ref(), expr.as_deref()),
-        ExprKind::Continue { label } => check_continue(fcx, label.as_ref()),
-        ExprKind::Return { expr } => check_return(fcx, expr.as_deref()),
-        ExprKind::Match { expr, arms } => check_match(fcx, expr, arms),
-        ExprKind::If {
+        } => check_method_call(fcx, *receiver, args),
+        Expr::Field { expr, field } => check_field(fcx, *expr, field),
+        Expr::Index { expr, index } => check_index(fcx, *expr, *index),
+        Expr::Assign { left, right } => check_assign(fcx, *left, *right),
+        Expr::Block { block } => check_block(fcx, block),
+        Expr::Loop { block, label } => check_loop(fcx, block, label.as_ref()),
+        Expr::Break { label, expr } => check_break(fcx, label.as_ref(), *expr),
+        Expr::Continue { label } => check_continue(fcx, label.as_ref()),
+        Expr::Return { expr } => check_return(fcx, *expr),
+        Expr::Match { expr, arms } => check_match(fcx, *expr, arms),
+        Expr::If {
             cond,
             then_branch,
             else_branch,
-        } => check_if(fcx, cond, then_branch, else_branch.as_deref()),
-        ExprKind::Let { pat, expr } => check_let_expr(fcx, pat, expr),
-        ExprKind::Closure { params, body, .. } => check_closure(fcx, params, *body),
-        ExprKind::Struct { path, fields, rest } => {
-            check_struct_literal(fcx, path, fields, rest.as_deref())
+        } => check_if(fcx, *cond, *then_branch, *else_branch),
+        Expr::Let { pat, expr } => check_let_expr(fcx, *pat, *expr),
+        Expr::Closure { params, body, .. } => check_closure(fcx, params, *body),
+        Expr::Struct { path, fields, rest } => {
+            check_struct_literal(fcx, path, fields, *rest)
         }
-        ExprKind::Tuple { exprs } => check_tuple(fcx, exprs),
-        ExprKind::Array { exprs } => check_array(fcx, exprs),
-        ExprKind::Cast { expr, ty } => check_cast(fcx, expr, ty),
-        ExprKind::Err => fcx.mk_error(),
+        Expr::Tuple { exprs } => check_tuple(fcx, exprs),
+        Expr::Array { exprs } => check_array(fcx, exprs),
+        Expr::Cast { expr, ty } => check_cast(fcx, *expr, *ty),
+        Expr::Err => fcx.mk_error(),
     }
 }
 
@@ -90,21 +99,14 @@ fn check_expr_kind<'tcx>(fcx: &mut FnCtxt<'tcx>, kind: &ExprKind, hir_id: HirId)
 // Literal checking
 // ---------------------------------------------------------------------------
 
-fn check_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, lit: &Lit) -> Ty<'tcx> {
+fn check_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, lit: &yelang_hir::hir::Lit) -> Ty<'tcx> {
     match lit {
-        Lit::Int(_) => fcx.new_int_var(),
-        Lit::Float(_) => fcx.new_float_var(),
-        Lit::Bool(_) => fcx.mk_bool(),
-        Lit::Char(_) => fcx.mk_char(),
-        Lit::Str(_) => fcx.mk_str(),
-        Lit::Regex(_)
-        | Lit::DateTime(_)
-        | Lit::Duration(_)
-        | Lit::Uuid(_)
-        | Lit::Bytes(_)
-        | Lit::Geometry(_)
-        | Lit::RecordId(_)
-        | Lit::Unit => {
+        yelang_hir::hir::Lit::Int(_) => fcx.new_int_var(),
+        yelang_hir::hir::Lit::Float(_) => fcx.new_float_var(),
+        yelang_hir::hir::Lit::Bool(_) => fcx.mk_bool(),
+        yelang_hir::hir::Lit::Char(_) => fcx.mk_char(),
+        yelang_hir::hir::Lit::Str(_) => fcx.mk_str(),
+        _ => {
             // TODO: define types for these literals
             fcx.new_ty_var()
         }
@@ -117,8 +119,8 @@ fn check_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, lit: &Lit) -> Ty<'tcx> {
 
 fn check_path<'tcx>(fcx: &mut FnCtxt<'tcx>, res: &Res) -> Ty<'tcx> {
     match res {
-        Res::Local { hir_id } => {
-            if let Some(ty) = fcx.lookup_local(*hir_id) {
+        Res::Local { pat_id } => {
+            if let Some(ty) = fcx.lookup_local(*pat_id) {
                 ty
             } else {
                 fcx.mk_error()
@@ -154,7 +156,12 @@ fn check_path<'tcx>(fcx: &mut FnCtxt<'tcx>, res: &Res) -> Ty<'tcx> {
 // Binary operator checking
 // ---------------------------------------------------------------------------
 
-fn check_binary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: BinaryOp, left: &Expr, right: &Expr) -> Ty<'tcx> {
+fn check_binary<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    op: BinaryOp,
+    left: ExprId,
+    right: ExprId,
+) -> Ty<'tcx> {
     let left_ty = check_expr(fcx, left);
     let right_ty = check_expr(fcx, right);
 
@@ -202,7 +209,11 @@ fn check_binary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: BinaryOp, left: &Expr, right: 
 // Unary operator checking
 // ---------------------------------------------------------------------------
 
-fn check_unary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: yelang_ast::UnaryOp, expr: &Expr) -> Ty<'tcx> {
+fn check_unary<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    op: yelang_ast::UnaryOp,
+    expr: ExprId,
+) -> Ty<'tcx> {
     let expr_ty = check_expr(fcx, expr);
 
     match op {
@@ -242,7 +253,7 @@ fn check_unary<'tcx>(fcx: &mut FnCtxt<'tcx>, op: yelang_ast::UnaryOp, expr: &Exp
 // Call checking
 // ---------------------------------------------------------------------------
 
-fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: &Expr, args: &[Expr]) -> Ty<'tcx> {
+fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: ExprId, args: &[ExprId]) -> Ty<'tcx> {
     let func_ty = check_expr(fcx, func);
 
     match func_ty.kind() {
@@ -255,7 +266,7 @@ fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: &Expr, args: &[Expr]) -> Ty<'t
             }
 
             for (input, arg) in inputs.iter().zip(args.iter()) {
-                let arg_ty = check_expr(fcx, arg);
+                let arg_ty = check_expr(fcx, *arg);
                 let expected = match input {
                     GenericArg::Type(t) => *t,
                     _ => fcx.mk_error(),
@@ -273,7 +284,7 @@ fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: &Expr, args: &[Expr]) -> Ty<'t
         }
         TyKind::Infer(InferTy::TyVar(_)) => {
             // Function type not yet known: create expected arg types and return type
-            let arg_tys: Vec<_> = args.iter().map(|arg| check_expr(fcx, arg)).collect();
+            let arg_tys: Vec<_> = args.iter().map(|arg| check_expr(fcx, *arg)).collect();
             let arg_args = fcx.interner.mk_generic_args(
                 &arg_tys
                     .iter()
@@ -293,10 +304,14 @@ fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: &Expr, args: &[Expr]) -> Ty<'t
 // Method call checking
 // ---------------------------------------------------------------------------
 
-fn check_method_call<'tcx>(fcx: &mut FnCtxt<'tcx>, receiver: &Expr, args: &[Expr]) -> Ty<'tcx> {
+fn check_method_call<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    receiver: ExprId,
+    args: &[ExprId],
+) -> Ty<'tcx> {
     let _receiver_ty = check_expr(fcx, receiver);
     for arg in args {
-        let _ = check_expr(fcx, arg);
+        let _ = check_expr(fcx, *arg);
     }
     // TODO: method lookup
     fcx.new_ty_var()
@@ -306,7 +321,11 @@ fn check_method_call<'tcx>(fcx: &mut FnCtxt<'tcx>, receiver: &Expr, args: &[Expr
 // Field access checking
 // ---------------------------------------------------------------------------
 
-fn check_field<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, field: &yelang_ast::Ident) -> Ty<'tcx> {
+fn check_field<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    expr: ExprId,
+    field: &yelang_ast::Ident,
+) -> Ty<'tcx> {
     let expr_ty = check_expr(fcx, expr);
 
     match expr_ty.kind() {
@@ -334,7 +353,7 @@ fn check_field<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, field: &yelang_ast::Id
 // Index checking
 // ---------------------------------------------------------------------------
 
-fn check_index<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, index: &Expr) -> Ty<'tcx> {
+fn check_index<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: ExprId, index: ExprId) -> Ty<'tcx> {
     let expr_ty = check_expr(fcx, expr);
     let index_ty = check_expr(fcx, index);
 
@@ -357,7 +376,7 @@ fn check_index<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, index: &Expr) -> Ty<'t
 // Assignment checking
 // ---------------------------------------------------------------------------
 
-fn check_assign<'tcx>(fcx: &mut FnCtxt<'tcx>, left: &Expr, right: &Expr) -> Ty<'tcx> {
+fn check_assign<'tcx>(fcx: &mut FnCtxt<'tcx>, left: ExprId, right: ExprId) -> Ty<'tcx> {
     let left_ty = check_expr(fcx, left);
     let right_ty = check_expr(fcx, right);
     let _ = fcx.eq(left_ty, right_ty);
@@ -372,11 +391,11 @@ fn check_block<'tcx>(fcx: &mut FnCtxt<'tcx>, block: &Block) -> Ty<'tcx> {
     fcx.push_scope();
 
     for stmt in &block.stmts {
-        check_stmt(fcx, stmt);
+        check_stmt(fcx, *stmt);
     }
 
     let ty = if let Some(expr) = &block.expr {
-        check_expr(fcx, expr)
+        check_expr(fcx, *expr)
     } else {
         fcx.mk_unit()
     };
@@ -385,29 +404,35 @@ fn check_block<'tcx>(fcx: &mut FnCtxt<'tcx>, block: &Block) -> Ty<'tcx> {
     ty
 }
 
-fn check_stmt<'tcx>(fcx: &mut FnCtxt<'tcx>, stmt: &Stmt) {
-    match &stmt.kind {
-        StmtKind::Expr { expr } => {
-            let _ = check_expr(fcx, expr);
+fn check_stmt<'tcx>(fcx: &mut FnCtxt<'tcx>, stmt_id: StmtId) {
+    let stmt = fcx
+        .crate_hir
+        .stmts
+        .get(stmt_id)
+        .expect("StmtId should be valid")
+        .clone();
+    match &stmt {
+        Stmt::Expr { expr } => {
+            let _ = check_expr(fcx, *expr);
         }
-        StmtKind::Let { pat, ty, init } => {
+        Stmt::Let { pat, ty, init } => {
             let init_ty = if let Some(init_expr) = init {
-                check_expr(fcx, init_expr)
+                check_expr(fcx, *init_expr)
             } else {
                 fcx.new_ty_var()
             };
 
             let expected_ty = if let Some(hir_ty) = ty {
-                let annotated = lower_hir_ty(hir_ty, fcx);
+                let annotated = lower_hir_ty_id(fcx, *hir_ty);
                 let _ = fcx.eq(annotated, init_ty);
                 annotated
             } else {
                 init_ty
             };
 
-            check_pat(fcx, pat, expected_ty);
+            check_pat(fcx, *pat, expected_ty);
         }
-        StmtKind::Item { .. } => {
+        Stmt::Item { .. } => {
             // Nested items are checked separately
         }
     }
@@ -449,7 +474,7 @@ fn check_loop<'tcx>(
 fn check_break<'tcx>(
     fcx: &mut FnCtxt<'tcx>,
     label: Option<&yelang_ast::Label>,
-    expr: Option<&Expr>,
+    expr: Option<ExprId>,
 ) -> Ty<'tcx> {
     let breakable_idx = if let Some(lbl) = label {
         fcx.breakable_scopes.iter().rposition(|s| {
@@ -505,7 +530,7 @@ fn check_continue<'tcx>(fcx: &mut FnCtxt<'tcx>, label: Option<&yelang_ast::Label
 // Return checking
 // ---------------------------------------------------------------------------
 
-fn check_return<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: Option<&Expr>) -> Ty<'tcx> {
+fn check_return<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: Option<ExprId>) -> Ty<'tcx> {
     let expr_ty = if let Some(e) = expr {
         check_expr(fcx, e)
     } else {
@@ -520,17 +545,17 @@ fn check_return<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: Option<&Expr>) -> Ty<'tcx> {
 // Match checking
 // ---------------------------------------------------------------------------
 
-fn check_match<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, arms: &[Arm]) -> Ty<'tcx> {
+fn check_match<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: ExprId, arms: &[Arm]) -> Ty<'tcx> {
     let scrutinee_ty = check_expr(fcx, expr);
     let result_ty = fcx.new_ty_var();
 
     for arm in arms {
-        check_pat(fcx, &arm.pat, scrutinee_ty);
+        check_pat(fcx, arm.pat, scrutinee_ty);
         if let Some(guard) = &arm.guard {
-            let guard_ty = check_expr(fcx, guard);
+            let guard_ty = check_expr(fcx, *guard);
             let _ = fcx.eq(guard_ty, fcx.mk_bool());
         }
-        let body_ty = check_expr(fcx, &arm.body);
+        let body_ty = check_expr(fcx, arm.body);
         let _ = fcx.eq(result_ty, body_ty);
     }
 
@@ -543,9 +568,9 @@ fn check_match<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, arms: &[Arm]) -> Ty<'t
 
 fn check_if<'tcx>(
     fcx: &mut FnCtxt<'tcx>,
-    cond: &Expr,
-    then_branch: &Expr,
-    else_branch: Option<&Expr>,
+    cond: ExprId,
+    then_branch: ExprId,
+    else_branch: Option<ExprId>,
 ) -> Ty<'tcx> {
     let cond_ty = check_expr(fcx, cond);
     let _ = fcx.eq(cond_ty, fcx.mk_bool());
@@ -567,7 +592,7 @@ fn check_if<'tcx>(
 // Let expression checking (for if let)
 // ---------------------------------------------------------------------------
 
-fn check_let_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: &Pat, expr: &Expr) -> Ty<'tcx> {
+fn check_let_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: PatId, expr: ExprId) -> Ty<'tcx> {
     let expr_ty = check_expr(fcx, expr);
     check_pat(fcx, pat, expr_ty);
     fcx.mk_bool()
@@ -580,7 +605,7 @@ fn check_let_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: &Pat, expr: &Expr) -> Ty<'t
 fn check_closure<'tcx>(
     fcx: &mut FnCtxt<'tcx>,
     params: &[yelang_hir::hir_body::Param],
-    body_id: yelang_hir::ids::BodyId,
+    body_id: BodyId,
 ) -> Ty<'tcx> {
     let _ = (params, body_id);
     // TODO: look up body from crate, check with new FnCtxt
@@ -595,12 +620,12 @@ fn check_struct_literal<'tcx>(
     fcx: &mut FnCtxt<'tcx>,
     path: &Res,
     fields: &[FieldExpr],
-    rest: Option<&Expr>,
+    rest: Option<ExprId>,
 ) -> Ty<'tcx> {
     let struct_ty = check_path(fcx, path);
 
     for field in fields {
-        let _field_ty = check_expr(fcx, &field.expr);
+        let _field_ty = check_expr(fcx, field.expr);
         // TODO: check field type against struct definition
     }
 
@@ -615,8 +640,8 @@ fn check_struct_literal<'tcx>(
 // Tuple checking
 // ---------------------------------------------------------------------------
 
-fn check_tuple<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
-    let tys: Vec<_> = exprs.iter().map(|e| check_expr(fcx, e)).collect();
+fn check_tuple<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[ExprId]) -> Ty<'tcx> {
+    let tys: Vec<_> = exprs.iter().map(|e| check_expr(fcx, *e)).collect();
     let args = fcx
         .interner
         .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
@@ -627,7 +652,7 @@ fn check_tuple<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
 // Array checking
 // ---------------------------------------------------------------------------
 
-fn check_array<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
+fn check_array<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[ExprId]) -> Ty<'tcx> {
     if exprs.is_empty() {
         let elem_ty = fcx.new_ty_var();
         let len = yelang_ty::ty::Const {
@@ -637,9 +662,9 @@ fn check_array<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
         return fcx.mk_array(elem_ty, len);
     }
 
-    let first_ty = check_expr(fcx, &exprs[0]);
+    let first_ty = check_expr(fcx, exprs[0]);
     for expr in exprs.iter().skip(1) {
-        let ty = check_expr(fcx, expr);
+        let ty = check_expr(fcx, *expr);
         let _ = fcx.eq(first_ty, ty);
     }
 
@@ -654,7 +679,21 @@ fn check_array<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[Expr]) -> Ty<'tcx> {
 // Cast checking
 // ---------------------------------------------------------------------------
 
-fn check_cast<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, ty: &yelang_hir::hir_ty::Ty) -> Ty<'tcx> {
+fn check_cast<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: ExprId, ty: TyId) -> Ty<'tcx> {
     let _expr_ty = check_expr(fcx, expr);
-    lower_hir_ty(ty, fcx)
+    lower_hir_ty_id(fcx, ty)
+}
+
+// ---------------------------------------------------------------------------
+// HIR type lowering helper
+// ---------------------------------------------------------------------------
+
+fn lower_hir_ty_id<'tcx>(fcx: &mut FnCtxt<'tcx>, ty_id: TyId) -> Ty<'tcx> {
+    let hir_ty = fcx
+        .crate_hir
+        .tys
+        .get(ty_id)
+        .expect("TyId should be valid")
+        .clone();
+    lower_hir_ty(&hir_ty, fcx)
 }

@@ -1,28 +1,16 @@
 //! Expressions in HIR.
 
 use yelang_ast::{Ident, Label};
-use yelang_lexer::Span;
 
 use crate::hir::{Arm, Block, CaptureClause, FieldExpr, Lit};
 use crate::hir_body::Param;
-use crate::hir_pat::Pat;
-use crate::hir_ty::Ty;
-use crate::ids::{BodyId, HirId};
+use crate::ids::{BodyId, ExprId, PatId, TyId};
 use crate::res::Res;
 
-/// An expression node.
-#[derive(Debug, Clone)]
-pub struct Expr {
-    pub hir_id: HirId,
-    pub kind: ExprKind,
-    pub span: Span,
-    pub ty: Ty,
-}
-
-/// Kinds of expressions.  
+/// Kinds of expressions.
 /// All syntax sugar (`for`, `while`, `?`, `async`) has been desugared.
 #[derive(Debug, Clone)]
-pub enum ExprKind {
+pub enum Expr {
     /// Literal.
     Lit { lit: Lit },
     /// Resolved path.
@@ -30,29 +18,29 @@ pub enum ExprKind {
     /// Binary operator.
     Binary {
         op: yelang_ast::BinaryOp,
-        left: Box<Expr>,
-        right: Box<Expr>,
+        left: ExprId,
+        right: ExprId,
     },
     /// Unary operator.
     Unary {
         op: yelang_ast::UnaryOp,
-        expr: Box<Expr>,
+        expr: ExprId,
     },
     /// Function call.
-    Call { func: Box<Expr>, args: Vec<Expr> },
+    Call { func: ExprId, args: Vec<ExprId> },
     /// Method call.
     MethodCall {
-        receiver: Box<Expr>,
+        receiver: ExprId,
         method: Ident,
-        args: Vec<Expr>,
+        args: Vec<ExprId>,
         trait_def_id: Option<crate::ids::DefId>,
     },
     /// Field access.
-    Field { expr: Box<Expr>, field: Ident },
+    Field { expr: ExprId, field: Ident },
     /// Array/slice index.
-    Index { expr: Box<Expr>, index: Box<Expr> },
+    Index { expr: ExprId, index: ExprId },
     /// Assignment.
-    Assign { left: Box<Expr>, right: Box<Expr> },
+    Assign { left: ExprId, right: ExprId },
     /// Block expression.
     Block { block: Block },
     /// Infinite loop.
@@ -60,19 +48,19 @@ pub enum ExprKind {
     /// Break from a loop.
     Break {
         label: Option<Label>,
-        expr: Option<Box<Expr>>,
+        expr: Option<ExprId>,
     },
     /// Continue a loop.
     Continue { label: Option<Label> },
     /// Return from a function.
-    Return { expr: Option<Box<Expr>> },
+    Return { expr: Option<ExprId> },
     /// Match expression.
-    Match { expr: Box<Expr>, arms: Vec<Arm> },
+    Match { expr: ExprId, arms: Vec<Arm> },
     /// If expression.
     If {
-        cond: Box<Expr>,
-        then_branch: Box<Expr>,
-        else_branch: Option<Box<Expr>>,
+        cond: ExprId,
+        then_branch: ExprId,
+        else_branch: Option<ExprId>,
     },
     /// Closure expression.
     Closure {
@@ -84,16 +72,16 @@ pub enum ExprKind {
     Struct {
         path: Res,
         fields: Vec<FieldExpr>,
-        rest: Option<Box<Expr>>,
+        rest: Option<ExprId>,
     },
     /// Tuple literal.
-    Tuple { exprs: Vec<Expr> },
+    Tuple { exprs: Vec<ExprId> },
     /// Array literal.
-    Array { exprs: Vec<Expr> },
+    Array { exprs: Vec<ExprId> },
     /// Type cast.
-    Cast { expr: Box<Expr>, ty: Ty },
+    Cast { expr: ExprId, ty: TyId },
     /// Let expression (used inside `if let`).
-    Let { pat: Pat, expr: Box<Expr> },
+    Let { pat: PatId, expr: ExprId },
     /// Error recovery.
     Err,
 }

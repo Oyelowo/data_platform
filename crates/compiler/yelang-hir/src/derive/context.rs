@@ -6,7 +6,7 @@ use yelang_lexer::Span;
 
 use crate::hir::{EnumDef, Generics, ItemKind, VariantData};
 use crate::hir_item::Item as HirItem;
-use crate::hir_ty::Ty;
+use crate::ids::TyId;
 use crate::lowering::LoweringContext;
 use crate::res::Res;
 
@@ -41,17 +41,17 @@ impl<'a> AdtInfo<'a> {
     /// not yet assign `DefId`s to generic type parameters. Once parameter
     /// references are represented in HIR, this will be extended to
     /// `Point<T, U>`.
-    pub fn self_ty(&self) -> Ty {
+    pub fn self_ty(&self, ctx: &mut DeriveContext<'_, '_>) -> TyId {
         let span = self.ident.span();
-        Ty {
-            kind: crate::hir_ty::TyKind::Path {
+        ctx.ctx.crate_hir.alloc_ty(
+            crate::hir_ty::Ty::Path {
                 res: Res::Def {
                     def_id: self.def_id,
                 },
                 args: vec![],
             },
             span,
-        }
+        )
     }
 }
 
@@ -144,11 +144,6 @@ impl<'a, 'b: 'a> DeriveContext<'a, 'b> {
     /// Record a derive error.
     pub fn error(&mut self, err: DeriveError) {
         self.ctx.error(err.into());
-    }
-
-    /// Allocate a fresh `HirId`.
-    pub fn next_hir_id(&mut self) -> crate::ids::HirId {
-        self.ctx.next_hir_id()
     }
 
     /// Allocate a fresh synthetic `DefId` for a compiler-generated item.

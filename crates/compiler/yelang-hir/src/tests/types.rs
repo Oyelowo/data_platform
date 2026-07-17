@@ -1,7 +1,7 @@
 //! Exhaustive tests for AST type -> HIR type lowering.
 
 use crate::hir::ItemKind;
-use crate::hir_ty::{TyKind, UtilityKind};
+use crate::hir_ty::{Ty, UtilityKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
@@ -24,7 +24,8 @@ fn lower_named_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::Path { .. }));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::Path { .. }));
 }
 
 #[test]
@@ -34,7 +35,8 @@ fn lower_generic_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::Path { .. }));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::Path { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -48,8 +50,9 @@ fn lower_tuple_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Tuple { tys } => assert_eq!(tys.len(), 2),
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Tuple { tys } => assert_eq!(tys.len(), 2),
         other => panic!("expected tuple type, got {:?}", other),
     }
 }
@@ -65,7 +68,8 @@ fn lower_array_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::Array { .. }));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::Array { .. }));
 }
 
 #[test]
@@ -75,7 +79,8 @@ fn lower_slice_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::Slice { .. }));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::Slice { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -89,8 +94,9 @@ fn lower_ref_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Ref { mutability, .. } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Ref { mutability, .. } => {
             assert!(matches!(mutability, yelang_ast::Mutability::Immutable));
         }
         other => panic!("expected ref type, got {:?}", other),
@@ -104,8 +110,9 @@ fn lower_mut_ref_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Ref { mutability, .. } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Ref { mutability, .. } => {
             assert!(matches!(mutability, yelang_ast::Mutability::Mutable));
         }
         other => panic!("expected mut ref type, got {:?}", other),
@@ -119,8 +126,9 @@ fn lower_const_raw_ptr_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::RawPtr { mutability, .. } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::RawPtr { mutability, .. } => {
             assert!(matches!(mutability, yelang_ast::Mutability::Immutable));
         }
         other => panic!("expected raw pointer type, got {:?}", other),
@@ -134,8 +142,9 @@ fn lower_mut_raw_ptr_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::RawPtr { mutability, .. } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::RawPtr { mutability, .. } => {
             assert!(matches!(mutability, yelang_ast::Mutability::Mutable));
         }
         other => panic!("expected raw pointer type, got {:?}", other),
@@ -153,7 +162,8 @@ fn lower_fn_ptr_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::FnPtr { .. }));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::FnPtr { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -167,10 +177,12 @@ fn lower_forall_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::ForAll { params, ty } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::ForAll { params, ty } => {
             assert_eq!(params.len(), 1);
-            assert!(matches!(ty.kind, TyKind::FnPtr { .. }));
+            let inner = crate_hir.tys.get(*ty).unwrap();
+            assert!(matches!(inner, Ty::FnPtr { .. }));
         }
         other => panic!("expected forall type, got {:?}", other),
     }
@@ -187,8 +199,9 @@ fn lower_literal_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::TypeLit { variants } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::TypeLit { variants } => {
             assert_eq!(variants.len(), 1);
         }
         other => panic!("expected literal type, got {:?}", other),
@@ -206,8 +219,9 @@ fn lower_structural_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::AnonStruct { fields } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::AnonStruct { fields } => {
             assert_eq!(fields.len(), 2);
         }
         other => panic!("expected anon struct type, got {:?}", other),
@@ -225,8 +239,9 @@ fn lower_union_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Union { tys } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Union { tys } => {
             assert_eq!(tys.len(), 3);
         }
         other => panic!("expected union type, got {:?}", other),
@@ -244,8 +259,9 @@ fn lower_return_type_utility() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Utility { kind, args } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Utility { kind, args } => {
             assert_eq!(*kind, UtilityKind::ReturnType);
             assert_eq!(args.len(), 1);
         }
@@ -260,8 +276,9 @@ fn lower_parameters_utility() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Utility { kind, args } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Utility { kind, args } => {
             assert_eq!(*kind, UtilityKind::Params);
             assert_eq!(args.len(), 1);
         }
@@ -276,8 +293,9 @@ fn lower_pick_utility() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Utility { kind, args } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Utility { kind, args } => {
             assert_eq!(*kind, UtilityKind::Pick);
             assert_eq!(args.len(), 2);
         }
@@ -292,8 +310,9 @@ fn lower_omit_utility() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    match &sig.inputs[0].kind {
-        TyKind::Utility { kind, args } => {
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    match ty {
+        Ty::Utility { kind, args } => {
             assert_eq!(*kind, UtilityKind::Omit);
             assert_eq!(args.len(), 2);
         }
@@ -312,7 +331,8 @@ fn lower_impl_trait_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.output.kind, TyKind::ImplTrait { .. }));
+    let ty = crate_hir.tys.get(sig.output).unwrap();
+    assert!(matches!(ty, Ty::ImplTrait { .. }));
 }
 
 #[test]
@@ -322,7 +342,8 @@ fn lower_dyn_trait_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::DynTrait { .. }));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::DynTrait { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +357,8 @@ fn lower_infer_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
-    assert!(matches!(sig.inputs[0].kind, TyKind::Infer));
+    let ty = crate_hir.tys.get(sig.inputs[0]).unwrap();
+    assert!(matches!(ty, Ty::Infer));
 }
 
 #[test]
@@ -346,8 +368,9 @@ fn lower_never_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
+    let ty = crate_hir.tys.get(sig.output).unwrap();
     // Never is lowered to empty tuple for now
-    assert!(matches!(sig.output.kind, TyKind::Tuple { .. }));
+    assert!(matches!(ty, Ty::Tuple { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +410,8 @@ fn lower_hrtb_where_predicate() {
     let pred = wc.predicates.first().expect("expected predicate");
     match pred {
         crate::hir::WherePredicate::TraitBound { ty, .. } => {
-            assert!(matches!(ty.kind, TyKind::ForAll { .. }));
+            let ty_node = crate_hir.tys.get(*ty).unwrap();
+            assert!(matches!(ty_node, Ty::ForAll { .. }));
         }
         other => panic!("expected trait bound, got {:?}", other),
     }

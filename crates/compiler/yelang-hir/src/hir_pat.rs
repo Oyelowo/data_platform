@@ -4,27 +4,19 @@ use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
 use crate::hir::Lit;
-use crate::ids::HirId;
+use crate::ids::PatId;
 use crate::res::Res;
-
-/// A pattern node.
-#[derive(Debug, Clone)]
-pub struct Pat {
-    pub hir_id: HirId,
-    pub kind: PatKind,
-    pub span: Span,
-}
 
 /// Kinds of patterns.
 #[derive(Debug, Clone)]
-pub enum PatKind {
+pub enum Pat {
     /// `_`
     Wild,
     /// Variable binding, optionally with a sub-pattern.
     Binding {
         mode: BindingMode,
         name: Symbol,
-        subpat: Option<Box<Pat>>,
+        subpat: Option<PatId>,
     },
     /// Struct pattern: `Point { x, y }`
     Struct {
@@ -33,26 +25,26 @@ pub enum PatKind {
         rest: bool,
     },
     /// Tuple pattern: `(a, b)`
-    Tuple { pats: Vec<Pat> },
+    Tuple { pats: Vec<PatId> },
     /// Tuple-struct pattern: `Some(x)`
-    TupleStruct { res: Res, pats: Vec<Pat> },
+    TupleStruct { res: Res, pats: Vec<PatId> },
     /// Path pattern (enum variant without data, or constant).
     Path { res: Res },
     /// Literal pattern.
     Lit { lit: Lit },
     /// Range pattern.
     Range {
-        start: Option<Box<Pat>>,
-        end: Option<Box<Pat>>,
+        start: Option<PatId>,
+        end: Option<PatId>,
         end_inclusive: bool,
     },
     /// Or pattern: `A | B`
-    Or { pats: Vec<Pat> },
+    Or { pats: Vec<PatId> },
     /// Slice pattern: `[a, .., b]`
     Slice {
-        prefix: Vec<Pat>,
-        middle: Option<Box<Pat>>,
-        suffix: Vec<Pat>,
+        prefix: Vec<PatId>,
+        middle: Option<PatId>,
+        suffix: Vec<PatId>,
     },
     /// Error recovery.
     Err,
@@ -69,7 +61,7 @@ pub enum BindingMode {
 #[derive(Debug, Clone)]
 pub struct FieldPat {
     pub ident: crate::hir::Ident,
-    pub pat: Pat,
+    pub pat: PatId,
     pub is_shorthand: bool,
     pub span: Span,
 }

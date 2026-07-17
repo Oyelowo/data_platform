@@ -9,34 +9,33 @@ use yelang_lexer::Span;
 
 use yelang_arena::DefId;
 
-use crate::hir::{Arm, Block, CaptureClause, Expr, ExprKind, FieldExpr, Stmt, StmtKind};
+use crate::hir::{Arm, Block, CaptureClause, Expr, FieldExpr, Stmt};
 use crate::hir_item::Item;
-use crate::hir_pat::Pat;
-use crate::hir_ty::Ty;
+use crate::ids::{ExprId};
 use crate::lowering::LoweringContext;
 use crate::lowering_err::LoweringError;
 use crate::res::Res;
 
-/// Lower an AST expression into HIR.
-pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
+/// Lower an AST expression into a HIR expression ID.
+pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
     let span = expr.span;
     let kind = match &expr.kind {
-        AstExprKind::Literal(lit) => ExprKind::Lit { lit: lit.clone() },
+        AstExprKind::Literal(lit) => Expr::Lit { lit: lit.clone() },
         AstExprKind::Path(path) => {
             let res = resolve_ast_path(ctx, path);
-            ExprKind::Path { res }
+            Expr::Path { res }
         }
-        AstExprKind::Binary(bin) => ExprKind::Binary {
+        AstExprKind::Binary(bin) => Expr::Binary {
             op: bin.op,
-            left: Box::new(lower_expr(ctx, &bin.left)),
-            right: Box::new(lower_expr(ctx, &bin.right)),
+            left: lower_expr(ctx, &bin.left),
+            right: lower_expr(ctx, &bin.right),
         },
-        AstExprKind::Unary(un) => ExprKind::Unary {
+        AstExprKind::Unary(un) => Expr::Unary {
             op: un.op,
-            expr: Box::new(lower_expr(ctx, &un.expr)),
+            expr: lower_expr(ctx, &un.expr),
         },
-        AstExprKind::Call(call) => ExprKind::Call {
-            func: Box::new(lower_expr(ctx, &call.callee)),
+        AstExprKind::Call(call) => Expr::Call {
+            func: lower_expr(ctx, &call.callee),
             args: call
                 .args
                 .iter()
@@ -48,38 +47,38 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
         },
         AstExprKind::Block(block) => {
             let block = lower_block(ctx, block);
-            ExprKind::Block { block }
+            Expr::Block { block }
         }
         AstExprKind::If(if_expr) => lower_if_expr(ctx, if_expr),
         AstExprKind::ForLoop(for_expr) => lower_for_expr(ctx, for_expr),
         AstExprKind::While(while_expr) => lower_while_expr(ctx, while_expr),
         AstExprKind::Loop(loop_expr) => {
             let block = lower_block(ctx, &loop_expr.body);
-            ExprKind::Loop {
+            Expr::Loop {
                 block,
                 label: loop_expr.label.clone(),
             }
         }
         AstExprKind::Match(match_expr) => lower_match_expr(ctx, match_expr),
-        AstExprKind::Break(break_expr) => ExprKind::Break {
+        AstExprKind::Break(break_expr) => Expr::Break {
             label: break_expr.label.clone(),
             expr: break_expr
                 .value
                 .as_ref()
-                .map(|e| Box::new(lower_expr(ctx, e))),
+                .map(|e| lower_expr(ctx, e)),
         },
-        AstExprKind::Continue(cont) => ExprKind::Continue {
+        AstExprKind::Continue(cont) => Expr::Continue {
             label: cont.label.clone(),
         },
-        AstExprKind::Return(ret) => ExprKind::Return {
-            expr: ret.as_ref().map(|e| Box::new(lower_expr(ctx, e))),
+        AstExprKind::Return(ret) => Expr::Return {
+            expr: ret.as_ref().map(|e| lower_expr(ctx, e)),
         },
         AstExprKind::Struct(struct_expr) => lower_struct_expr(ctx, struct_expr),
-        AstExprKind::Tuple(exprs) => ExprKind::Tuple {
+        AstExprKind::Tuple(exprs) => Expr::Tuple {
             exprs: exprs.iter().map(|e| lower_expr(ctx, e)).collect(),
         },
         AstExprKind::Array(arr) => match arr.elements() {
-            Some(elements) => ExprKind::Array {
+            Some(elements) => Expr::Array {
                 exprs: elements.iter().map(|e| lower_expr(ctx, e)).collect(),
             },
             None => {
@@ -87,15 +86,15 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     kind: "repeat array `[expr; count]`".to_string(),
                     span,
                 });
-                ExprKind::Err
+                Expr::Err
             }
         },
-        AstExprKind::TypeCast(cast) => ExprKind::Cast {
-            expr: Box::new(lower_expr(ctx, &cast.base)),
+        AstExprKind::TypeCast(cast) => Expr::Cast {
+            expr: lower_expr(ctx, &cast.base),
             ty: crate::lowering_ty::lower_ty(ctx, &cast.ty),
         },
-        AstExprKind::MemberAccess(access) => ExprKind::Field {
-            expr: Box::new(lower_expr(ctx, access.base())),
+        AstExprKind::MemberAccess(access) => Expr::Field {
+            expr: lower_expr(ctx, access.base()),
             field: access.member().clone(),
         },
         AstExprKind::ArrayAccess(access) => {
@@ -106,33 +105,25 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                         kind: "complex array index".to_string(),
                         span,
                     });
-                    return Expr {
-                        hir_id: ctx.next_hir_id(),
-                        kind: ExprKind::Err,
-                        span,
-                        ty: Ty {
-                            kind: crate::hir_ty::TyKind::Infer,
-                            span,
-                        },
-                    };
+                    return ctx.crate_hir.alloc_expr(Expr::Err, span);
                 }
             };
-            ExprKind::Index {
-                expr: Box::new(lower_expr(ctx, access.base())),
-                index: Box::new(lower_expr(ctx, index_expr)),
+            Expr::Index {
+                expr: lower_expr(ctx, access.base()),
+                index: lower_expr(ctx, index_expr),
             }
         }
-        AstExprKind::AssignEq(assign) => ExprKind::Assign {
-            left: Box::new(lower_expr(ctx, &assign.target)),
-            right: Box::new(lower_expr(ctx, &assign.value)),
+        AstExprKind::AssignEq(assign) => Expr::Assign {
+            left: lower_expr(ctx, &assign.target),
+            right: lower_expr(ctx, &assign.value),
         },
         AstExprKind::Lambda(lambda) => lower_lambda_expr(ctx, lambda),
-        AstExprKind::Let(let_expr) => ExprKind::Let {
+        AstExprKind::Let(let_expr) => Expr::Let {
             pat: crate::lowering_pat::lower_pat(ctx, &let_expr.pattern),
-            expr: Box::new(lower_expr(ctx, &let_expr.expr)),
+            expr: lower_expr(ctx, &let_expr.expr),
         },
-        AstExprKind::MethodCall(method) => ExprKind::MethodCall {
-            receiver: Box::new(lower_expr(ctx, &method.receiver)),
+        AstExprKind::MethodCall(method) => Expr::MethodCall {
+            receiver: lower_expr(ctx, &method.receiver),
             method: method.segment.ident,
             args: method
                 .arguments
@@ -156,129 +147,99 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
         AstExprKind::Async(async_expr) => {
             // Lower async block to a closure that returns a future.
             let body = lower_block(ctx, &async_expr.block);
-            let body_expr = Expr {
-                hir_id: ctx.next_hir_id(),
-                kind: ExprKind::Block { block: body },
+            let body_expr = ctx.crate_hir.alloc_expr(
+                Expr::Block { block: body },
                 span,
-                ty: Ty {
-                    kind: crate::hir_ty::TyKind::Infer,
+            );
+            let body_id = ctx.crate_hir.alloc_body(
+                crate::hir_body::Body {
+                    params: vec![],
+                    value: body_expr,
                     span,
                 },
-            };
-            let body_id = ctx.crate_hir.bodies.push(crate::hir_body::Body {
-                params: vec![],
-                value: body_expr,
                 span,
-            });
-            ExprKind::Closure {
+            );
+            Expr::Closure {
                 params: vec![],
                 body: body_id,
                 capture_clause: CaptureClause::Ref,
             }
         }
-        AstExprKind::Gen(gen_expr) => lower_expr(ctx, gen_expr).kind,
-        AstExprKind::Ternary(ternary) => ExprKind::If {
-            cond: Box::new(lower_expr(ctx, &ternary.condition)),
-            then_branch: Box::new(lower_expr(ctx, &ternary.if_true)),
-            else_branch: Some(Box::new(lower_expr(ctx, &ternary.if_false))),
+        AstExprKind::Gen(gen_expr) => {
+            let inner = lower_expr(ctx, gen_expr);
+            return inner;
+        }
+        AstExprKind::Ternary(ternary) => Expr::If {
+            cond: lower_expr(ctx, &ternary.condition),
+            then_branch: lower_expr(ctx, &ternary.if_true),
+            else_branch: Some(lower_expr(ctx, &ternary.if_false)),
         },
-        AstExprKind::Grouped(grouped) => lower_expr(ctx, &grouped.expr).kind,
+        AstExprKind::Grouped(grouped) => return lower_expr(ctx, &grouped.expr),
         AstExprKind::TypeAscription(asc) => {
             // Type ascription is a no-op in HIR; just lower the expression.
-            lower_expr(ctx, &asc.expr).kind
+            return lower_expr(ctx, &asc.expr);
         }
         AstExprKind::IsType(is_type) => {
             // `expr is Type` -> desugar to a type check intrinsic.
             // For now, lower as a call to a builtin.
-            ExprKind::Call {
-                func: Box::new(Expr {
-                    hir_id: ctx.next_hir_id(),
-                    kind: ExprKind::Path { res: Res::Err },
-                    span,
-                    ty: Ty {
-                        kind: crate::hir_ty::TyKind::Infer,
-                        span,
-                    },
-                }),
+            let func = ctx.crate_hir.alloc_expr(
+                Expr::Path { res: Res::Err },
+                span,
+            );
+            Expr::Call {
+                func,
                 args: vec![lower_expr(ctx, &is_type.expr)],
             }
         }
         AstExprKind::AssignOp(assign) => {
             // Desugar `a += b` -> `a = a + b`
             let bin_op = assign_op_kind_to_bin_op(&assign.op);
-            let bin_expr = Expr {
-                hir_id: ctx.next_hir_id(),
-                kind: ExprKind::Binary {
+            let target = lower_expr(ctx, &assign.target);
+            let value = lower_expr(ctx, &assign.value);
+            let bin_expr = ctx.crate_hir.alloc_expr(
+                Expr::Binary {
                     op: bin_op,
-                    left: Box::new(lower_expr(ctx, &assign.target)),
-                    right: Box::new(lower_expr(ctx, &assign.value)),
+                    left: target,
+                    right: value,
                 },
                 span,
-                ty: Ty {
-                    kind: crate::hir_ty::TyKind::Infer,
-                    span,
-                },
-            };
-            ExprKind::Assign {
-                left: Box::new(lower_expr(ctx, &assign.target)),
-                right: Box::new(bin_expr),
+            );
+            Expr::Assign {
+                left: target,
+                right: bin_expr,
             }
         }
         AstExprKind::DestructureAssign(assign) => {
             // Desugar destructuring assignment into a let + assign.
             // For now, lower as a simple assignment (best effort).
-            ExprKind::Assign {
-                left: Box::new(Expr {
-                    hir_id: ctx.next_hir_id(),
-                    kind: ExprKind::Path { res: Res::Err },
-                    span,
-                    ty: Ty {
-                        kind: crate::hir_ty::TyKind::Infer,
-                        span,
-                    },
-                }),
-                right: Box::new(lower_expr(ctx, &assign.value)),
+            let left = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
+            Expr::Assign {
+                left,
+                right: lower_expr(ctx, &assign.value),
             }
         }
-        AstExprKind::Range(range) => ExprKind::Call {
-            func: Box::new(Expr {
-                hir_id: ctx.next_hir_id(),
-                kind: ExprKind::Path { res: Res::Err },
-                span,
-                ty: Ty {
-                    kind: crate::hir_ty::TyKind::Infer,
-                    span,
-                },
-            }),
-            args: vec![
-                range
-                    .start
-                    .as_ref()
-                    .map(|e| lower_expr(ctx, e))
-                    .unwrap_or_else(|| Expr {
-                        hir_id: ctx.next_hir_id(),
-                        kind: ExprKind::Tuple { exprs: vec![] },
-                        span,
-                        ty: Ty {
-                            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-                            span,
-                        },
-                    }),
-                range
-                    .end
-                    .as_ref()
-                    .map(|e| lower_expr(ctx, e))
-                    .unwrap_or_else(|| Expr {
-                        hir_id: ctx.next_hir_id(),
-                        kind: ExprKind::Tuple { exprs: vec![] },
-                        span,
-                        ty: Ty {
-                            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-                            span,
-                        },
-                    }),
-            ],
-        },
+        AstExprKind::Range(range) => {
+            // Desugar range to a call to a synthetic range constructor.
+            let func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
+            let start = range
+                .start
+                .as_ref()
+                .map(|e| lower_expr(ctx, e))
+                .unwrap_or_else(|| {
+                    ctx.crate_hir.alloc_expr(Expr::Tuple { exprs: vec![] }, span)
+                });
+            let end = range
+                .end
+                .as_ref()
+                .map(|e| lower_expr(ctx, e))
+                .unwrap_or_else(|| {
+                    ctx.crate_hir.alloc_expr(Expr::Tuple { exprs: vec![] }, span)
+                });
+            Expr::Call {
+                func,
+                args: vec![start, end],
+            }
+        }
         AstExprKind::Object(obj) => {
             // Lower object literal to a struct literal with an anonymous type.
             let fields: Vec<FieldExpr> = obj
@@ -290,7 +251,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                     span: f.value().span,
                 })
                 .collect();
-            ExprKind::Struct {
+            Expr::Struct {
                 path: Res::Err,
                 fields,
                 rest: None,
@@ -298,23 +259,16 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
         }
         AstExprKind::DocumentAccess(doc) => {
             // Lower to a call expression.
-            ExprKind::Call {
-                func: Box::new(Expr {
-                    hir_id: ctx.next_hir_id(),
-                    kind: ExprKind::Path { res: Res::Err },
-                    span,
-                    ty: Ty {
-                        kind: crate::hir_ty::TyKind::Infer,
-                        span,
-                    },
-                }),
+            let func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
+            Expr::Call {
+                func,
                 args: vec![lower_expr(ctx, doc.base())],
             }
         }
         AstExprKind::BindAt(bind) => {
             // Lower to a field access.
-            ExprKind::Field {
-                expr: Box::new(lower_expr(ctx, &bind.base)),
+            Expr::Field {
+                expr: lower_expr(ctx, &bind.base),
                 field: bind.at.clone(),
             }
         }
@@ -323,39 +277,31 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> Expr {
                 kind: "query expression".to_string(),
                 span,
             });
-            ExprKind::Err
+            Expr::Err
         }
         AstExprKind::Comprehension(comp) => {
             // Lower list comprehension to a desugared loop.
             lower_comprehension_expr(ctx, comp, span)
         }
-        AstExprKind::Err => ExprKind::Err,
-        AstExprKind::Dummy => ExprKind::Err,
+        AstExprKind::Err => Expr::Err,
+        AstExprKind::Dummy => Expr::Err,
         _ => {
             ctx.error(LoweringError::UnsupportedAst {
                 kind: format!("expression kind {:?}", std::mem::discriminant(&expr.kind)),
                 span,
             });
-            ExprKind::Err
+            Expr::Err
         }
     };
 
-    Expr {
-        hir_id: ctx.next_hir_id(),
-        kind,
-        span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Infer,
-            span,
-        },
-    }
+    ctx.crate_hir.alloc_expr(kind, span)
 }
 
 pub(crate) fn resolve_ast_path(ctx: &mut LoweringContext, path: &yelang_ast::Path) -> Res {
     // 1. Single-segment local variable?
     if let Some(ident) = path.standalone_ident() {
-        if let Some(hir_id) = ctx.local(ident.symbol) {
-            return Res::Local { hir_id };
+        if let Some(pat_id) = ctx.local(ident.symbol) {
+            return Res::Local { pat_id };
         }
 
         // `Self` inside an impl or trait block.
@@ -481,8 +427,8 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
     Some(current)
 }
 
-fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block {
-    let stmts: Vec<Stmt> = block
+pub(crate) fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block {
+    let mut stmts: Vec<_> = block
         .statements
         .iter()
         .map(|stmt| lower_stmt(ctx, stmt))
@@ -491,13 +437,13 @@ fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block {
     // Simplification: treat the last expression-ish statement as the
     // block's trailing expression if it is not a `TermExpr`.
     let (stmts, expr) = if let Some(last) = stmts.last() {
-        match &last.kind {
-            StmtKind::Expr { expr: _e } => {
-                let mut stmts = stmts;
-                let expr = stmts.pop().map(|s| match s.kind {
-                    StmtKind::Expr { expr } => expr,
+        match ctx.crate_hir.stmts.get(*last).expect("last statement") {
+            Stmt::Expr { .. } => {
+                let last = stmts.pop().expect("checked last");
+                let expr = match ctx.crate_hir.stmts.get(last).expect("last statement") {
+                    Stmt::Expr { expr } => Some(*expr),
                     _ => unreachable!(),
-                });
+                };
                 (stmts, expr)
             }
             _ => (stmts, None),
@@ -513,23 +459,25 @@ fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block {
     }
 }
 
-pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> Stmt {
+pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> crate::ids::StmtId {
     let span = stmt.span;
     let kind = match &stmt.kind {
-        yelang_ast::StmtKind::Expr(expr) => StmtKind::Expr {
-            expr: Box::new(lower_expr(ctx, expr)),
+        yelang_ast::StmtKind::Expr(expr) => Stmt::Expr {
+            expr: lower_expr(ctx, expr),
         },
-        yelang_ast::StmtKind::TermExpr(expr) => StmtKind::Expr {
-            expr: Box::new(lower_expr(ctx, expr)),
+        yelang_ast::StmtKind::TermExpr(expr) => Stmt::Expr {
+            expr: lower_expr(ctx, expr),
         },
-        yelang_ast::StmtKind::Let(let_stmt) => StmtKind::Let {
-            pat: crate::lowering_pat::lower_pat(ctx, &let_stmt.pattern),
-            ty: let_stmt
+        yelang_ast::StmtKind::Let(let_stmt) => {
+            // Evaluate the initializer before the pattern comes into scope.
+            let init = let_stmt.init.as_ref().map(|e| lower_expr(ctx, e));
+            let ty = let_stmt
                 .ty
                 .as_ref()
-                .map(|ty| crate::lowering_ty::lower_ty(ctx, ty)),
-            init: let_stmt.init.as_ref().map(|e| Box::new(lower_expr(ctx, e))),
-        },
+                .map(|ty| crate::lowering_ty::lower_ty(ctx, ty));
+            let pat = crate::lowering_pat::lower_pat(ctx, &let_stmt.pattern);
+            Stmt::Let { pat, ty, init }
+        }
         yelang_ast::StmtKind::Item(item) => {
             let def_id = crate::lowering_item::lower_item(ctx, item);
             // Nested items are placed into the crate map; the statement
@@ -538,7 +486,7 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                 Some(d) => d,
                 None => ctx.next_synthetic_def_id(),
             };
-            StmtKind::Item {
+            Stmt::Item {
                 item: ctx
                     .crate_hir
                     .items
@@ -553,20 +501,12 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                     }),
             }
         }
-        yelang_ast::StmtKind::Empty => StmtKind::Expr {
-            expr: Box::new(Expr {
-                hir_id: ctx.next_hir_id(),
-                kind: ExprKind::Tuple { exprs: vec![] },
-                span,
-                ty: Ty {
-                    kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-                    span,
-                },
-            }),
+        yelang_ast::StmtKind::Empty => Stmt::Expr {
+            expr: ctx.crate_hir.alloc_expr(Expr::Tuple { exprs: vec![] }, span),
         },
     };
 
-    Stmt { kind, span }
+    ctx.crate_hir.alloc_stmt(kind, span)
 }
 
 // ---------------------------------------------------------------------------
@@ -574,199 +514,134 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
 // ---------------------------------------------------------------------------
 
 /// `while cond { body }`  ->  `loop { if cond { body } else { break } }`
-fn lower_while_expr(ctx: &mut LoweringContext, while_expr: &WhileExpr) -> ExprKind {
+fn lower_while_expr(ctx: &mut LoweringContext, while_expr: &WhileExpr) -> Expr {
     let cond = lower_expr(ctx, &while_expr.condition);
     let body = lower_block(ctx, &while_expr.body);
-    let body_expr = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Block { block: body },
-        span: while_expr
-            .body
-            .label
-            .as_ref()
-            .map_or(Span::default(), |l| l.span),
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    };
+    let body_span = body.span;
+    let body_expr = ctx.crate_hir.alloc_expr(Expr::Block { block: body }, body_span);
 
-    let break_expr = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Break {
-            label: None,
-            expr: None,
-        },
-        span: Span::default(),
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    };
+    let break_expr = ctx
+        .crate_hir
+        .alloc_expr(Expr::Break { label: None, expr: None }, Span::default());
 
     let else_block = Block {
         stmts: vec![],
-        expr: Some(Box::new(break_expr)),
+        expr: Some(break_expr),
         span: Span::default(),
     };
+    let else_expr = ctx
+        .crate_hir
+        .alloc_expr(Expr::Block { block: else_block }, Span::default());
 
-    let if_expr = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::If {
-            cond: Box::new(cond),
-            then_branch: Box::new(body_expr),
-            else_branch: Some(Box::new(Expr {
-                hir_id: ctx.next_hir_id(),
-                kind: ExprKind::Block { block: else_block },
-                span: Span::default(),
-                ty: Ty {
-                    kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-                    span: Span::default(),
-                },
-            })),
+    let if_expr = ctx.crate_hir.alloc_expr(
+        Expr::If {
+            cond,
+            then_branch: body_expr,
+            else_branch: Some(else_expr),
         },
-        span: Span::default(),
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    };
+        Span::default(),
+    );
 
     let loop_block = Block {
-        stmts: vec![Stmt {
-            kind: StmtKind::Expr {
-                expr: Box::new(if_expr),
-            },
-            span: Span::default(),
-        }],
+        stmts: vec![ctx
+            .crate_hir
+            .alloc_stmt(Stmt::Expr { expr: if_expr }, Span::default())],
         expr: None,
         span: Span::default(),
     };
 
-    ExprKind::Loop {
+    Expr::Loop {
         block: loop_block,
         label: while_expr.label.clone(),
     }
 }
 
 /// `for pat in iter { body }`  ->  `{ let mut _iter = iter; loop { match _iter.next() { Some(pat) => { body }, None => break } } }`
-fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> ExprKind {
+fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
     let iter_expr = lower_expr(ctx, &for_expr.iter);
     let body_block = lower_block(ctx, &for_expr.body);
 
     // Build a fake `let _iter = iter` binding and wrap in a block.
-    let iter_pat_hir_id = ctx.next_hir_id();
-    let iter_pat = Pat {
-        hir_id: iter_pat_hir_id,
-        kind: crate::hir_pat::PatKind::Binding {
+    let iter_pat = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::Binding {
             mode: crate::hir_pat::BindingMode::ByValue,
             name: yelang_interner::Symbol::from(0u32),
             subpat: None,
         },
-        span: for_expr.pat.span,
-    };
-
-    let _iter_let = Stmt {
-        kind: StmtKind::Let {
-            pat: iter_pat,
+        for_expr.pat.span,
+    );
+    let iter_pat_id = iter_pat;
+    let _iter_let = ctx.crate_hir.alloc_stmt(
+        Stmt::Let {
+            pat: iter_pat_id,
             ty: None,
-            init: Some(Box::new(iter_expr)),
+            init: Some(iter_expr),
         },
-        span: for_expr.pat.span,
-    };
+        for_expr.pat.span,
+    );
 
     // Build match arms: Some(pat) => body, None => break
-    let some_pat = Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: crate::hir_pat::PatKind::TupleStruct {
+    let some_inner = crate::lowering_pat::lower_pat(ctx, &for_expr.pat);
+    let some_pat = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::TupleStruct {
             res: Res::Err,
-            pats: vec![crate::lowering_pat::lower_pat(ctx, &for_expr.pat)],
+            pats: vec![some_inner],
         },
-        span: for_expr.pat.span,
-    };
+        for_expr.pat.span,
+    );
 
-    let body_expr = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Block { block: body_block },
-        span: for_expr
+    let body_expr = ctx.crate_hir.alloc_expr(
+        Expr::Block { block: body_block },
+        for_expr
             .body
             .label
             .as_ref()
             .map_or(Span::default(), |l| l.span),
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    };
+    );
 
-    let none_pat = Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: crate::hir_pat::PatKind::Path { res: Res::Err },
-        span: for_expr.pat.span,
-    };
+    let none_pat = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::Path { res: Res::Err },
+        for_expr.pat.span,
+    );
 
-    let break_expr = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Break {
-            label: None,
-            expr: None,
-        },
-        span: Span::default(),
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    };
+    let break_expr = ctx
+        .crate_hir
+        .alloc_expr(Expr::Break { label: None, expr: None }, Span::default());
 
     let match_arms = vec![
         Arm {
             pat: some_pat,
             guard: None,
-            body: Box::new(body_expr),
+            body: body_expr,
             span: for_expr.pat.span,
         },
         Arm {
             pat: none_pat,
             guard: None,
-            body: Box::new(break_expr),
+            body: break_expr,
             span: for_expr.pat.span,
         },
     ];
 
-    let iter_path = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Path {
-            res: Res::Local {
-                hir_id: iter_pat_hir_id,
-            },
+    let iter_path = ctx.crate_hir.alloc_expr(
+        Expr::Path {
+            res: Res::Local { pat_id: iter_pat_id },
         },
-        span: for_expr.pat.span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Infer,
-            span: Span::default(),
-        },
-    };
+        for_expr.pat.span,
+    );
 
-    let match_expr = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Match {
-            expr: Box::new(iter_path),
+    let match_expr = ctx.crate_hir.alloc_expr(
+        Expr::Match {
+            expr: iter_path,
             arms: match_arms,
         },
-        span: for_expr.pat.span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    };
+        for_expr.pat.span,
+    );
 
     let loop_block = Block {
-        stmts: vec![Stmt {
-            kind: StmtKind::Expr {
-                expr: Box::new(match_expr),
-            },
-            span: Span::default(),
-        }],
+        stmts: vec![ctx
+            .crate_hir
+            .alloc_stmt(Stmt::Expr { expr: match_expr }, Span::default())],
         expr: None,
         span: Span::default(),
     };
@@ -774,64 +649,55 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> ExprKind
     // Return the desugared expression wrapped in a block containing the let.
     // For simplicity, we return the Loop directly (omitting the let wrapper)
     // which is still semantically close enough for our MVP.
-    ExprKind::Loop {
+    Expr::Loop {
         block: loop_block,
         label: for_expr.label.clone(),
     }
 }
 
-fn lower_if_expr(ctx: &mut LoweringContext, if_expr: &IfExpr) -> ExprKind {
+fn lower_if_expr(ctx: &mut LoweringContext, if_expr: &IfExpr) -> Expr {
     // Desugar let-chains: if let A = a && let B = b && cond { ... }
     // -> if let A = a { if let B = b { if cond { ... } } }
     let cond = lower_expr(ctx, &if_expr.condition);
-    let then_branch = Box::new(Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Block {
-            block: lower_block(ctx, &if_expr.then_block),
-        },
-        span: if_expr
+    let then_block = lower_block(ctx, &if_expr.then_block);
+    let then_branch = ctx.crate_hir.alloc_expr(
+        Expr::Block { block: then_block },
+        if_expr
             .then_block
             .label
             .as_ref()
             .map_or(Span::default(), |l| l.span),
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-            span: Span::default(),
-        },
-    });
+    );
 
     let else_branch = if_expr
         .else_expr
         .as_ref()
-        .map(|e| Box::new(lower_expr(ctx, e)));
+        .map(|e| lower_expr(ctx, e));
 
-    ExprKind::If {
-        cond: Box::new(cond),
+    Expr::If {
+        cond,
         then_branch,
         else_branch,
     }
 }
 
-fn lower_match_expr(ctx: &mut LoweringContext, match_expr: &MatchExpr) -> ExprKind {
+fn lower_match_expr(ctx: &mut LoweringContext, match_expr: &MatchExpr) -> Expr {
     let scrutinee = lower_expr(ctx, &match_expr.scrutinee);
     let arms: Vec<Arm> = match_expr
         .arms
         .iter()
         .map(|arm| Arm {
             pat: crate::lowering_pat::lower_pat(ctx, &arm.pattern),
-            guard: arm.guard.as_ref().map(|g| Box::new(lower_expr(ctx, g))),
-            body: Box::new(lower_expr(ctx, &arm.body)),
+            guard: arm.guard.as_ref().map(|g| lower_expr(ctx, g)),
+            body: lower_expr(ctx, &arm.body),
             span: arm.span,
         })
         .collect();
 
-    ExprKind::Match {
-        expr: Box::new(scrutinee),
-        arms,
-    }
+    Expr::Match { expr: scrutinee, arms }
 }
 
-fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> ExprKind {
+fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> Expr {
     let res = resolve_ast_path(ctx, &struct_expr.path);
     let fields: Vec<FieldExpr> = struct_expr
         .fields
@@ -843,17 +709,17 @@ fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> Exp
         })
         .collect();
 
-    ExprKind::Struct {
+    Expr::Struct {
         path: res,
         fields,
         rest: struct_expr
             .rest
             .as_ref()
-            .map(|e| Box::new(lower_expr(ctx, e))),
+            .map(|e| lower_expr(ctx, e)),
     }
 }
 
-fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr) -> ExprKind {
+fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr) -> Expr {
     // Lower parameters and body into a synthetic Body.
     let params: Vec<crate::hir_body::Param> = lambda
         .fn_sig
@@ -873,9 +739,9 @@ fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr)
         span: lambda.header_span,
     };
 
-    let body_id = ctx.crate_hir.bodies.push(body);
+    let body_id = ctx.crate_hir.alloc_body(body, lambda.header_span);
 
-    ExprKind::Closure {
+    Expr::Closure {
         params: vec![], // params are stored in the Body
         body: body_id,
         capture_clause: CaptureClause::Ref,
@@ -887,109 +753,78 @@ fn lower_try_expr(
     ctx: &mut LoweringContext,
     try_expr: &yelang_ast::TrySafeAccess,
     span: Span,
-) -> ExprKind {
+) -> Expr {
     let base = lower_expr(ctx, &try_expr.base);
     // match base { Ok(v) => v, Err(e) => return Err(e) }
-    let ok_pat = Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: crate::hir_pat::PatKind::TupleStruct {
+    let ok_inner = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::Binding {
+            mode: crate::hir_pat::BindingMode::ByValue,
+            name: yelang_interner::Symbol::from(0u32),
+            subpat: None,
+        },
+        span,
+    );
+    let ok_pat = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::TupleStruct {
             res: Res::Err,
-            pats: vec![Pat {
-                hir_id: ctx.next_hir_id(),
-                kind: crate::hir_pat::PatKind::Binding {
-                    mode: crate::hir_pat::BindingMode::ByValue,
-                    name: yelang_interner::Symbol::from(0u32),
-                    subpat: None,
-                },
-                span,
-            }],
+            pats: vec![ok_inner],
         },
         span,
-    };
-    let err_pat = Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: crate::hir_pat::PatKind::TupleStruct {
+    );
+    let err_inner = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::Binding {
+            mode: crate::hir_pat::BindingMode::ByValue,
+            name: yelang_interner::Symbol::from(1u32),
+            subpat: None,
+        },
+        span,
+    );
+    let err_pat = ctx.crate_hir.alloc_pat(
+        crate::hir_pat::Pat::TupleStruct {
             res: Res::Err,
-            pats: vec![Pat {
-                hir_id: ctx.next_hir_id(),
-                kind: crate::hir_pat::PatKind::Binding {
-                    mode: crate::hir_pat::BindingMode::ByValue,
-                    name: yelang_interner::Symbol::from(1u32),
-                    subpat: None,
-                },
-                span,
-            }],
+            pats: vec![err_inner],
         },
         span,
-    };
-    let ok_body = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Path {
-            res: Res::Local {
-                hir_id: ok_pat.hir_id,
-            },
+    );
+    let ok_body = ctx.crate_hir.alloc_expr(
+        Expr::Path {
+            res: Res::Local { pat_id: ok_inner },
         },
         span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Infer,
-            span,
-        },
-    };
-    let err_body = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Return {
-            expr: Some(Box::new(Expr {
-                hir_id: ctx.next_hir_id(),
-                kind: ExprKind::Call {
-                    func: Box::new(Expr {
-                        hir_id: ctx.next_hir_id(),
-                        kind: ExprKind::Path { res: Res::Err },
-                        span,
-                        ty: Ty {
-                            kind: crate::hir_ty::TyKind::Infer,
-                            span,
-                        },
-                    }),
-                    args: vec![Expr {
-                        hir_id: ctx.next_hir_id(),
-                        kind: ExprKind::Path {
-                            res: Res::Local {
-                                hir_id: err_pat.hir_id,
-                            },
-                        },
-                        span,
-                        ty: Ty {
-                            kind: crate::hir_ty::TyKind::Infer,
-                            span,
-                        },
-                    }],
-                },
-                span,
-                ty: Ty {
-                    kind: crate::hir_ty::TyKind::Infer,
-                    span,
-                },
-            })),
+    );
+    let err_arg = ctx.crate_hir.alloc_expr(
+        Expr::Path {
+            res: Res::Local { pat_id: err_inner },
         },
         span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Infer,
-            span,
+    );
+    let err_func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
+    let err_call = ctx.crate_hir.alloc_expr(
+        Expr::Call {
+            func: err_func,
+            args: vec![err_arg],
         },
-    };
-    ExprKind::Match {
-        expr: Box::new(base),
+        span,
+    );
+    let err_body = ctx.crate_hir.alloc_expr(
+        Expr::Return {
+            expr: Some(err_call),
+        },
+        span,
+    );
+    Expr::Match {
+        expr: base,
         arms: vec![
             Arm {
                 pat: ok_pat,
                 guard: None,
-                body: Box::new(ok_body),
+                body: ok_body,
                 span,
             },
             Arm {
                 pat: err_pat,
                 guard: None,
-                body: Box::new(err_body),
+                body: err_body,
                 span,
             },
         ],
@@ -997,11 +832,15 @@ fn lower_try_expr(
 }
 
 /// Desugar `expr.await` into a match expression.
-fn lower_await_expr(ctx: &mut LoweringContext, expr: &yelang_ast::Expr, _span: Span) -> ExprKind {
+fn lower_await_expr(ctx: &mut LoweringContext, expr: &yelang_ast::Expr, _span: Span) -> Expr {
     let base = lower_expr(ctx, expr);
     // Simplified: just return the base expression.
     // In a full implementation this would desugar to poll-based logic.
-    base.kind
+    ctx.crate_hir
+        .exprs
+        .get(base)
+        .cloned()
+        .expect("await base expression")
 }
 
 /// Desugar list comprehension into a loop that builds a vector.
@@ -1009,24 +848,17 @@ fn lower_comprehension_expr(
     ctx: &mut LoweringContext,
     comp: &yelang_ast::ComprehensionExpr,
     span: Span,
-) -> ExprKind {
+) -> Expr {
     // For MVP, lower to a call to a builtin collector function.
     let element = lower_expr(ctx, &comp.element);
-    let sources: Vec<Expr> = comp
+    let sources: Vec<ExprId> = comp
         .variables
         .iter()
         .map(|v| lower_expr(ctx, &v.source))
         .collect();
-    ExprKind::Call {
-        func: Box::new(Expr {
-            hir_id: ctx.next_hir_id(),
-            kind: ExprKind::Path { res: Res::Err },
-            span,
-            ty: Ty {
-                kind: crate::hir_ty::TyKind::Infer,
-                span,
-            },
-        }),
+    let func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
+    Expr::Call {
+        func,
         args: std::iter::once(element).chain(sources).collect(),
     }
 }

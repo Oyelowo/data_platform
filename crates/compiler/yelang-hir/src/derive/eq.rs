@@ -4,7 +4,7 @@ use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
 use crate::derive::helpers::{FieldView, impl_item, iter_fields};
 use crate::hir::Item;
-use crate::hir_ty::TyKind;
+use crate::hir_ty::Ty;
 use yelang_resolve::lang_items::LangItem;
 
 /// Expand `#[derive(Eq)]` for a struct or enum.
@@ -61,7 +61,7 @@ pub fn derive_eq(
         return None;
     }
 
-    let self_ty = adt.self_ty();
+    let self_ty = adt.self_ty(ctx);
     Some(impl_item(ctx, eq_trait, self_ty, vec![]))
 }
 
@@ -83,7 +83,7 @@ fn find_float_field(ctx: &DeriveContext<'_, '_>) -> Option<yelang_interner::Symb
 }
 
 fn find_float_in_fields(
-    fields: &[FieldView<'_>],
+    fields: &[FieldView],
     ctx: &DeriveContext<'_, '_>,
 ) -> Option<yelang_interner::Symbol> {
     for field in fields {
@@ -97,22 +97,23 @@ fn find_float_in_fields(
     None
 }
 
-fn is_float(ty: &crate::hir_ty::Ty, ctx: &crate::derive::context::DeriveContext<'_, '_>) -> bool {
-    if let TyKind::Path {
+fn is_float(ty_id: crate::ids::TyId, ctx: &crate::derive::context::DeriveContext<'_, '_>) -> bool {
+    let ty = ctx.ctx.crate_hir.tys.get(ty_id).expect("field type");
+    if let Ty::Path {
         res: crate::res::Res::PrimTy {
             ty: crate::res::PrimTy::Float(_),
         },
         ..
-    } = &ty.kind
+    } = ty
     {
         return true;
     }
     // Primitives may also be resolved to prelude/type-alias definitions with
     // a float lang item.
-    if let TyKind::Path {
+    if let Ty::Path {
         res: crate::res::Res::Def { def_id },
         ..
-    } = &ty.kind
+    } = ty
     {
         if let Some(def) = ctx.ctx.resolved.definitions.get(*def_id) {
             if let Some(li) = def.lang_item {

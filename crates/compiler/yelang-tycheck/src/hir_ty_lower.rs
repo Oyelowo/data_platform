@@ -4,13 +4,9 @@
  * This module converts them to the interned type representation.
  */
 
-use yelang_arena::DefId;
-use yelang_hir::hir_ty::{
-    AnonField as HirAnonField, Ty as HirTy, TyKind as HirTyKind, UtilityKind as HirUtilityKind,
-};
+use yelang_hir::hir_ty::{Ty as HirTy, UtilityKind as HirUtilityKind};
 use yelang_hir::res::{FloatTy as HirFloatTy, IntTy as HirIntTy, PrimTy, Res};
 use yelang_ty::generic::GenericArg;
-use yelang_ty::interner::Interner;
 use yelang_ty::primitive::{FloatTy, IntTy, UintTy};
 use yelang_ty::ty::{
     AdtDef, AliasTy, AnonField, AnonStructDef, ConstKind, Mutability, Ty, TyKind, TypeAndMut,
@@ -20,16 +16,19 @@ use crate::fn_ctxt::FnCtxt;
 
 /// Lower a HIR type to a canonical type.
 pub fn lower_hir_ty<'tcx>(hir_ty: &HirTy, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
-    lower_hir_ty_kind(&hir_ty.kind, fcx)
+    lower_hir_ty_value(hir_ty, fcx)
 }
 
-fn lower_hir_ty_kind<'tcx>(kind: &HirTyKind, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
+fn lower_hir_ty_value<'tcx>(ty: &HirTy, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
     let interner = fcx.interner;
 
-    match kind {
-        HirTyKind::Path { res, args } => lower_res(res, args, fcx),
-        HirTyKind::Tuple { tys } => {
-            let lowered: Vec<_> = tys.iter().map(|t| lower_hir_ty(t, fcx)).collect();
+    match ty {
+        HirTy::Path { res, args } => lower_res(res, args, fcx),
+        HirTy::Tuple { tys } => {
+            let lowered: Vec<_> = tys
+                .iter()
+                .map(|t| lower_hir_ty_id(*t, fcx))
+                .collect();
             let args = interner.mk_generic_args(
                 &lowered
                     .iter()
@@ -38,8 +37,8 @@ fn lower_hir_ty_kind<'tcx>(kind: &HirTyKind, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx>
             );
             interner.mk_ty(TyKind::Tuple(args))
         }
-        HirTyKind::Array { ty, len } => {
-            let elem_ty = lower_hir_ty(ty, fcx);
+        HirTy::Array { ty, len: _len } => {
+            let elem_ty = lower_hir_ty_id(*ty, fcx);
             // TODO: lower array length const properly
             let len_const = yelang_ty::ty::Const {
                 kind: ConstKind::Error,
@@ -47,44 +46,40 @@ fn lower_hir_ty_kind<'tcx>(kind: &HirTyKind, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx>
             };
             interner.mk_ty(TyKind::Array(elem_ty, len_const))
         }
-        HirTyKind::Slice { ty } => {
-            let elem_ty = lower_hir_ty(ty, fcx);
+        HirTy::Slice { ty } => {
+            let elem_ty = lower_hir_ty_id(*ty, fcx);
             interner.mk_ty(TyKind::Slice(elem_ty))
         }
-        HirTyKind::FnPtr { sig } => {
+        HirTy::FnPtr { sig } => {
             let inputs = interner.mk_generic_args(
                 &sig.inputs
                     .iter()
-                    .map(|t| GenericArg::Type(lower_hir_ty(t, fcx)))
+                    .map(|t| GenericArg::Type(lower_hir_ty_id(*t, fcx)))
                     .collect::<Vec<_>>(),
             );
-            let output = lower_hir_ty(&sig.output, fcx);
+            let output = lower_hir_ty_id(sig.output, fcx);
             interner.mk_ty(TyKind::FnPtr(yelang_ty::ty::PolyFnSig {
                 sig: yelang_ty::ty::FnSig { inputs, output },
             }))
         }
-        HirTyKind::AnonStruct { fields } => {
+        HirTy::AnonStruct { fields } => {
             let lowered_fields: Vec<_> = fields
                 .iter()
                 .map(|f| AnonField {
                     name: f.name,
-                    ty: lower_hir_ty(&f.ty, fcx),
+                    ty: lower_hir_ty_id(f.ty, fcx),
                 })
                 .collect();
-            let field_list = interner.mk_bound_var_list(&[]); // placeholder
-            // Actually AnonStructDef uses List<AnonField> not bound vars
-            // We need to use mk_generic_args or a similar mechanism
-            // For now, use from_slice (not interned)
-            let fields_list = yelang_ty::list::List::from_slice(&lowered_fields);
+            let field_list = yelang_ty::list::List::from_slice(&lowered_fields);
             interner.mk_ty(TyKind::AnonStruct(AnonStructDef {
-                fields: fields_list,
+                fields: field_list,
             }))
         }
-        HirTyKind::TypeLit { .. } => {
+        HirTy::TypeLit { .. } => {
             // Type literals are union-like; for now return a fresh variable
             fcx.new_ty_var()
         }
-        HirTyKind::Utility { kind, args } => {
+        HirTy::Utility { kind, args } => {
             let kind = match kind {
                 HirUtilityKind::Omit => yelang_ty::ty::UtilityKind::Omit,
                 HirUtilityKind::Pick => yelang_ty::ty::UtilityKind::Pick,
@@ -96,36 +91,36 @@ fn lower_hir_ty_kind<'tcx>(kind: &HirTyKind, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx>
             let lowered_args = interner.mk_generic_args(
                 &args
                     .iter()
-                    .map(|t| GenericArg::Type(lower_hir_ty(t, fcx)))
+                    .map(|t| GenericArg::Type(lower_hir_ty_id(*t, fcx)))
                     .collect::<Vec<_>>(),
             );
             interner.mk_ty(TyKind::Utility(kind, lowered_args))
         }
-        HirTyKind::Ref { mutability, ty } => {
+        HirTy::Ref { mutability, ty } => {
             let mutbl = lower_mutability(mutability.clone());
-            let inner = lower_hir_ty(ty, fcx);
+            let inner = lower_hir_ty_id(*ty, fcx);
             interner.mk_ty(TyKind::Ref(inner, mutbl))
         }
-        HirTyKind::RawPtr { mutability, ty } => {
+        HirTy::RawPtr { mutability, ty } => {
             let mutbl = lower_mutability(mutability.clone());
-            let inner = lower_hir_ty(ty, fcx);
+            let inner = lower_hir_ty_id(*ty, fcx);
             interner.mk_ty(TyKind::RawPtr(TypeAndMut { ty: inner, mutbl }))
         }
-        HirTyKind::ForAll { ty, .. } => {
+        HirTy::ForAll { ty, .. } => {
             // HRTB: for now just lower the inner type
-            lower_hir_ty(ty, fcx)
+            lower_hir_ty_id(*ty, fcx)
         }
-        HirTyKind::Union { tys } => {
+        HirTy::Union { tys } => {
             if tys.is_empty() {
                 return fcx.mk_never();
             }
-            let first = lower_hir_ty(&tys[0], fcx);
+            let first = lower_hir_ty_id(tys[0], fcx);
             tys.iter().skip(1).fold(first, |acc, t| {
-                let lowered = lower_hir_ty(t, fcx);
+                let lowered = lower_hir_ty_id(*t, fcx);
                 interner.mk_ty(TyKind::Union(acc, lowered))
             })
         }
-        HirTyKind::ImplTrait { path } => {
+        HirTy::ImplTrait { path } => {
             if let Res::Def { def_id } = path {
                 interner.mk_ty(TyKind::Alias(AliasTy {
                     def_id: *def_id,
@@ -135,7 +130,7 @@ fn lower_hir_ty_kind<'tcx>(kind: &HirTyKind, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx>
                 fcx.new_ty_var()
             }
         }
-        HirTyKind::DynTrait { path } => {
+        HirTy::DynTrait { path } => {
             if let Res::Def { def_id } = path {
                 // TODO: proper existential predicate
                 let pred = yelang_ty::ty::ExistentialPredicate::Trait(
@@ -153,12 +148,22 @@ fn lower_hir_ty_kind<'tcx>(kind: &HirTyKind, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx>
                 fcx.new_ty_var()
             }
         }
-        HirTyKind::Infer => fcx.new_ty_var(),
-        HirTyKind::Err => fcx.mk_error(),
+        HirTy::Infer => fcx.new_ty_var(),
+        HirTy::Err => fcx.mk_error(),
     }
 }
 
-fn lower_res<'tcx>(res: &Res, args: &[HirTy], fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
+fn lower_hir_ty_id<'tcx>(ty_id: yelang_hir::ids::TyId, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
+    let hir_ty = fcx
+        .crate_hir
+        .tys
+        .get(ty_id)
+        .expect("TyId should be valid")
+        .clone();
+    lower_hir_ty(&hir_ty, fcx)
+}
+
+fn lower_res<'tcx>(res: &Res, args: &[yelang_hir::ids::TyId], fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
     let interner = fcx.interner;
     let lowered_args = lower_generic_args(args, fcx);
 
@@ -192,7 +197,7 @@ fn lower_res<'tcx>(res: &Res, args: &[HirTy], fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx
 }
 
 fn lower_generic_args<'tcx>(
-    args: &[HirTy],
+    args: &[yelang_hir::ids::TyId],
     fcx: &mut FnCtxt<'tcx>,
 ) -> yelang_ty::list::List<GenericArg<'tcx>> {
     let interner = fcx.interner;
@@ -202,7 +207,7 @@ fn lower_generic_args<'tcx>(
     interner.mk_generic_args(
         &args
             .iter()
-            .map(|t| GenericArg::Type(lower_hir_ty(t, fcx)))
+            .map(|t| GenericArg::Type(lower_hir_ty_id(*t, fcx)))
             .collect::<Vec<_>>(),
     )
 }

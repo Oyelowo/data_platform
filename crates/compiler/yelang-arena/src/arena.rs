@@ -1,67 +1,52 @@
-use slotmap::{
-    DefaultKey, Key, KeyData, SecondaryMap, SlotMap as InnerSlotMap, SparseSecondaryMap,
-};
+use slotmap::{Key, SecondaryMap, SlotMap as InnerSlotMap, SparseSecondaryMap};
 
-/// An arena allocator that assigns stable keys to values.
+/// Re-export the slotmap key trait and macro so callers can define their own
+/// typed keys (e.g. `ExprId`, `PatId`) and use them with the arenas below.
+pub use slotmap::new_key_type;
+pub use slotmap::Key as SlotMapKey;
+
+/// A generational arena allocator with typed keys.
 ///
-/// Wrapper around `slotmap::SlotMap`.
-/// Used for interning HIR nodes, allocating bodies, and any case where
-/// we need O(1) lookup by a stable handle.
-///
-/// The key type is `ArenaKey` (a newtype around `DefaultKey`).
+/// Wrapper around `slotmap::SlotMap<K, V>`. Each key carries a generation, so
+/// stale IDs cannot accidentally access data that was removed and reused.
+/// This is the right tool for HIR expression/pattern/type nodes, incremental
+/// structures, and any collection where IDs must stay valid across removals.
 #[derive(Debug, Clone)]
-pub struct Arena<T> {
-    inner: InnerSlotMap<DefaultKey, T>,
+pub struct Arena<K: Key, T> {
+    inner: InnerSlotMap<K, T>,
 }
 
-/// A stable key into an `Arena`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ArenaKey(DefaultKey);
-
-impl ArenaKey {
-    /// Return the opaque key as a stable integer suitable for serialization.
-    pub fn as_u64(self) -> u64 {
-        Key::data(&self.0).as_ffi()
-    }
-
-    /// Reconstruct an `ArenaKey` from a value previously returned by
-    /// [`Self::as_u64`]. Returns `None` if the integer is not a valid key.
-    pub fn from_u64(raw: u64) -> Option<Self> {
-        Some(ArenaKey(DefaultKey::from(KeyData::from_ffi(raw))))
-    }
-}
-
-impl<T> Arena<T> {
+impl<K: Key, T> Arena<K, T> {
     pub fn new() -> Self {
         Self {
-            inner: InnerSlotMap::new(),
+            inner: InnerSlotMap::with_key(),
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            inner: InnerSlotMap::with_capacity(capacity),
+            inner: InnerSlotMap::with_capacity_and_key(capacity),
         }
     }
 
-    pub fn insert(&mut self, value: T) -> ArenaKey {
-        ArenaKey(self.inner.insert(value))
+    pub fn insert(&mut self, value: T) -> K {
+        self.inner.insert(value)
     }
 
-    pub fn get(&self, key: ArenaKey) -> Option<&T> {
-        self.inner.get(key.0)
+    pub fn get(&self, key: K) -> Option<&T> {
+        self.inner.get(key)
     }
 
-    pub fn get_mut(&mut self, key: ArenaKey) -> Option<&mut T> {
-        self.inner.get_mut(key.0)
+    pub fn get_mut(&mut self, key: K) -> Option<&mut T> {
+        self.inner.get_mut(key)
     }
 
-    pub fn remove(&mut self, key: ArenaKey) -> Option<T> {
-        self.inner.remove(key.0)
+    pub fn remove(&mut self, key: K) -> Option<T> {
+        self.inner.remove(key)
     }
 
-    pub fn contains_key(&self, key: ArenaKey) -> bool {
-        self.inner.contains_key(key.0)
+    pub fn contains_key(&self, key: K) -> bool {
+        self.inner.contains_key(key)
     }
 
     pub fn len(&self) -> usize {
@@ -72,16 +57,16 @@ impl<T> Arena<T> {
         self.inner.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (ArenaKey, &T)> {
-        self.inner.iter().map(|(k, v)| (ArenaKey(k), v))
+    pub fn iter(&self) -> impl Iterator<Item = (K, &T)> {
+        self.inner.iter()
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ArenaKey, &mut T)> {
-        self.inner.iter_mut().map(|(k, v)| (ArenaKey(k), v))
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (K, &mut T)> {
+        self.inner.iter_mut()
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = ArenaKey> + '_ {
-        self.inner.keys().map(ArenaKey)
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        self.inner.keys()
     }
 
     pub fn values(&self) -> impl Iterator<Item = &T> {
@@ -101,52 +86,49 @@ impl<T> Arena<T> {
     }
 }
 
-impl<T> Default for Arena<T> {
+impl<K: Key, T> Default for Arena<K, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-// Note: IntoIterator is not implemented because slotmap does not export
-// its iterator types publicly. Use `iter()` and `iter_mut()` instead.
-
 // ----------------------------------------------------------------------------
 // SecondaryMap
 // ----------------------------------------------------------------------------
 
-/// A dense map from `ArenaKey` to another value type.
+/// A dense map from an arena key to another value type.
 ///
 /// Must have the same key domain as the `Arena` it indexes into.
 #[derive(Debug, Clone)]
-pub struct ArenaMap<T> {
-    inner: SecondaryMap<DefaultKey, T>,
+pub struct ArenaMap<K: Key, T> {
+    inner: SecondaryMap<K, T>,
 }
 
-impl<T> ArenaMap<T> {
+impl<K: Key, T> ArenaMap<K, T> {
     pub fn new() -> Self {
         Self {
             inner: SecondaryMap::new(),
         }
     }
 
-    pub fn insert(&mut self, key: ArenaKey, value: T) -> Option<T> {
-        self.inner.insert(key.0, value)
+    pub fn insert(&mut self, key: K, value: T) -> Option<T> {
+        self.inner.insert(key, value)
     }
 
-    pub fn get(&self, key: ArenaKey) -> Option<&T> {
-        self.inner.get(key.0)
+    pub fn get(&self, key: K) -> Option<&T> {
+        self.inner.get(key)
     }
 
-    pub fn get_mut(&mut self, key: ArenaKey) -> Option<&mut T> {
-        self.inner.get_mut(key.0)
+    pub fn get_mut(&mut self, key: K) -> Option<&mut T> {
+        self.inner.get_mut(key)
     }
 
-    pub fn contains_key(&self, key: ArenaKey) -> bool {
-        self.inner.contains_key(key.0)
+    pub fn contains_key(&self, key: K) -> bool {
+        self.inner.contains_key(key)
     }
 
-    pub fn remove(&mut self, key: ArenaKey) -> Option<T> {
-        self.inner.remove(key.0)
+    pub fn remove(&mut self, key: K) -> Option<T> {
+        self.inner.remove(key)
     }
 
     pub fn len(&self) -> usize {
@@ -157,8 +139,8 @@ impl<T> ArenaMap<T> {
         self.inner.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (ArenaKey, &T)> {
-        self.inner.iter().map(|(k, v)| (ArenaKey(k), v))
+    pub fn iter(&self) -> impl Iterator<Item = (K, &T)> {
+        self.inner.iter()
     }
 
     pub fn clear(&mut self) {
@@ -166,7 +148,7 @@ impl<T> ArenaMap<T> {
     }
 }
 
-impl<T> Default for ArenaMap<T> {
+impl<K: Key, T> Default for ArenaMap<K, T> {
     fn default() -> Self {
         Self::new()
     }
@@ -176,38 +158,38 @@ impl<T> Default for ArenaMap<T> {
 // SparseSecondaryMap
 // ----------------------------------------------------------------------------
 
-/// A sparse map from `ArenaKey` to another value type.
+/// A sparse map from an arena key to another value type.
 /// More memory-efficient than `ArenaMap` when few keys are populated.
 #[derive(Debug, Clone)]
-pub struct SparseArenaMap<T> {
-    inner: SparseSecondaryMap<DefaultKey, T>,
+pub struct SparseArenaMap<K: Key, T> {
+    inner: SparseSecondaryMap<K, T>,
 }
 
-impl<T> SparseArenaMap<T> {
+impl<K: Key, T> SparseArenaMap<K, T> {
     pub fn new() -> Self {
         Self {
             inner: SparseSecondaryMap::new(),
         }
     }
 
-    pub fn insert(&mut self, key: ArenaKey, value: T) -> Option<T> {
-        self.inner.insert(key.0, value)
+    pub fn insert(&mut self, key: K, value: T) -> Option<T> {
+        self.inner.insert(key, value)
     }
 
-    pub fn get(&self, key: ArenaKey) -> Option<&T> {
-        self.inner.get(key.0)
+    pub fn get(&self, key: K) -> Option<&T> {
+        self.inner.get(key)
     }
 
-    pub fn get_mut(&mut self, key: ArenaKey) -> Option<&mut T> {
-        self.inner.get_mut(key.0)
+    pub fn get_mut(&mut self, key: K) -> Option<&mut T> {
+        self.inner.get_mut(key)
     }
 
-    pub fn contains_key(&self, key: ArenaKey) -> bool {
-        self.inner.contains_key(key.0)
+    pub fn contains_key(&self, key: K) -> bool {
+        self.inner.contains_key(key)
     }
 
-    pub fn remove(&mut self, key: ArenaKey) -> Option<T> {
-        self.inner.remove(key.0)
+    pub fn remove(&mut self, key: K) -> Option<T> {
+        self.inner.remove(key)
     }
 
     pub fn len(&self) -> usize {
@@ -223,19 +205,35 @@ impl<T> SparseArenaMap<T> {
     }
 }
 
-impl<T> Default for SparseArenaMap<T> {
+impl<K: Key, T> Default for SparseArenaMap<K, T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
+// ----------------------------------------------------------------------------
+// Untyped default-key arena (kept for callers that do not need typed keys)
+// ----------------------------------------------------------------------------
+
+new_key_type! {
+    /// An opaque, untyped key into the default `Arena`.
+    pub struct ArenaKey;
+}
+
+/// Alias for the common case of an arena that does not need domain-specific keys.
+pub type DefaultArena<T> = Arena<ArenaKey, T>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    new_key_type! {
+        struct TestKey;
+    }
+
     #[test]
     fn arena_basic() {
-        let mut arena = Arena::new();
+        let mut arena = Arena::<TestKey, _>::new();
         let k1 = arena.insert("hello");
         let k2 = arena.insert("world");
 
@@ -246,11 +244,11 @@ mod tests {
 
     #[test]
     fn arena_map() {
-        let mut arena = Arena::new();
+        let mut arena = Arena::<TestKey, _>::new();
         let k1 = arena.insert(100);
         let k2 = arena.insert(200);
 
-        let mut map = ArenaMap::new();
+        let mut map = ArenaMap::<TestKey, _>::new();
         map.insert(k1, "a");
         map.insert(k2, "b");
 
@@ -260,7 +258,7 @@ mod tests {
 
     #[test]
     fn arena_remove() {
-        let mut arena = Arena::new();
+        let mut arena = Arena::<TestKey, _>::new();
         let k = arena.insert(42);
         assert!(arena.contains_key(k));
         assert_eq!(arena.remove(k), Some(42));

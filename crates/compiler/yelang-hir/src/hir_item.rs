@@ -4,10 +4,10 @@ use yelang_ast::Ident;
 use yelang_lexer::Span;
 
 use crate::hir::{
-    EnumDef, FnSig, Generics, Mutability, Ty, UseKind, UsePath, VariantData,
+    EnumDef, FnSig, Generics, Mutability, UseKind, UsePath, VariantData,
     Visibility,
 };
-use crate::ids::{BodyId, DefId};
+use crate::ids::{BodyId, DefId, TyId};
 
 /// An item in the HIR.
 #[derive(Debug, Clone)]
@@ -49,16 +49,16 @@ pub enum ItemKind {
     Impl {
         items: Vec<crate::hir::ImplItem>,
         generics: Generics,
-        self_ty: Ty,
+        self_ty: TyId,
         of_trait: Option<crate::hir::TraitRef>,
     },
     /// Type alias.
-    TyAlias { ty: Ty, generics: Generics },
+    TyAlias { ty: TyId, generics: Generics },
     /// Constant item.
-    Const { ty: Ty, body: BodyId },
+    Const { ty: TyId, body: BodyId },
     /// Static item.
     Static {
-        ty: Ty,
+        ty: TyId,
         mutability: Mutability,
         body: BodyId,
     },

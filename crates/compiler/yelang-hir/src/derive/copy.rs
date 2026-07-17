@@ -6,7 +6,7 @@ use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
 use crate::derive::helpers::{FieldView, impl_item, iter_fields};
 use crate::hir::Item;
-use crate::hir_ty::TyKind;
+use crate::hir_ty::Ty;
 
 /// Expand `#[derive(Copy)]` for a struct or enum.
 pub fn derive_copy(
@@ -45,7 +45,7 @@ pub fn derive_copy(
         return None;
     }
 
-    let self_ty = adt.self_ty();
+    let self_ty = adt.self_ty(ctx);
     Some(impl_item(ctx, copy_trait, self_ty, vec![]))
 }
 
@@ -69,7 +69,7 @@ fn find_non_copy_field(ctx: &DeriveContext<'_, '_>) -> Option<Symbol> {
 }
 
 fn find_non_copy_in_fields(
-    fields: &[FieldView<'_>],
+    fields: &[FieldView],
     ctx: &DeriveContext<'_, '_>,
 ) -> Option<Symbol> {
     for field in fields {
@@ -87,10 +87,11 @@ fn find_non_copy_in_fields(
 ///
 /// This list is conservative: if a type is not in this list, the derive emits
 /// the impl and lets type checking verify the bound.
-fn is_known_non_copy(ty: &crate::hir_ty::Ty, ctx: &DeriveContext<'_, '_>) -> bool {
+fn is_known_non_copy(ty_id: crate::ids::TyId, ctx: &DeriveContext<'_, '_>) -> bool {
+    let ty = ctx.ctx.crate_hir.tys.get(ty_id).expect("field type");
     matches!(
-        &ty.kind,
-        TyKind::Path {
+        ty,
+        Ty::Path {
             res: crate::res::Res::Def { def_id },
             ..
         } if is_string_or_vec(ctx, *def_id)

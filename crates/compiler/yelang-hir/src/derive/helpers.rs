@@ -9,14 +9,14 @@ use yelang_lexer::Span;
 
 use crate::derive::context::DeriveContext;
 use crate::hir::{
-    Arm, Block, Expr, ExprKind, FieldExpr, FnSig, ImplItem, ImplItemKind, Item, ItemKind, Lit,
-    Param, Stmt, StmtKind, TraitRef,
+    Arm, Block, Expr, FieldExpr, FnSig, ImplItem, ImplItemKind, Item, ItemKind, Lit,
+    Param, Stmt, TraitRef,
 };
 use crate::hir_body::Body;
-use crate::hir_pat::{BindingMode, FieldPat, Pat, PatKind};
+use crate::hir_pat::{BindingMode, FieldPat, Pat};
 use crate::hir_struct::VariantData;
 use crate::hir_ty::Ty;
-use crate::ids::BodyId;
+use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use crate::res::Res;
 
 /// An identifier constructed from a string, using the derive span as its span.
@@ -30,105 +30,84 @@ pub fn sym(ctx: &DeriveContext<'_, '_>, name: &str) -> Symbol {
 }
 
 /// Build a path type referring to a definition with no generic arguments.
-pub fn path_ty(ctx: &DeriveContext<'_, '_>, def_id: DefId) -> Ty {
-    Ty {
-        kind: crate::hir_ty::TyKind::Path {
-            res: Res::Def { def_id },
-            args: vec![],
-        },
-        span: ctx.derive_span,
-    }
+pub fn path_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> TyId {
+    let ty = Ty::Path {
+        res: Res::Def { def_id },
+        args: vec![],
+    };
+    ctx.ctx.crate_hir.alloc_ty(ty, ctx.derive_span)
 }
 
 /// Build a `Self` type.
-pub fn self_ty(ctx: &DeriveContext<'_, '_>, def_id: DefId) -> Ty {
-    Ty {
-        kind: crate::hir_ty::TyKind::Path {
-            res: Res::SelfTy { def_id },
-            args: vec![],
-        },
-        span: ctx.derive_span,
-    }
+pub fn self_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> TyId {
+    let ty = Ty::Path {
+        res: Res::SelfTy { def_id },
+        args: vec![],
+    };
+    ctx.ctx.crate_hir.alloc_ty(ty, ctx.derive_span)
 }
 
 /// Build a reference type `&T`.
-pub fn ref_ty(ty: Ty, mutable: bool) -> Ty {
-    let span = ty.span;
-    Ty {
-        kind: crate::hir_ty::TyKind::Ref {
-            mutability: if mutable {
-                yelang_ast::Mutability::Mutable
-            } else {
-                yelang_ast::Mutability::Immutable
-            },
-            ty: Box::new(ty),
+pub fn ref_ty(ty: TyId, mutable: bool) -> Ty {
+    Ty::Ref {
+        mutability: if mutable {
+            yelang_ast::Mutability::Mutable
+        } else {
+            yelang_ast::Mutability::Immutable
         },
-        span,
+        ty,
     }
 }
 
 /// Build the unit type `()`.
-pub fn unit_ty(span: Span) -> Ty {
-    Ty {
-        kind: crate::hir_ty::TyKind::Tuple { tys: vec![] },
-        span,
-    }
+pub fn unit_ty(_span: Span) -> Ty {
+    Ty::Tuple { tys: vec![] }
 }
 
-/// Build a HIR expression with the given kind and span.
-pub fn expr(ctx: &mut DeriveContext<'_, '_>, kind: ExprKind, span: Span) -> Expr {
-    Expr {
-        hir_id: ctx.next_hir_id(),
-        kind,
-        span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Infer,
-            span,
-        },
-    }
+/// Build a HIR expression with the given kind and span, allocate it in the
+/// crate arena, and return its `ExprId`.
+pub fn expr(ctx: &mut DeriveContext<'_, '_>, kind: Expr, span: Span) -> ExprId {
+    ctx.ctx.crate_hir.alloc_expr(kind, span)
 }
 
 /// Build a path expression.
-pub fn path_expr(ctx: &mut DeriveContext<'_, '_>, res: Res) -> Expr {
-    expr(ctx, ExprKind::Path { res }, ctx.derive_span)
+pub fn path_expr(ctx: &mut DeriveContext<'_, '_>, res: Res) -> ExprId {
+    expr(ctx, Expr::Path { res }, ctx.derive_span)
 }
 
 /// Build an expression referring to `self`.
-pub fn self_expr(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> Expr {
+pub fn self_expr(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> ExprId {
     path_expr(ctx, Res::SelfVal { def_id })
 }
 
 /// Build a field access expression.
-pub fn field_expr(ctx: &mut DeriveContext<'_, '_>, base: Expr, field: yelang_ast::Ident) -> Expr {
-    let span = base.span.merge(field.span());
-    expr(
-        ctx,
-        ExprKind::Field {
-            expr: Box::new(base),
-            field,
-        },
-        span,
-    )
+pub fn field_expr(
+    ctx: &mut DeriveContext<'_, '_>,
+    base: ExprId,
+    field: yelang_ast::Ident,
+) -> ExprId {
+    let span = ctx.ctx.crate_hir.expr_span(base).merge(field.span());
+    expr(ctx, Expr::Field { expr: base, field }, span)
 }
 
 /// Build a tuple-index field access expression (`self.0`).
-pub fn tuple_field_expr(ctx: &mut DeriveContext<'_, '_>, base: Expr, index: usize) -> Expr {
-    let field = yelang_ast::Ident::new(Symbol::from(index as u32), base.span);
+pub fn tuple_field_expr(ctx: &mut DeriveContext<'_, '_>, base: ExprId, index: usize) -> ExprId {
+    let field = yelang_ast::Ident::new(Symbol::from(index as u32), ctx.derive_span);
     field_expr(ctx, base, field)
 }
 
 /// Build a method call expression.
 pub fn method_call_expr(
     ctx: &mut DeriveContext<'_, '_>,
-    receiver: Expr,
+    receiver: ExprId,
     method: &str,
-    args: Vec<Expr>,
-) -> Expr {
-    let span = receiver.span;
+    args: Vec<ExprId>,
+) -> ExprId {
+    let span = ctx.ctx.crate_hir.expr_span(receiver);
     expr(
         ctx,
-        ExprKind::MethodCall {
-            receiver: Box::new(receiver),
+        Expr::MethodCall {
+            receiver,
             method: ident(ctx, method),
             args,
             trait_def_id: None,
@@ -141,26 +120,22 @@ pub fn method_call_expr(
 pub fn bin_op_expr(
     ctx: &mut DeriveContext<'_, '_>,
     op: yelang_ast::BinaryOp,
-    left: Expr,
-    right: Expr,
-) -> Expr {
-    let span = left.span.merge(right.span);
-    expr(
-        ctx,
-        ExprKind::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-        },
-        span,
-    )
+    left: ExprId,
+    right: ExprId,
+) -> ExprId {
+    let span = ctx
+        .ctx
+        .crate_hir
+        .expr_span(left)
+        .merge(ctx.ctx.crate_hir.expr_span(right));
+    expr(ctx, Expr::Binary { op, left, right }, span)
 }
 
 /// Build a boolean literal expression.
-pub fn bool_expr(ctx: &mut DeriveContext<'_, '_>, value: bool) -> Expr {
+pub fn bool_expr(ctx: &mut DeriveContext<'_, '_>, value: bool) -> ExprId {
     expr(
         ctx,
-        ExprKind::Lit {
+        Expr::Lit {
             lit: Lit::Bool(value),
         },
         ctx.derive_span,
@@ -168,33 +143,33 @@ pub fn bool_expr(ctx: &mut DeriveContext<'_, '_>, value: bool) -> Expr {
 }
 
 /// Build a string literal expression.
-pub fn string_expr(ctx: &mut DeriveContext<'_, '_>, value: &str) -> Expr {
+pub fn string_expr(ctx: &mut DeriveContext<'_, '_>, value: &str) -> ExprId {
     let interner = ctx.ctx.interner;
     let lit = Lit::Str(yelang_lexer::StringLit {
         value: interner.get_or_intern(value),
         kind: yelang_lexer::StrKind::Normal,
     });
-    expr(ctx, ExprKind::Lit { lit }, ctx.derive_span)
+    expr(ctx, Expr::Lit { lit }, ctx.derive_span)
 }
 
 /// Build a struct literal expression.
 pub fn struct_literal(
     ctx: &mut DeriveContext<'_, '_>,
     path: Res,
-    fields: Vec<(yelang_ast::Ident, Expr)>,
-) -> Expr {
+    fields: Vec<(yelang_ast::Ident, ExprId)>,
+) -> ExprId {
     let span = ctx.derive_span;
     let fields = fields
         .into_iter()
         .map(|(ident, expr)| FieldExpr {
             ident,
             expr,
-            span: ident.span(),
+            span: ctx.ctx.crate_hir.expr_span(expr),
         })
         .collect();
     expr(
         ctx,
-        ExprKind::Struct {
+        Expr::Struct {
             path,
             fields,
             rest: None,
@@ -209,8 +184,8 @@ pub fn struct_literal(
 pub fn enum_variant_literal(
     ctx: &mut DeriveContext<'_, '_>,
     variant_def_id: DefId,
-    fields: Vec<Expr>,
-) -> Expr {
+    fields: Vec<ExprId>,
+) -> ExprId {
     let span = ctx.derive_span;
     let func = path_expr(
         ctx,
@@ -218,35 +193,21 @@ pub fn enum_variant_literal(
             def_id: variant_def_id,
         },
     );
-    expr(
-        ctx,
-        ExprKind::Call {
-            func: Box::new(func),
-            args: fields,
-        },
-        span,
-    )
+    expr(ctx, Expr::Call { func, args: fields }, span)
 }
 
 /// Build a match expression.
-pub fn match_expr(ctx: &mut DeriveContext<'_, '_>, scrutinee: Expr, arms: Vec<Arm>) -> Expr {
+pub fn match_expr(ctx: &mut DeriveContext<'_, '_>, scrutinee: ExprId, arms: Vec<Arm>) -> ExprId {
     let span = ctx.derive_span;
-    expr(
-        ctx,
-        ExprKind::Match {
-            expr: Box::new(scrutinee),
-            arms,
-        },
-        span,
-    )
+    expr(ctx, Expr::Match { expr: scrutinee, arms }, span)
 }
 
 /// Build a match arm.
-pub fn arm(ctx: &mut DeriveContext<'_, '_>, pat: Pat, body: Expr) -> Arm {
+pub fn arm(ctx: &mut DeriveContext<'_, '_>, pat: PatId, body: ExprId) -> Arm {
     Arm {
         pat,
         guard: None,
-        body: Box::new(body),
+        body,
         span: ctx.derive_span,
     }
 }
@@ -259,14 +220,18 @@ pub fn wildcard_false_arm(ctx: &mut DeriveContext<'_, '_>) -> Arm {
 }
 
 /// Build a block expression from a list of statements and an optional tail.
-pub fn block_expr(ctx: &mut DeriveContext<'_, '_>, stmts: Vec<Stmt>, tail: Option<Expr>) -> Expr {
+pub fn block_expr(
+    ctx: &mut DeriveContext<'_, '_>,
+    stmts: Vec<StmtId>,
+    tail: Option<ExprId>,
+) -> ExprId {
     let span = ctx.derive_span;
     expr(
         ctx,
-        ExprKind::Block {
+        Expr::Block {
             block: Block {
                 stmts,
-                expr: tail.map(Box::new),
+                expr: tail,
                 span,
             },
         },
@@ -277,32 +242,26 @@ pub fn block_expr(ctx: &mut DeriveContext<'_, '_>, stmts: Vec<Stmt>, tail: Optio
 /// Build a `let` statement.
 pub fn let_stmt(
     ctx: &mut DeriveContext<'_, '_>,
-    pat: Pat,
-    ty: Option<Ty>,
-    init: Option<Expr>,
-) -> Stmt {
-    Stmt {
-        kind: StmtKind::Let {
-            pat,
-            ty,
-            init: init.map(Box::new),
-        },
-        span: ctx.derive_span,
-    }
+    pat: PatId,
+    ty: Option<TyId>,
+    init: Option<ExprId>,
+) -> StmtId {
+    let stmt = Stmt::Let { pat, ty, init };
+    ctx.ctx.crate_hir.alloc_stmt(stmt, ctx.derive_span)
 }
 
 /// Build a body from parameters and a value expression, and register it in the crate.
-pub fn make_body(ctx: &mut DeriveContext<'_, '_>, params: Vec<Param>, value: Expr) -> BodyId {
+pub fn make_body(ctx: &mut DeriveContext<'_, '_>, params: Vec<Param>, value: ExprId) -> BodyId {
     let body = Body {
         params,
         value,
         span: ctx.derive_span,
     };
-    ctx.ctx.crate_hir.bodies.push(body)
+    ctx.ctx.crate_hir.alloc_body(body, ctx.derive_span)
 }
 
 /// Build a function parameter from a pattern and type.
-pub fn param(ctx: &mut DeriveContext<'_, '_>, pat: Pat, ty: Ty) -> Param {
+pub fn param(ctx: &mut DeriveContext<'_, '_>, pat: PatId, ty: TyId) -> Param {
     Param {
         pat,
         ty,
@@ -311,60 +270,62 @@ pub fn param(ctx: &mut DeriveContext<'_, '_>, pat: Pat, ty: Ty) -> Param {
 }
 
 /// Build a `self` parameter with the given type (usually `&Self`).
-pub fn self_param(ctx: &mut DeriveContext<'_, '_>, ty: Ty) -> Param {
-    let hir_id = ctx.next_hir_id();
+pub fn self_param(ctx: &mut DeriveContext<'_, '_>, ty: TyId) -> Param {
     let name = ctx.intern("self");
-    let pat = Pat {
-        hir_id,
-        kind: PatKind::Binding {
+    let pat = ctx.ctx.crate_hir.alloc_pat(
+        Pat::Binding {
             mode: BindingMode::ByValue,
             name,
             subpat: None,
         },
-        span: ctx.derive_span,
-    };
-    ctx.ctx.push_local(name, hir_id);
+        ctx.derive_span,
+    );
+    ctx.ctx.push_local(name, pat);
     param(ctx, pat, ty)
 }
 
 /// Build an `other: &Self` parameter.
 pub fn other_param(ctx: &mut DeriveContext<'_, '_>, self_def_id: DefId) -> Param {
-    let hir_id = ctx.next_hir_id();
     let name = ctx.intern("other");
-    let pat = Pat {
-        hir_id,
-        kind: PatKind::Binding {
+    let pat = ctx.ctx.crate_hir.alloc_pat(
+        Pat::Binding {
             mode: BindingMode::ByValue,
             name,
             subpat: None,
         },
-        span: ctx.derive_span,
-    };
-    ctx.ctx.push_local(name, hir_id);
-    let ty = ref_ty(self_ty(ctx, self_def_id), false);
+        ctx.derive_span,
+    );
+    ctx.ctx.push_local(name, pat);
+    let self_ty_id = self_ty(ctx, self_def_id);
+    let ty = ctx.ctx.crate_hir.alloc_ty(
+        ref_ty(self_ty_id, false),
+        ctx.derive_span,
+    );
     param(ctx, pat, ty)
 }
 
 /// Build a formatter parameter `f: &mut Formatter`.
 pub fn formatter_param(ctx: &mut DeriveContext<'_, '_>, formatter_def_id: DefId) -> Param {
-    let hir_id = ctx.next_hir_id();
     let name = ctx.intern("f");
-    let pat = Pat {
-        hir_id,
-        kind: PatKind::Binding {
+    let pat = ctx.ctx.crate_hir.alloc_pat(
+        Pat::Binding {
             mode: BindingMode::ByValue,
             name,
             subpat: None,
         },
-        span: ctx.derive_span,
-    };
-    ctx.ctx.push_local(name, hir_id);
-    let ty = ref_ty(path_ty(ctx, formatter_def_id), true);
+        ctx.derive_span,
+    );
+    ctx.ctx.push_local(name, pat);
+    let formatter_ty = path_ty(ctx, formatter_def_id);
+    let ty = ctx.ctx.crate_hir.alloc_ty(
+        ref_ty(formatter_ty, true),
+        ctx.derive_span,
+    );
     param(ctx, pat, ty)
 }
 
 /// Build a function signature.
-pub fn fn_sig(inputs: Vec<Ty>, output: Ty) -> FnSig {
+pub fn fn_sig(inputs: Vec<TyId>, output: TyId) -> FnSig {
     FnSig {
         inputs,
         output,
@@ -395,7 +356,7 @@ pub fn method_impl_item(
 pub fn impl_item(
     ctx: &mut DeriveContext<'_, '_>,
     trait_def_id: DefId,
-    self_ty: Ty,
+    self_ty: TyId,
     items: Vec<ImplItem>,
 ) -> Item {
     let def_id = ctx.next_synthetic_def_id();
@@ -427,71 +388,58 @@ pub fn impl_item(
 // ---------------------------------------------------------------------------
 
 /// Build a wildcard pattern.
-pub fn wild_pat(ctx: &mut DeriveContext<'_, '_>) -> Pat {
-    Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: PatKind::Wild,
-        span: ctx.derive_span,
-    }
+pub fn wild_pat(ctx: &mut DeriveContext<'_, '_>) -> PatId {
+    ctx.ctx
+        .crate_hir
+        .alloc_pat(Pat::Wild, ctx.derive_span)
 }
 
-/// Build a binding pattern with a fresh `HirId`.
-pub fn binding_pat(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> Pat {
-    let hir_id = ctx.next_hir_id();
-    ctx.ctx.push_local(name, hir_id);
-    Pat {
-        hir_id,
-        kind: PatKind::Binding {
+/// Build a binding pattern with a fresh `PatId`.
+pub fn binding_pat(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> PatId {
+    let pat_id = ctx.ctx.crate_hir.alloc_pat(
+        Pat::Binding {
             mode: BindingMode::ByValue,
             name,
             subpat: None,
         },
-        span: ctx.derive_span,
-    }
+        ctx.derive_span,
+    );
+    ctx.ctx.push_local(name, pat_id);
+    pat_id
 }
 
 /// Build a struct pattern.
 pub fn struct_pat(
     ctx: &mut DeriveContext<'_, '_>,
     res: Res,
-    fields: Vec<(yelang_ast::Ident, Pat)>,
-) -> Pat {
+    fields: Vec<(yelang_ast::Ident, PatId)>,
+) -> PatId {
     let fields = fields
         .into_iter()
         .map(|(ident, pat)| FieldPat {
             ident,
             pat,
             is_shorthand: false,
-            span: ident.span(),
+            span: ctx.derive_span,
         })
         .collect();
-    Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: PatKind::Struct {
-            res,
-            fields,
-            rest: false,
-        },
-        span: ctx.derive_span,
-    }
+    ctx.ctx
+        .crate_hir
+        .alloc_pat(Pat::Struct { res, fields, rest: false }, ctx.derive_span)
 }
 
 /// Build a tuple-struct pattern.
-pub fn tuple_struct_pat(ctx: &mut DeriveContext<'_, '_>, res: Res, pats: Vec<Pat>) -> Pat {
-    Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: PatKind::TupleStruct { res, pats },
-        span: ctx.derive_span,
-    }
+pub fn tuple_struct_pat(ctx: &mut DeriveContext<'_, '_>, res: Res, pats: Vec<PatId>) -> PatId {
+    ctx.ctx
+        .crate_hir
+        .alloc_pat(Pat::TupleStruct { res, pats }, ctx.derive_span)
 }
 
 /// Build a path pattern (for unit variants).
-pub fn path_pat(ctx: &mut DeriveContext<'_, '_>, res: Res) -> Pat {
-    Pat {
-        hir_id: ctx.next_hir_id(),
-        kind: PatKind::Path { res },
-        span: ctx.derive_span,
-    }
+pub fn path_pat(ctx: &mut DeriveContext<'_, '_>, res: Res) -> PatId {
+    ctx.ctx
+        .crate_hir
+        .alloc_pat(Pat::Path { res }, ctx.derive_span)
 }
 
 // ---------------------------------------------------------------------------
@@ -499,14 +447,14 @@ pub fn path_pat(ctx: &mut DeriveContext<'_, '_>, res: Res) -> Pat {
 // ---------------------------------------------------------------------------
 
 /// A unified view of a field in a struct or enum variant.
-pub struct FieldView<'a> {
+pub struct FieldView {
     pub ident: Option<yelang_ast::Ident>,
     pub index: usize,
-    pub ty: &'a Ty,
+    pub ty: TyId,
 }
 
 /// Iterate over the fields of a `VariantData`.
-pub fn iter_fields(data: &VariantData) -> Vec<FieldView<'_>> {
+pub fn iter_fields(data: &VariantData) -> Vec<FieldView> {
     match data {
         VariantData::Struct { fields } => fields
             .iter()
@@ -514,7 +462,7 @@ pub fn iter_fields(data: &VariantData) -> Vec<FieldView<'_>> {
             .map(|(i, f)| FieldView {
                 ident: Some(f.ident),
                 index: i,
-                ty: &f.ty,
+                ty: f.ty,
             })
             .collect(),
         VariantData::Tuple { fields } => fields
@@ -523,7 +471,7 @@ pub fn iter_fields(data: &VariantData) -> Vec<FieldView<'_>> {
             .map(|(i, f)| FieldView {
                 ident: None,
                 index: i,
-                ty: &f.ty,
+                ty: f.ty,
             })
             .collect(),
         VariantData::Unit => vec![],
@@ -533,9 +481,9 @@ pub fn iter_fields(data: &VariantData) -> Vec<FieldView<'_>> {
 /// Build a field access expression for a field view.
 pub fn access_field(
     ctx: &mut DeriveContext<'_, '_>,
-    receiver: Expr,
-    field: &FieldView<'_>,
-) -> Expr {
+    receiver: ExprId,
+    field: &FieldView,
+) -> ExprId {
     match field.ident {
         Some(ident) => field_expr(ctx, receiver, ident),
         None => tuple_field_expr(ctx, receiver, field.index),

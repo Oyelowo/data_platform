@@ -1,8 +1,6 @@
 //! Exhaustive tests for AST item -> HIR item lowering.
 
 use crate::hir::{ItemKind, VariantData};
-use crate::hir_expr::ExprKind;
-use crate::hir_ty::TyKind;
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, resolved_with_defs, stub_resolved};
 
@@ -261,7 +259,8 @@ fn lower_inherent_impl() {
     let ItemKind::Impl { self_ty, .. } = &impl_item.kind else {
         unreachable!()
     };
-    assert!(matches!(self_ty.kind, TyKind::Path { .. }));
+    let ty = crate_hir.tys.get(*self_ty).unwrap();
+    assert!(matches!(ty, crate::hir_ty::Ty::Path { .. }));
 }
 
 #[test]
@@ -294,12 +293,13 @@ fn lower_self_struct_literal_in_impl() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let crate::hir::Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
-    let ExprKind::Struct { path, .. } = &tail.kind else {
-        panic!("expected struct literal, got {:?}", tail.kind)
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    let crate::hir::Expr::Struct { path, .. } = tail else {
+        panic!("expected struct literal, got {:?}", tail)
     };
     assert!(
         matches!(path, crate::res::Res::SelfTy { .. }),
@@ -350,7 +350,8 @@ fn lower_type_alias() {
     let ItemKind::TyAlias { ty, .. } = &item.kind else {
         panic!("expected type alias")
     };
-    assert!(matches!(ty.kind, TyKind::Path { .. }));
+    let ty_node = crate_hir.tys.get(*ty).unwrap();
+    assert!(matches!(ty_node, crate::hir_ty::Ty::Path { .. }));
 }
 
 #[test]

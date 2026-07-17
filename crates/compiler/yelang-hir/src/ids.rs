@@ -1,5 +1,17 @@
 //! HIR identifier types.
 //!
-//! Re-exported from `yelang-arena` for convenience.
+//! Items are keyed by dense `DefId`s from name resolution.  HIR nodes
+//! (expressions, patterns, statements, types, and bodies) are stored in
+//! slotmap arenas and referenced by the typed keys defined here.
 
-pub use yelang_arena::{BodyId, DefId, HirId};
+use yelang_arena::new_key_type;
+
+pub use yelang_arena::DefId;
+
+new_key_type! {
+    pub struct ExprId;
+    pub struct PatId;
+    pub struct StmtId;
+    pub struct TyId;
+    pub struct BodyId;
+}

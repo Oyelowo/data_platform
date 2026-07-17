@@ -2,21 +2,20 @@
 
 use yelang_lexer::Span;
 
-use crate::hir_pat::Pat;
-use crate::hir_ty::Ty;
+use crate::ids::{ExprId, PatId, TyId};
 
 /// A function body.
 #[derive(Debug, Clone)]
 pub struct Body {
     pub params: Vec<Param>,
-    pub value: crate::hir::Expr,
+    pub value: ExprId,
     pub span: Span,
 }
 
 /// A parameter in a function signature or closure.
 #[derive(Debug, Clone)]
 pub struct Param {
-    pub pat: Pat,
-    pub ty: Ty,
+    pub pat: PatId,
+    pub ty: TyId,
     pub span: Span,
 }

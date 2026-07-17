@@ -19,9 +19,9 @@ use crate::derive::helpers::{
     impl_item, make_body, match_expr, method_call_expr, method_impl_item, path_pat, self_expr,
     self_param, string_expr, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
-use crate::hir::{Arm, Expr, ImplItem, Item, Pat, Stmt};
+use crate::hir::{Arm, Expr, ImplItem, Item};
+use crate::ids::{ExprId, PatId, TyId};
 use crate::hir_struct::VariantData;
-use crate::hir_ty::Ty;
 
 /// Expand `#[derive(Debug)]` for a struct or enum.
 pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]) -> Option<Item> {
@@ -65,20 +65,22 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
         }
     };
 
-    let ref_self_ty = Ty {
-        kind: crate::hir_ty::TyKind::Ref {
+    let self_ty = adt.self_ty(ctx);
+    let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
+        crate::hir_ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
-            ty: Box::new(adt.self_ty()),
+            ty: self_ty,
         },
-        span: ctx.derive_span,
-    };
-    let ref_formatter_ty = Ty {
-        kind: crate::hir_ty::TyKind::Ref {
+        ctx.derive_span,
+    );
+    let formatter_ty = crate::derive::helpers::path_ty(ctx, formatter_def_id);
+    let ref_formatter_ty = ctx.ctx.crate_hir.alloc_ty(
+        crate::hir_ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Mutable,
-            ty: Box::new(crate::derive::helpers::path_ty(ctx, formatter_def_id)),
+            ty: formatter_ty,
         },
-        span: ctx.derive_span,
-    };
+        ctx.derive_span,
+    );
     let result_ty = crate::derive::helpers::path_ty(ctx, result_def_id);
 
     let fmt_method = fmt_method(
@@ -92,7 +94,8 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
         formatter_def_id,
     );
 
-    Some(impl_item(ctx, debug_trait, adt.self_ty(), vec![fmt_method]))
+    let debug_self_ty = adt.self_ty(ctx);
+    Some(impl_item(ctx, debug_trait, debug_self_ty, vec![fmt_method]))
 }
 
 fn look_up_formatter(ctx: &DeriveContext<'_, '_>) -> Option<DefId> {
@@ -108,16 +111,16 @@ fn fmt_method(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
-    ref_self_ty: Ty,
-    ref_formatter_ty: Ty,
-    result_ty: Ty,
+    ref_self_ty: TyId,
+    ref_formatter_ty: TyId,
+    result_ty: TyId,
     result_def_id: DefId,
     formatter_def_id: DefId,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let formatter_param = formatter_param(ctx, formatter_def_id);
     let sig = fn_sig(
-        vec![self_param.ty.clone(), ref_formatter_ty.clone()],
+        vec![self_param.ty, ref_formatter_ty],
         result_ty,
     );
 
@@ -142,7 +145,7 @@ fn fmt_method(
 }
 
 /// Build `Result::Ok(())`.
-fn ok_unit_expr(ctx: &mut DeriveContext<'_, '_>, result_def_id: DefId) -> Expr {
+fn ok_unit_expr(ctx: &mut DeriveContext<'_, '_>, result_def_id: DefId) -> ExprId {
     let ok_variant = ctx
         .variant_def_id(result_def_id, ctx.intern("Ok"))
         .unwrap_or(result_def_id);
@@ -150,50 +153,42 @@ fn ok_unit_expr(ctx: &mut DeriveContext<'_, '_>, result_def_id: DefId) -> Expr {
 }
 
 /// Build `f.write_str(literal)` as a statement.
-fn write_str_stmt(ctx: &mut DeriveContext<'_, '_>, formatter_local: Symbol, s: &str) -> Stmt {
-    let formatter_hir_id = ctx.ctx.local(formatter_local).expect("formatter local");
+fn write_str_stmt(ctx: &mut DeriveContext<'_, '_>, formatter_local: Symbol, s: &str) -> crate::ids::StmtId {
+    let formatter_pat_id = ctx.ctx.local(formatter_local).expect("formatter local");
     let formatter = expr(
         ctx,
-        crate::hir::ExprKind::Path {
+        Expr::Path {
             res: crate::res::Res::Local {
-                hir_id: formatter_hir_id,
+                pat_id: formatter_pat_id,
             },
         },
         ctx.derive_span,
     );
     let literal = string_expr(ctx, s);
     let call = method_call_expr(ctx, formatter, "write_str", vec![literal]);
-    Stmt {
-        kind: crate::hir::StmtKind::Expr {
-            expr: Box::new(call),
-        },
-        span: ctx.derive_span,
-    }
+    let pat = crate::derive::helpers::wild_pat(ctx);
+    crate::derive::helpers::let_stmt(ctx, pat, None, Some(call))
 }
 
 /// Build `field.fmt(f)` as a statement.
 fn fmt_field_stmt(
     ctx: &mut DeriveContext<'_, '_>,
-    field_expr: Expr,
+    field_expr: ExprId,
     formatter_local: Symbol,
-) -> Stmt {
-    let formatter_hir_id = ctx.ctx.local(formatter_local).expect("formatter local");
+) -> crate::ids::StmtId {
+    let formatter_pat_id = ctx.ctx.local(formatter_local).expect("formatter local");
     let formatter = expr(
         ctx,
-        crate::hir::ExprKind::Path {
+        Expr::Path {
             res: crate::res::Res::Local {
-                hir_id: formatter_hir_id,
+                pat_id: formatter_pat_id,
             },
         },
         ctx.derive_span,
     );
     let call = method_call_expr(ctx, field_expr, "fmt", vec![formatter]);
-    Stmt {
-        kind: crate::hir::StmtKind::Expr {
-            expr: Box::new(call),
-        },
-        span: ctx.derive_span,
-    }
+    let pat = crate::derive::helpers::wild_pat(ctx);
+    crate::derive::helpers::let_stmt(ctx, pat, None, Some(call))
 }
 
 fn debug_struct_like(
@@ -203,18 +198,17 @@ fn debug_struct_like(
     name: &str,
     formatter_local: Symbol,
     result_def_id: DefId,
-) -> Expr {
+) -> ExprId {
     match data {
         VariantData::Unit => {
-            let s = format!("{name}");
             let tail = ok_unit_expr(ctx, result_def_id);
-            let call = write_str_stmt(ctx, formatter_local, &s);
+            let call = write_str_stmt(ctx, formatter_local, name);
             expr(
                 ctx,
-                crate::hir::ExprKind::Block {
+                Expr::Block {
                     block: crate::hir::Block {
                         stmts: vec![call],
-                        expr: Some(Box::new(tail)),
+                        expr: Some(tail),
                         span: ctx.derive_span,
                     },
                 },
@@ -229,7 +223,7 @@ fn debug_struct_like(
                 if i > 0 {
                     stmts.push(write_str_stmt(ctx, formatter_local, ", "));
                 }
-                let access = tuple_field_expr(ctx, self_recv.clone(), i);
+                let access = tuple_field_expr(ctx, self_recv, i);
                 stmts.push(fmt_field_stmt(ctx, access, formatter_local));
             }
             stmts.push(write_str_stmt(ctx, formatter_local, ")"));
@@ -251,11 +245,11 @@ fn debug_struct_like(
                 ));
                 let access = access_field(
                     ctx,
-                    self_recv.clone(),
+                    self_recv,
                     &FieldView {
                         ident: Some(f.ident),
                         index: 0,
-                        ty: &f.ty,
+                        ty: f.ty,
                     },
                 );
                 stmts.push(fmt_field_stmt(ctx, access, formatter_local));
@@ -273,7 +267,7 @@ fn debug_enum(
     def: &crate::hir::EnumDef,
     formatter_local: Symbol,
     result_def_id: DefId,
-) -> Expr {
+) -> ExprId {
     let scrutinee = self_expr(ctx, self_def_id);
     let arms: Vec<Arm> = def
         .variants
@@ -308,7 +302,7 @@ fn variant_binding_pattern(
     ctx: &mut DeriveContext<'_, '_>,
     variant_def_id: DefId,
     data: &VariantData,
-) -> (Pat, Vec<FieldBinding>) {
+) -> (PatId, Vec<FieldBinding>) {
     match data {
         VariantData::Unit => (
             path_pat(
@@ -380,17 +374,17 @@ fn debug_variant(
     bindings: &[FieldBinding],
     formatter_local: Symbol,
     result_def_id: DefId,
-) -> Expr {
+) -> ExprId {
     match data {
         VariantData::Unit => {
             let tail = ok_unit_expr(ctx, result_def_id);
             let call = write_str_stmt(ctx, formatter_local, variant_name);
             expr(
                 ctx,
-                crate::hir::ExprKind::Block {
+                Expr::Block {
                     block: crate::hir::Block {
                         stmts: vec![call],
-                        expr: Some(Box::new(tail)),
+                        expr: Some(tail),
                         span: ctx.derive_span,
                     },
                 },
@@ -441,24 +435,28 @@ fn debug_variant(
     }
 }
 
-fn local_expr(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> Expr {
-    let hir_id = ctx.ctx.local(name).expect("local binding");
+fn local_expr(ctx: &mut DeriveContext<'_, '_>, name: Symbol) -> ExprId {
+    let pat_id = ctx.ctx.local(name).expect("local binding");
     expr(
         ctx,
-        crate::hir::ExprKind::Path {
-            res: crate::res::Res::Local { hir_id },
+        Expr::Path {
+            res: crate::res::Res::Local { pat_id },
         },
         ctx.derive_span,
     )
 }
 
-fn block_expr_with_tail(ctx: &mut DeriveContext<'_, '_>, stmts: Vec<Stmt>, tail: Expr) -> Expr {
+fn block_expr_with_tail(
+    ctx: &mut DeriveContext<'_, '_>,
+    stmts: Vec<crate::ids::StmtId>,
+    tail: ExprId,
+) -> ExprId {
     expr(
         ctx,
-        crate::hir::ExprKind::Block {
+        Expr::Block {
             block: crate::hir::Block {
                 stmts,
-                expr: Some(Box::new(tail)),
+                expr: Some(tail),
                 span: ctx.derive_span,
             },
         },

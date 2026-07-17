@@ -5,7 +5,7 @@ use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
 
 use crate::crate_hir::Crate;
-use crate::ids::HirId;
+use crate::ids::PatId;
 use crate::lowering_err::LoweringError;
 use crate::res::ResolvedCrate;
 
@@ -14,13 +14,12 @@ pub struct LoweringContext<'a> {
     pub interner: &'a Interner,
     pub resolved: &'a ResolvedCrate,
     pub crate_hir: Crate,
-    pub next_hir_id: u32,
     /// Number of synthetic `DefId`s allocated beyond the IDs produced during
     /// name resolution. The first synthesized ID is `definitions.len() + 1`.
     pub synthetic_def_count: u32,
     pub current_module: DefId,
     pub current_owner: DefId,
-    pub local_map: yelang_arena::FxHashMap<Symbol, HirId>,
+    pub local_map: yelang_arena::FxHashMap<Symbol, PatId>,
     pub errors: Vec<LoweringError>,
     /// The `DefId` of the type that `Self` refers to inside the current
     /// `impl` or `trait` block. `None` when not inside such a block.
@@ -34,7 +33,6 @@ impl<'a> LoweringContext<'a> {
             interner,
             resolved,
             crate_hir: Crate::new(root_module),
-            next_hir_id: 1,
             synthetic_def_count: 0,
             current_module: root_module,
             current_owner: root_module,
@@ -42,13 +40,6 @@ impl<'a> LoweringContext<'a> {
             errors: Vec::new(),
             self_type: None,
         }
-    }
-
-    /// Allocate a fresh `HirId`.
-    pub fn next_hir_id(&mut self) -> HirId {
-        let id = HirId::new(self.next_hir_id);
-        self.next_hir_id += 1;
-        id
     }
 
     /// Allocate a fresh synthetic `DefId` for compiler-generated items (e.g.
@@ -66,8 +57,8 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Push a local variable into scope.
-    pub fn push_local(&mut self, name: Symbol, hir_id: HirId) {
-        self.local_map.insert(name, hir_id);
+    pub fn push_local(&mut self, name: Symbol, pat_id: PatId) {
+        self.local_map.insert(name, pat_id);
     }
 
     /// Pop a local variable from scope.
@@ -76,7 +67,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Look up a local variable.
-    pub fn local(&self, name: Symbol) -> Option<HirId> {
+    pub fn local(&self, name: Symbol) -> Option<PatId> {
         self.local_map.get(&name).copied()
     }
 }

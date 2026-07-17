@@ -3,81 +3,51 @@
 use yelang_ast::{BlockExpr, Expr as AstExpr};
 use yelang_lexer::Span;
 
-use crate::hir::{Block, Expr, ExprKind, Stmt, StmtKind};
+use crate::hir::Expr;
 use crate::hir_body::Body;
-use crate::hir_pat::Pat;
-use crate::hir_ty::Ty;
-use crate::ids::BodyId;
+use crate::hir_pat::{BindingMode, Pat};
+use crate::ids::{BodyId, TyId};
 use crate::lowering::LoweringContext;
 
 /// Lower a `BlockExpr` into a standalone `Body` and register it in the crate.
 pub fn lower_block_as_body(
     ctx: &mut LoweringContext,
     block: &BlockExpr,
-    param_tys: &[Ty],
+    param_tys: &[TyId],
 ) -> BodyId {
-    // Build synthetic patterns for each parameter type so we have HirIds.
+    // Build synthetic patterns for each parameter type so we have PatIds.
     let params: Vec<crate::hir_body::Param> = param_tys
         .iter()
         .enumerate()
         .map(|(i, ty)| {
-            let hir_id = ctx.next_hir_id();
             let name = yelang_interner::Symbol::from(i as u32);
-            ctx.push_local(name, hir_id);
-            crate::hir_body::Param {
-                pat: Pat {
-                    hir_id,
-                    kind: crate::hir_pat::PatKind::Binding {
-                        mode: crate::hir_pat::BindingMode::ByValue,
-                        name,
-                        subpat: None,
-                    },
-                    span: ty.span,
+            let _ty_node = ctx
+                .crate_hir
+                .tys
+                .get(*ty)
+                .expect("parameter type should be allocated");
+            let pat_id = ctx.crate_hir.alloc_pat(
+                Pat::Binding {
+                    mode: BindingMode::ByValue,
+                    name,
+                    subpat: None,
                 },
-                ty: ty.clone(),
-                span: ty.span,
+                ty_node_span(ctx, *ty),
+            );
+            ctx.push_local(name, pat_id);
+            crate::hir_body::Param {
+                pat: pat_id,
+                ty: *ty,
+                span: ty_node_span(ctx, *ty),
             }
         })
         .collect();
 
-    let stmts: Vec<Stmt> = block
-        .statements
-        .iter()
-        .map(|stmt| crate::lowering_expr::lower_stmt(ctx, stmt))
-        .collect();
-
-    let (stmts, expr) = if let Some(last) = stmts.last() {
-        match &last.kind {
-            StmtKind::Expr { expr: _e } => {
-                let mut stmts = stmts;
-                let expr = stmts.pop().map(|s| match s.kind {
-                    StmtKind::Expr { expr } => expr,
-                    _ => unreachable!(),
-                });
-                (stmts, expr)
-            }
-            _ => (stmts, None),
-        }
-    } else {
-        (stmts, None)
-    };
-
-    let block_span = block.label.as_ref().map_or(Span::default(), |l| l.span);
-    let block = Block {
-        stmts,
-        expr,
-        span: block_span,
-    };
-
-    let value = Expr {
-        hir_id: ctx.next_hir_id(),
-        kind: ExprKind::Block { block },
-        span: block_span,
-        ty: Ty {
-            kind: crate::hir_ty::TyKind::Infer,
-            span: block_span,
-        },
-    };
+    let block = crate::lowering_expr::lower_block(ctx, block);
+    let block_span = block.span;
+    let value = ctx
+        .crate_hir
+        .alloc_expr(Expr::Block { block }, block_span);
 
     let body = Body {
         params,
@@ -85,7 +55,7 @@ pub fn lower_block_as_body(
         span: block_span,
     };
 
-    ctx.crate_hir.bodies.push(body)
+    ctx.crate_hir.alloc_body(body, block_span)
 }
 
 /// Lower a single AST expression into a standalone `Body`.
@@ -97,5 +67,9 @@ pub fn lower_expr_as_body(ctx: &mut LoweringContext, expr: &AstExpr) -> BodyId {
         value,
         span: expr.span,
     };
-    ctx.crate_hir.bodies.push(body)
+    ctx.crate_hir.alloc_body(body, expr.span)
+}
+
+fn ty_node_span(ctx: &LoweringContext, ty: TyId) -> Span {
+    ctx.crate_hir.ty_spans.get(ty).copied().unwrap_or(Span::default())
 }

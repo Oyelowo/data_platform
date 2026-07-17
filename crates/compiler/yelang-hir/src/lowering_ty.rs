@@ -3,7 +3,8 @@
 use yelang_ast::Type as AstType;
 
 use crate::hir::{GenericParam, TraitBound};
-use crate::hir_ty::{AnonField, Const, ConstKind, Ty, TyKind, UtilityKind};
+use crate::hir_ty::{AnonField, Const, ConstKind, Ty, UtilityKind};
+use crate::ids::TyId;
 use crate::lowering::LoweringContext;
 
 /// Extract and lower type-only generic arguments from an AST path.
@@ -11,7 +12,7 @@ use crate::lowering::LoweringContext;
 /// Const generic arguments and associated type bindings are parsed but not
 /// yet represented in HIR; they are dropped here and will be handled once the
 /// type system supports them.
-fn lower_generic_args_from_path(ctx: &mut LoweringContext, path: &yelang_ast::Path) -> Vec<Ty> {
+fn lower_generic_args_from_path(ctx: &mut LoweringContext, path: &yelang_ast::Path) -> Vec<TyId> {
     let mut args = Vec::new();
     for segment in &path.segments {
         let Some(seg_args) = &segment.args else {
@@ -33,20 +34,21 @@ fn lower_generic_args_from_path(ctx: &mut LoweringContext, path: &yelang_ast::Pa
     args
 }
 
-/// Lower an AST type to a HIR type.
-pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
+/// Lower an AST type to a HIR type, allocate it in the crate arena, and return
+/// its `TyId`.
+pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> TyId {
     let span = ty.span;
     let kind = match &ty.kind {
         yelang_ast::TypeKind::Named(path) => {
             let res = crate::lowering_expr::resolve_ast_path(ctx, path);
             let args = lower_generic_args_from_path(ctx, path);
-            TyKind::Path { res, args }
+            Ty::Path { res, args }
         }
-        yelang_ast::TypeKind::Tuple(tys) => TyKind::Tuple {
+        yelang_ast::TypeKind::Tuple(tys) => Ty::Tuple {
             tys: tys.iter().map(|t| lower_ty(ctx, t)).collect(),
         },
-        yelang_ast::TypeKind::Array(inner, len) => TyKind::Array {
-            ty: Box::new(lower_ty(ctx, inner)),
+        yelang_ast::TypeKind::Array(inner, len) => Ty::Array {
+            ty: lower_ty(ctx, inner),
             // TODO: Lower the length expression to a proper Const.
             // For now we emit a placeholder; const-eval will replace it.
             len: Const {
@@ -59,26 +61,26 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
                 span: len.span,
             },
         },
-        yelang_ast::TypeKind::Slice(inner) => TyKind::Slice {
-            ty: Box::new(lower_ty(ctx, inner)),
+        yelang_ast::TypeKind::Slice(inner) => Ty::Slice {
+            ty: lower_ty(ctx, inner),
         },
-        yelang_ast::TypeKind::Ref { ty: inner, is_mut } => TyKind::Ref {
+        yelang_ast::TypeKind::Ref { ty: inner, is_mut } => Ty::Ref {
             mutability: if *is_mut {
                 yelang_ast::Mutability::Mutable
             } else {
                 yelang_ast::Mutability::Immutable
             },
-            ty: Box::new(lower_ty(ctx, inner)),
+            ty: lower_ty(ctx, inner),
         },
-        yelang_ast::TypeKind::RawPtr { ty: inner, is_mut } => TyKind::RawPtr {
+        yelang_ast::TypeKind::RawPtr { ty: inner, is_mut } => Ty::RawPtr {
             mutability: if *is_mut {
                 yelang_ast::Mutability::Mutable
             } else {
                 yelang_ast::Mutability::Immutable
             },
-            ty: Box::new(lower_ty(ctx, inner)),
+            ty: lower_ty(ctx, inner),
         },
-        yelang_ast::TypeKind::Function(fn_ty) => TyKind::FnPtr {
+        yelang_ast::TypeKind::Function(fn_ty) => Ty::FnPtr {
             sig: Box::new(crate::hir::FnSig {
                 inputs: fn_ty.params.iter().map(|p| lower_ty(ctx, p)).collect(),
                 output: lower_ty(ctx, &fn_ty.return_type),
@@ -91,15 +93,15 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
         },
         yelang_ast::TypeKind::ForAll { params, ty: inner } => {
             let hir_params = lower_type_binder_params(ctx, params);
-            TyKind::ForAll {
+            Ty::ForAll {
                 params: hir_params,
-                ty: Box::new(lower_ty(ctx, inner)),
+                ty: lower_ty(ctx, inner),
             }
         }
-        yelang_ast::TypeKind::Literal(lit) => TyKind::TypeLit {
+        yelang_ast::TypeKind::Literal(lit) => Ty::TypeLit {
             variants: vec![lit.clone()],
         },
-        yelang_ast::TypeKind::Structural(fields) => TyKind::AnonStruct {
+        yelang_ast::TypeKind::Structural(fields) => Ty::AnonStruct {
             fields: fields
                 .iter()
                 .map(|f| AnonField {
@@ -108,22 +110,22 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> Ty {
                 })
                 .collect(),
         },
-        yelang_ast::TypeKind::Union(tys) => TyKind::Union {
+        yelang_ast::TypeKind::Union(tys) => Ty::Union {
             tys: tys.iter().map(|t| lower_ty(ctx, t)).collect(),
         },
         yelang_ast::TypeKind::Operator(op) => lower_type_operator(ctx, op),
-        yelang_ast::TypeKind::ImplTrait(path) => TyKind::ImplTrait {
+        yelang_ast::TypeKind::ImplTrait(path) => Ty::ImplTrait {
             path: crate::lowering_expr::resolve_ast_path(ctx, path),
         },
-        yelang_ast::TypeKind::DynTrait(path) => TyKind::DynTrait {
+        yelang_ast::TypeKind::DynTrait(path) => Ty::DynTrait {
             path: crate::lowering_expr::resolve_ast_path(ctx, path),
         },
-        yelang_ast::TypeKind::Infer => TyKind::Infer,
-        yelang_ast::TypeKind::Never => TyKind::Tuple { tys: vec![] },
-        yelang_ast::TypeKind::Error => TyKind::Err,
+        yelang_ast::TypeKind::Infer => Ty::Infer,
+        yelang_ast::TypeKind::Never => Ty::Tuple { tys: vec![] },
+        yelang_ast::TypeKind::Error => Ty::Err,
     };
 
-    Ty { kind, span }
+    ctx.crate_hir.alloc_ty(kind, span)
 }
 
 /// Lower `TypeBinderParams` (from `for<T>`) into item-level `GenericParam`s.
@@ -168,31 +170,31 @@ pub(crate) fn lower_trait_bound(
     }
 }
 
-/// Lower a `TypeOperator` into a `Utility` `TyKind`.
-fn lower_type_operator(ctx: &mut LoweringContext, op: &yelang_ast::TypeOperator) -> TyKind {
+/// Lower a `TypeOperator` into a `Utility` `Ty`.
+fn lower_type_operator(ctx: &mut LoweringContext, op: &yelang_ast::TypeOperator) -> Ty {
     match op {
         yelang_ast::TypeOperator::TypeOf(_expr) => {
             // `typeof expr` is an unevaluated type operator.
             // We lower it as a special Utility marker; type-checking will
             // evaluate the expression and substitute the real type.
-            TyKind::Utility {
+            Ty::Utility {
                 kind: UtilityKind::ReturnType, // Placeholder; typeof is its own kind
                 args: vec![],
             }
         }
-        yelang_ast::TypeOperator::ReturnType(ty) => TyKind::Utility {
+        yelang_ast::TypeOperator::ReturnType(ty) => Ty::Utility {
             kind: UtilityKind::ReturnType,
             args: vec![lower_ty(ctx, ty)],
         },
-        yelang_ast::TypeOperator::Parameters(ty) => TyKind::Utility {
+        yelang_ast::TypeOperator::Parameters(ty) => Ty::Utility {
             kind: UtilityKind::Params,
             args: vec![lower_ty(ctx, ty)],
         },
-        yelang_ast::TypeOperator::Pick(base, keys) => TyKind::Utility {
+        yelang_ast::TypeOperator::Pick(base, keys) => Ty::Utility {
             kind: UtilityKind::Pick,
             args: vec![lower_ty(ctx, base), lower_ty(ctx, keys)],
         },
-        yelang_ast::TypeOperator::Omit(base, keys) => TyKind::Utility {
+        yelang_ast::TypeOperator::Omit(base, keys) => Ty::Utility {
             kind: UtilityKind::Omit,
             args: vec![lower_ty(ctx, base), lower_ty(ctx, keys)],
         },

@@ -4,7 +4,7 @@ use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
 
-use crate::hir::{ExprKind, ItemKind};
+use crate::hir::{Expr, ItemKind};
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
 
@@ -49,9 +49,10 @@ fn desugar_while() {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
+    let expr = crate_hir.exprs.get(body.value).unwrap();
 
     // The body should contain a `loop` expression (desugared from `while`).
-    assert!(matches!(body.value.kind, ExprKind::Block { .. }));
+    assert!(matches!(expr, Expr::Block { .. }));
 }
 
 #[test]
@@ -66,7 +67,8 @@ fn desugar_for() {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    assert!(matches!(body.value.kind, ExprKind::Block { .. }));
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    assert!(matches!(expr, Expr::Block { .. }));
 }
 
 #[test]
@@ -82,7 +84,8 @@ fn desugar_try_operator() {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    assert!(matches!(body.value.kind, ExprKind::Block { .. }));
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    assert!(matches!(expr, Expr::Block { .. }));
 }
 
 #[test]
@@ -105,5 +108,6 @@ fn desugar_let_chain() {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    assert!(matches!(body.value.kind, ExprKind::Block { .. }));
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    assert!(matches!(expr, Expr::Block { .. }));
 }

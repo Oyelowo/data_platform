@@ -5,7 +5,7 @@ use crate::index_vec::Idx;
 
 /// A newtype wrapper around a raw integer ID.
 ///
-/// Provides type safety so that `DefId` and `HirId` cannot be confused.
+/// Provides type safety so that different ID spaces (e.g. `DefId`) cannot be confused.
 ///
 /// The implementations of `Copy`, `Eq`, `Hash`, etc. do not require `T` to
 /// implement those traits because `Id<T>` owns only a `NonZeroU32` and a
@@ -118,14 +118,6 @@ pub mod tags {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagDef;
 
-    /// Tag for `Id<TagHir>`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct TagHir;
-
-    /// Tag for `Id<TagBody>`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct TagBody;
-
     /// Tag for `Id<TagSyntaxContext>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagSyntaxContext;
@@ -133,12 +125,6 @@ pub mod tags {
 
 /// Type-safe definition ID.
 pub type DefId = Id<tags::TagDef>;
-
-/// Type-safe HIR node ID.
-pub type HirId = Id<tags::TagHir>;
-
-/// Type-safe body ID.
-pub type BodyId = Id<tags::TagBody>;
 
 #[cfg(test)]
 mod tests {
@@ -163,12 +149,4 @@ mod tests {
         assert!(DefId::try_new(1).is_some());
     }
 
-    #[test]
-    fn id_type_safety() {
-        let def = DefId::new(1);
-        let hir = HirId::new(1);
-        // def and hir are different types; this would be a compile error:
-        // assert_eq!(def, hir);
-        assert_eq!(def.raw(), hir.raw());
-    }
 }

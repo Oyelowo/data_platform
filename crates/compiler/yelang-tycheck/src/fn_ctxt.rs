@@ -4,22 +4,20 @@
  * for checking a single function body.
  */
 
-use yelang_arena::{DefId, FxHashMap, HirId};
+use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Label;
+use yelang_hir::Crate as HirCrate;
+use yelang_hir::ids::{ExprId, PatId};
 use yelang_lexer::Span;
 use yelang_ty::generic::GenericArg;
 use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{
-    AdtDef, Const, ConstKind, ConstValue, InferTy, Mutability, Ty, TyKind, TypeAndMut,
-};
+use yelang_ty::ty::{AdtDef, Const, InferTy, Mutability, Ty, TyKind, TypeAndMut};
 
 use yelang_infer::context::InferCtxt;
 use yelang_infer::error::TypeError;
 use yelang_infer::type_variable::{FloatVarValue, IntVarValue, TypeVarValue};
-
-use crate::coerce::Coerce;
 use crate::typeck_results::TypeckResults;
 
 /// A breakable scope for loop/break type checking.
@@ -41,12 +39,17 @@ pub enum BreakableKind {
 pub struct FnCtxt<'tcx> {
     /// The interner for creating canonical types.
     pub interner: &'tcx Interner<'tcx>,
+    /// The HIR crate used to look up arena-allocated nodes.
+    ///
+    /// Kept as a mutable reference so test helpers can allocate nodes through
+    /// the context while it is live.
+    pub crate_hir: &'tcx mut HirCrate,
     /// The inference context.
     pub infer: InferCtxt<'tcx>,
     /// Collected results.
     pub results: TypeckResults<'tcx>,
-    /// Local variable scope stack. Each frame is a map from HirId to type.
-    pub local_scopes: Vec<FxHashMap<HirId, Ty<'tcx>>>,
+    /// Local variable scope stack. Each frame is a map from PatId to type.
+    pub local_scopes: Vec<FxHashMap<PatId, Ty<'tcx>>>,
     /// Breakable scope stack.
     pub breakable_scopes: Vec<BreakableScope<'tcx>>,
     /// The expected return type of the function.
@@ -62,12 +65,14 @@ pub struct FnCtxt<'tcx> {
 impl<'tcx> FnCtxt<'tcx> {
     pub fn new(
         interner: &'tcx Interner<'tcx>,
+        crate_hir: &'tcx mut HirCrate,
         def_id: DefId,
         return_ty: Ty<'tcx>,
         item_types: FxHashMap<DefId, Ty<'tcx>>,
     ) -> Self {
         Self {
             interner,
+            crate_hir,
             infer: InferCtxt::new(),
             results: TypeckResults::new(def_id),
             local_scopes: vec![FxHashMap::new()],
@@ -202,14 +207,17 @@ impl<'tcx> FnCtxt<'tcx> {
         self.local_scopes.pop();
     }
 
-    pub fn insert_local(&mut self, hir_id: HirId, ty: Ty<'tcx>) {
-        self.local_scopes.last_mut().unwrap().insert(hir_id, ty);
-        self.results.local_types.insert(hir_id, ty);
+    pub fn insert_local(&mut self, pat_id: PatId, ty: Ty<'tcx>) {
+        self.local_scopes
+            .last_mut()
+            .expect("local scope stack should not be empty")
+            .insert(pat_id, ty);
+        self.results.local_types.insert(pat_id, ty);
     }
 
-    pub fn lookup_local(&self, hir_id: HirId) -> Option<Ty<'tcx>> {
+    pub fn lookup_local(&self, pat_id: PatId) -> Option<Ty<'tcx>> {
         for scope in self.local_scopes.iter().rev() {
-            if let Some(&ty) = scope.get(&hir_id) {
+            if let Some(&ty) = scope.get(&pat_id) {
                 return Some(ty);
             }
         }
@@ -253,12 +261,12 @@ impl<'tcx> FnCtxt<'tcx> {
     // Type recording
     // -----------------------------------------------------------------------
 
-    pub fn record_expr_ty(&mut self, hir_id: HirId, ty: Ty<'tcx>) {
-        self.results.expr_types.insert(hir_id, ty);
+    pub fn record_expr_ty(&mut self, expr_id: ExprId, ty: Ty<'tcx>) {
+        self.results.expr_types.insert(expr_id, ty);
     }
 
-    pub fn record_pat_ty(&mut self, hir_id: HirId, ty: Ty<'tcx>) {
-        self.results.pat_types.insert(hir_id, ty);
+    pub fn record_pat_ty(&mut self, pat_id: PatId, ty: Ty<'tcx>) {
+        self.results.pat_types.insert(pat_id, ty);
     }
 
     // -----------------------------------------------------------------------

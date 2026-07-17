@@ -1,6 +1,6 @@
 //! Tests for path resolution during HIR lowering.
 
-use crate::hir::{ExprKind, ItemKind};
+use crate::hir::{Expr, ItemKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
@@ -32,11 +32,12 @@ fn lower_resolved_fn_path() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
-    assert!(matches!(tail.kind, ExprKind::Call { .. }));
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Call { .. }));
 }
 
 #[test]
@@ -51,12 +52,13 @@ fn lower_unresolved_path_falls_back_to_err() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
     // Unresolved paths still lower; resolution is Err
-    assert!(matches!(tail.kind, ExprKind::Call { .. }));
+    assert!(matches!(tail, Expr::Call { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -75,11 +77,12 @@ fn lower_absolute_path() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
-    assert!(matches!(tail.kind, ExprKind::Call { .. }));
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Call { .. }));
 }
 
 #[test]
@@ -94,11 +97,12 @@ fn lower_crate_path() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
-    assert!(matches!(tail.kind, ExprKind::Call { .. }));
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Call { .. }));
 }
 
 #[test]
@@ -113,11 +117,12 @@ fn lower_self_path() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
-    assert!(matches!(tail.kind, ExprKind::Call { .. }));
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Call { .. }));
 }
 
 #[test]
@@ -132,9 +137,10 @@ fn lower_super_path() {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
-    let ExprKind::Block { block, .. } = &body.value.kind else {
+    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = block.expr.as_ref().expect("expected tail expr");
-    assert!(matches!(tail.kind, ExprKind::Call { .. }));
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Call { .. }));
 }

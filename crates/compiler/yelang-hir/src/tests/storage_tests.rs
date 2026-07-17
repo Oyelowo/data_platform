@@ -72,25 +72,26 @@ fn body_ids_are_dense() {
         crate_hir.bodies.len() >= 3,
         "expected at least one body per function"
     );
-    for i in 1..=crate_hir.bodies.len() {
-        let id = yelang_arena::BodyId::new(i as u32);
+    let ids: Vec<_> = crate_hir.bodies.keys().collect();
+    assert_eq!(ids.len(), crate_hir.bodies.len());
+    for id in ids {
         assert!(
             crate_hir.bodies.get(id).is_some(),
-            "body_id {:?} should be present in dense arena",
-            id
+            "every body key should map to a body"
         );
     }
 }
 
 #[test]
 fn def_id_and_body_id_are_distinct_types() {
-    // This test documents the type-safety guarantee: even if raw values overlap,
-    // `DefId` and `BodyId` are different types and cannot be mixed up.
-    let def = yelang_arena::DefId::new(1);
-    let body = yelang_arena::BodyId::new(1);
-    assert_eq!(def.raw(), body.raw());
+    // This test documents the type-safety guarantee: `DefId` and `BodyId` are
+    // different types and cannot be mixed up.
+    assert_ne!(
+        std::any::TypeId::of::<yelang_arena::DefId>(),
+        std::any::TypeId::of::<crate::ids::BodyId>()
+    );
     // The following would be a compile error if uncommented:
-    // let _ = def == body;
+    // let _ = yelang_arena::DefId::new(1) == crate::ids::BodyId::default();
 }
 
 #[test]

@@ -6,8 +6,6 @@ use yelang_interner::Interner;
 
 use crate::crate_hir::Crate;
 use crate::hir::Expr;
-use crate::hir_body::Body;
-use crate::ids::BodyId;
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
 use crate::visitor::{Visitor, walk_crate};
@@ -18,12 +16,12 @@ struct ExprCounter<'hir> {
 }
 
 impl<'hir> Visitor<'hir> for ExprCounter<'hir> {
-    fn visit_expr(&mut self, _expr: &Expr) {
-        self.count += 1;
+    fn crate_hir(&self) -> Option<&'hir Crate> {
+        Some(self.crate_hir)
     }
 
-    fn visit_body_by_id(&mut self, body_id: BodyId) -> Option<&'hir Body> {
-        self.crate_hir.bodies.get(body_id)
+    fn visit_expr(&mut self, _expr: &'hir Expr) {
+        self.count += 1;
     }
 }
 

@@ -5,30 +5,24 @@ use yelang_lexer::Span;
 
 use crate::hir::FnSig;
 use crate::hir::Lit;
+use crate::ids::TyId;
 use crate::res::Res;
-
-/// A type node.
-#[derive(Debug, Clone)]
-pub struct Ty {
-    pub kind: TyKind,
-    pub span: Span,
-}
 
 /// Kinds of types.
 #[derive(Debug, Clone)]
-pub enum TyKind {
+pub enum Ty {
     /// Resolved path type, optionally with generic arguments.
     ///
     /// Examples:
     /// - `i32` -> `Path { res: PrimTy(Int(I32)), args: [] }`
     /// - `Vec<T>` -> `Path { res: Def(Vec), args: [T] }`
-    Path { res: Res, args: Vec<Ty> },
+    Path { res: Res, args: Vec<TyId> },
     /// Tuple type: `(i32, bool)`
-    Tuple { tys: Vec<Ty> },
+    Tuple { tys: Vec<TyId> },
     /// Array type: `[T; N]`
-    Array { ty: Box<Ty>, len: Const },
+    Array { ty: TyId, len: Const },
     /// Slice type: `[T]`
-    Slice { ty: Box<Ty> },
+    Slice { ty: TyId },
     /// Function pointer type.
     FnPtr { sig: Box<FnSig> },
     /// Anonymous struct type: `{ x: i32, y: i32 }`
@@ -36,24 +30,24 @@ pub enum TyKind {
     /// Type literal: `"pending" | "active"`
     TypeLit { variants: Vec<Lit> },
     /// Utility type: `Omit<T, K>`
-    Utility { kind: UtilityKind, args: Vec<Ty> },
+    Utility { kind: UtilityKind, args: Vec<TyId> },
     /// Reference: `&T` or `&mut T`
     Ref {
         mutability: yelang_ast::Mutability,
-        ty: Box<Ty>,
+        ty: TyId,
     },
     /// Raw pointer: `*mut T` or `*const T`
     RawPtr {
         mutability: yelang_ast::Mutability,
-        ty: Box<Ty>,
+        ty: TyId,
     },
     /// Higher-ranked type: `for<T> fn(T) -> T`
     ForAll {
         params: Vec<crate::hir::GenericParam>,
-        ty: Box<Ty>,
+        ty: TyId,
     },
     /// Union type: `i32 | string | bool`
-    Union { tys: Vec<Ty> },
+    Union { tys: Vec<TyId> },
     /// `impl Trait` opaque type.
     ImplTrait { path: Res },
     /// `dyn Trait` trait object type.
@@ -68,7 +62,7 @@ pub enum TyKind {
 #[derive(Debug, Clone)]
 pub struct AnonField {
     pub name: Symbol,
-    pub ty: Ty,
+    pub ty: TyId,
 }
 
 /// Utility type kinds.

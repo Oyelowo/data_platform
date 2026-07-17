@@ -1,21 +1,19 @@
 //! Core HIR types.
 //!
-//! This module defines the "shell" structs (`Expr`, `Item`, `Pat`, `Ty`, …)
-//! and shared auxiliary types (`Block`, `Stmt`, `Arm`, `FnSig`, …).
-//! The `*Kind` enums live in their own sub-modules to keep file sizes
-/// reasonable.
+//! This module defines the "shell" structs (`Item`, `Block`, `Arm`, `FnSig`, …)
+//! and shared auxiliary types.  The expression/pattern/type/statement enums
+//! live in their own sub-modules and are referenced here by ID.
 pub use yelang_ast::{Ident, Label, Mutability, Visibility};
 use yelang_lexer::Span;
 
 pub use crate::hir_body::{Body, Param};
-pub use crate::hir_expr::{Expr, ExprKind};
+pub use crate::hir_expr::Expr;
 pub use crate::hir_item::{Item, ItemKind};
-pub use crate::hir_pat::{Pat, PatKind};
+pub use crate::hir_pat::Pat;
 pub use crate::hir_struct::{FieldDef, StructField, VariantData};
-pub use crate::hir_ty::{Ty, TyKind};
+pub use crate::hir_ty::Ty;
 
-use crate::hir_ty::Const;
-use crate::ids::BodyId;
+use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use crate::res::Res;
 
 /// Re-export commonly-used AST types that contain no unresolved names.
@@ -30,28 +28,21 @@ pub type UnOp = yelang_ast::UnaryOp;
 /// A block of statements with an optional trailing expression.
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub stmts: Vec<Stmt>,
-    pub expr: Option<Box<Expr>>,
-    pub span: Span,
-}
-
-/// A statement.
-#[derive(Debug, Clone)]
-pub struct Stmt {
-    pub kind: StmtKind,
+    pub stmts: Vec<StmtId>,
+    pub expr: Option<ExprId>,
     pub span: Span,
 }
 
 /// Kinds of statements.
 #[derive(Debug, Clone)]
-pub enum StmtKind {
+pub enum Stmt {
     /// Expression statement (with or without semicolon).
-    Expr { expr: Box<Expr> },
+    Expr { expr: ExprId },
     /// `let` binding.
     Let {
-        pat: Pat,
-        ty: Option<Ty>,
-        init: Option<Box<Expr>>,
+        pat: PatId,
+        ty: Option<TyId>,
+        init: Option<ExprId>,
     },
     /// Nested item declaration.
     Item { item: Item },
@@ -64,9 +55,9 @@ pub enum StmtKind {
 /// A single arm in a `match`.
 #[derive(Debug, Clone)]
 pub struct Arm {
-    pub pat: Pat,
-    pub guard: Option<Box<Expr>>,
-    pub body: Box<Expr>,
+    pub pat: PatId,
+    pub guard: Option<ExprId>,
+    pub body: ExprId,
     pub span: Span,
 }
 
@@ -74,7 +65,7 @@ pub struct Arm {
 #[derive(Debug, Clone)]
 pub struct FieldExpr {
     pub ident: Ident,
-    pub expr: Expr,
+    pub expr: ExprId,
     pub span: Span,
 }
 
@@ -92,8 +83,8 @@ pub enum CaptureClause {
 /// Function signature (shared by `fn` items and `fn` pointer types).
 #[derive(Debug, Clone)]
 pub struct FnSig {
-    pub inputs: Vec<Ty>,
-    pub output: Ty,
+    pub inputs: Vec<TyId>,
+    pub output: TyId,
     pub is_async: bool,
     pub is_const: bool,
     pub is_variadic: bool,
@@ -122,13 +113,13 @@ pub enum GenericParam {
     Type {
         name: Ident,
         bounds: Vec<TraitBound>,
-        default: Option<Ty>,
+        default: Option<TyId>,
         span: Span,
     },
     Const {
         name: Ident,
-        ty: Ty,
-        default: Option<Box<Expr>>,
+        ty: TyId,
+        default: Option<ExprId>,
         span: Span,
     },
 }
@@ -150,8 +141,8 @@ pub struct WhereClause {
 /// A single predicate in a `where` clause.
 #[derive(Debug, Clone)]
 pub enum WherePredicate {
-    TraitBound { ty: Ty, bounds: Vec<TraitBound> },
-    TypeEq { lhs: Ty, rhs: Ty },
+    TraitBound { ty: TyId, bounds: Vec<TraitBound> },
+    TypeEq { lhs: TyId, rhs: TyId },
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +161,7 @@ pub struct EnumDef {
 pub struct VariantDef {
     pub ident: Ident,
     pub data: VariantData,
-    pub discriminant: Option<Const>,
+    pub discriminant: Option<crate::hir_ty::Const>,
     pub span: Span,
 }
 
@@ -199,12 +190,12 @@ pub enum TraitItemKind {
         default: Option<BodyId>,
     },
     Const {
-        ty: Ty,
+        ty: TyId,
         body: Option<BodyId>,
     },
     Type {
         bounds: Vec<TraitBound>,
-        default: Option<Ty>,
+        default: Option<TyId>,
     },
 }
 
@@ -212,7 +203,7 @@ pub enum TraitItemKind {
 #[derive(Debug, Clone)]
 pub struct Impl {
     pub generics: Generics,
-    pub self_ty: Ty,
+    pub self_ty: TyId,
     pub of_trait: Option<TraitRef>,
     pub items: Vec<ImplItem>,
     pub span: Span,
@@ -231,8 +222,8 @@ pub struct ImplItem {
 #[derive(Debug, Clone)]
 pub enum ImplItemKind {
     Fn { sig: FnSig, body: BodyId },
-    Const { ty: Ty, body: BodyId },
-    Type { ty: Ty },
+    Const { ty: TyId, body: BodyId },
+    Type { ty: TyId },
 }
 
 /// Reference to a trait in an `impl Trait for Type`.
@@ -269,7 +260,7 @@ pub struct ForeignItem {
 #[derive(Debug, Clone)]
 pub enum ForeignItemKind {
     Fn { sig: FnSig },
-    Static { ty: Ty, mutability: Mutability },
+    Static { ty: TyId, mutability: Mutability },
     Type,
 }
 
