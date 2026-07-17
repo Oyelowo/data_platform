@@ -23,7 +23,7 @@ thread_local! {
     /// The mixed-site hygiene span, set by the proc-macro server.
     ///
     /// Mixed-site behaves like the call site for local bindings and like the
-    /// definition site for items/types, mirroring Rust's `macro_rules!` hygiene.
+    /// definition site for items/types, mirroring declarative macro hygiene.
     static MIXED_SITE: RefCell<Option<Span>> = const { RefCell::new(None) };
 }
 
@@ -45,7 +45,7 @@ impl Span {
             .unwrap_or_else(Self::call_site)
     }
 
-    /// Mixed-site hygiene, similar to `macro_rules!` `$crate`.
+    /// Mixed-site hygiene, similar to declarative macro `$crate`.
     ///
     /// Returns the mixed-site span supplied by the compiler, falling back to
     /// [`Self::call_site`] if none was provided.

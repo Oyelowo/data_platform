@@ -239,7 +239,7 @@ fn macro_preserves_operator_precedence() {
 }
 
 #[test]
-fn ambiguous_macro_rules_report_error() {
+fn ambiguous_macro_report_error() {
     let src = r#"
         macro m {
             ($x:expr) => ( $x );

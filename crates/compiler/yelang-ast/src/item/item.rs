@@ -120,19 +120,6 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for ItemKind {
             }
         }
 
-        // Rust-compatible `macro_rules! name { ... }` macro definition.
-        if let Some(tok) = stream.peek()
-            && let TokenKind::Ident(ident) = tok.kind()
-            && stream.interner().resolve(&ident.symbol) == "macro_rules"
-            && stream
-                .peek_ahead(1)
-                .is_some_and(|t| matches!(t.kind(), TokenKind::Bang))
-        {
-            return stream
-                .parse::<MacroDef>()
-                .map(|m| ItemKind::MacroDef(Box::new(m)));
-        }
-
         // Macro invocation in item position: `my_macro! { ... }`.
         // A bare Path is not otherwise a valid item, so any `path!` here is a macro call.
         let checkpoint = stream.checkpoint();

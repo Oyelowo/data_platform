@@ -3298,8 +3298,8 @@ fn wrap_item_stream(
 }
 
 /// If `args` is a single delimited group, return its inner stream; otherwise
-/// return it unchanged.  This matches macro_rules semantics where the matcher
-/// sees the contents of `id!(...)`, not the delimiter itself.
+/// return it unchanged.  This matches declarative macro semantics where the
+/// matcher sees the contents of `id!(...)`, not the delimiter itself.
 fn unwrap_macro_args(
     args: &yelang_macro_core::token_tree::TokenStream,
 ) -> yelang_macro_core::token_tree::TokenStream {
@@ -3886,32 +3886,5 @@ mod tests {
             _ => panic!("expected inline module"),
         };
         assert!(items.iter().any(|i| matches!(i.kind, ItemKind::Fn(_))));
-    }
-
-    #[test]
-    fn macro_rules_syntax_expands() {
-        let src = r#"
-            macro_rules! id { ($x:expr) => { $x }; }
-            fn main() {
-                id!(42);
-            }
-        "#;
-        let (program, interner) = parse_program(src);
-        let result = crate::expand_program(&program, &interner);
-        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        let fn_item = &result.program.items[0];
-        let ItemKind::Fn(func) = &fn_item.kind else {
-            panic!("expected fn")
-        };
-        let body = &func.body;
-        assert_eq!(body.statements.len(), 1);
-        let StmtKind::TermExpr(expr) = &body.statements[0].kind else {
-            panic!("expected term expr stmt")
-        };
-        assert!(
-            matches!(expr.kind, ExprKind::Literal(yelang_ast::Literal::Int(_))),
-            "expected literal 42, got {:?}",
-            expr.kind
-        );
     }
 }
