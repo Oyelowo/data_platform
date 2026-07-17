@@ -10,4 +10,5 @@ license.workspace = true
 storage-traits = { path = "../storage-traits" }
 storage-memory = { path = "../storage-memory" }
 storage-blob = { path = "../storage-blob" }
+storage-btree = { path = "../storage-btree" }
 storage-columnar = { path = "../storage-columnar" }

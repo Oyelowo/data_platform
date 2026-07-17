@@ -1,0 +1,25 @@
+[package]
+name = "storage-bwtree"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+storage-traits = { path = "../storage-traits" }
+storage-wal = { path = "../storage-wal" }
+bytes = "1.10"
+thiserror = "2.0"
+crc32c = "0.6"
+crossbeam-epoch = "0.9"
+crossbeam-queue = "0.3"
+parking_lot = "0.12"
+
+[dev-dependencies]
+storage-testkit = { path = "../storage-testkit" }
+tempfile = "3.19"
+proptest = "1.6"
+criterion = "0.5"
+
+

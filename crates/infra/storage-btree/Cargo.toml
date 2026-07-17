@@ -1,0 +1,22 @@
+[package]
+name = "storage-btree"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Persistent copy-on-write B+ tree key-value storage engine."
+license.workspace = true
+
+[dependencies]
+storage-traits = { path = "../storage-traits" }
+storage-wal = { path = "../storage-wal" }
+bytes = "1.10"
+thiserror = "2.0"
+crc32c = "0.6"
+parking_lot = "0.12"
+lru = "0.12"
+
+[dev-dependencies]
+storage-testkit = { path = "../storage-testkit" }
+tempfile = "3.19"
+proptest = "1.6"
+criterion = "0.5"
