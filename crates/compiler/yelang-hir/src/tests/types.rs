@@ -3,16 +3,20 @@
 use crate::hir::core::ItemKind;
 use crate::hir::ty::{Ty, UtilityKind};
 use crate::lowering::lower_crate;
-use crate::tests::common::{parse_program, stub_resolved};
+use crate::res::Res;
+use crate::tests::common::{parse_program, stub_resolved, stub_resolved_with_array};
 
 fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::core::FnSig {
     let item = crate_hir
         .items
         .values()
-        .find_map(|opt| opt.as_ref())
-        .unwrap();
+        .find_map(|opt| {
+            let item = opt.as_ref()?;
+            matches!(item.kind, ItemKind::Fn { .. }).then_some(item)
+        })
+        .expect("expected a function item");
     let ItemKind::Fn { sig, .. } = &item.kind else {
-        panic!("expected fn")
+        unreachable!()
     };
     sig
 }
@@ -77,14 +81,18 @@ fn lower_array_type() {
 }
 
 #[test]
-fn lower_slice_type() {
+fn lower_dynamic_array_type() {
+    // `[T]` is the surface syntax for the prelude `Array<T>` type.
     let src = "fn foo(x: [i32]) {}";
     let (program, interner) = parse_program(src);
-    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+    let crate_hir = lower_crate(&program, &stub_resolved_with_array(), &interner);
 
     let sig = get_fn_sig(&crate_hir);
     let ty = crate_hir.ty(sig.inputs[0]).unwrap();
-    assert!(matches!(ty, Ty::Slice { .. }));
+    assert!(
+        matches!(ty, Ty::Path { res, args } if matches!(res, Res::Def { .. }) && args.len() == 1),
+        "expected [i32] to lower to Array<i32>, got {ty:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

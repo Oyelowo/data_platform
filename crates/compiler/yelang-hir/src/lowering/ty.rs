@@ -6,6 +6,8 @@ use crate::hir::core::TraitBound;
 use crate::hir::ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};
 use crate::ids::HirTyId;
 use crate::lowering::LoweringContext;
+use crate::res::Res;
+use yelang_resolve::lang_items::LangItem;
 
 /// Extract and lower generic arguments from an AST path.
 fn lower_generic_args_from_path(
@@ -74,9 +76,20 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> HirTyId {
             ty: lower_ty(ctx, inner),
             len: lower_const_expr(ctx, len, len.span),
         },
-        yelang_ast::TypeKind::Slice(inner) => Ty::Slice {
-            ty: lower_ty(ctx, inner),
-        },
+        yelang_ast::TypeKind::Slice(inner) => {
+            // Surface `[T]` is the dynamic array type `Array<T>`.
+            let elem_ty = lower_ty(ctx, inner);
+            if let Some(def_id) = ctx.resolved.lang_items.get(LangItem::Array) {
+                Ty::Path {
+                    res: Res::Def { def_id },
+                    args: vec![GenericArg::Type(elem_ty)],
+                }
+            } else {
+                // Fallback for isolated tests without a prelude: keep the slice
+                // representation so HIR remains well-formed.
+                Ty::Slice { ty: elem_ty }
+            }
+        }
         yelang_ast::TypeKind::Ref { ty: inner, is_mut } => Ty::Ref {
             mutability: if *is_mut {
                 yelang_ast::Mutability::Mutable

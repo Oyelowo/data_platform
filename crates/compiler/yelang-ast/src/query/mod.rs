@@ -30,14 +30,14 @@ use yelang_lexer::{ParseTokenStream, TokenResult, TokenStream};
 
 /// Parse an optional query tail expression in block form.
 ///
-/// Accepts either `return <expr>` or, for compatibility with earlier block
-/// syntax, `; <expr>`. Returns `None` if neither form is present.
+/// Mutation queries do not use a `return` clause; the value produced by the
+/// block is introduced by `; <expr>` so that `return` remains reserved for
+/// function-level early returns.
+///
+/// Returns `None` if no tail expression is present.
 pub(crate) fn parse_query_tail(
     stream: &mut TokenStream<crate::tokenizer::TokenKind>,
 ) -> TokenResult<Option<Expr>> {
-    if stream.parse::<Option<T![return]>>()?.is_some() {
-        return Ok(Some(stream.parse::<Expr>()?));
-    }
     if stream.parse::<Option<T![;]>>()?.is_some() {
         return Ok(Some(stream.parse::<Expr>()?));
     }

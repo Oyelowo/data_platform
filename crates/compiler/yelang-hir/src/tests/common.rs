@@ -6,7 +6,7 @@ use yelang_interner::{Interner, Symbol};
 
 use crate::res::ResolvedCrate;
 use yelang_resolve::DefKind;
-use yelang_resolve::lang_items::LangItems;
+use yelang_resolve::lang_items::{LangItem, LangItems};
 
 pub fn parse_program(src: &str) -> (Program, Interner) {
     let interner = Interner::new();
@@ -39,6 +39,15 @@ pub fn stub_resolved() -> ResolvedCrate {
         generic_param_defs: FxHashMap::default(),
         generic_params: FxHashMap::default(),
     }
+}
+
+/// Build a minimal ResolvedCrate with the `Array` lang item registered.
+/// Useful for tests that need `[T]` to lower to `Array<T>`.
+pub fn stub_resolved_with_array() -> ResolvedCrate {
+    let array_def_id = DefId::new(2);
+    let mut resolved = stub_resolved();
+    resolved.lang_items.insert(LangItem::Array, array_def_id);
+    resolved
 }
 
 /// Build a ResolvedCrate with the given definitions pre-populated.

@@ -660,7 +660,7 @@ fn create_query_returns_projection() {
     let src = r#"
 struct User { id: i32, name: str }
 fn main() -> str {
-    create { user@u:User { id: 1, name: 'Alice' } return u.name }
+    create { user@u:User { id: 1, name: 'Alice' } ; u.name }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -672,7 +672,7 @@ fn create_query_return_type_inferred() {
     let src = r#"
 struct User { id: i32, name: str }
 fn main() -> _ {
-    create { user@u:User { id: 1, name: 'Alice' } return u.name }
+    create { user@u:User { id: 1, name: 'Alice' } ; u.name }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -684,7 +684,7 @@ fn update_query_set_returns_projection() {
     let src = r#"
 struct User { id: i32, name: str }
 fn main() -> str {
-    update { users@u:User set u.name = 'Bob' where u.id == 1 return u.name }
+    update { users@u:User set u.name = 'Bob' where u.id == 1 ; u.name }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -696,7 +696,7 @@ fn update_query_merge_returns_projection() {
     let src = r#"
 struct User { id: i32, name: str }
 fn main() -> i32 {
-    update { users@u:User { name: 'Bob' } where u.id == 1 return u.id }
+    update { users@u:User { name: 'Bob' } where u.id == 1 ; u.id }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -710,7 +710,7 @@ struct User { id: i32, name: str }
 fn main() -> i32 {
     upsert { user@u:User { id: 1, name: 'Alice' }
         on conflict (id) merge
-        return u.id }
+        ; u.id }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -722,7 +722,7 @@ fn delete_query_returns_projection() {
     let src = r#"
 struct User { id: i32, name: str }
 fn main() -> i32 {
-    delete { users@u:User where u.id == 1 return u.id }
+    delete { users@u:User where u.id == 1 ; u.id }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -736,7 +736,7 @@ struct User { id: i32 }
 struct Follows { since: i32 }
 fn main() -> i32 {
     link { (users@u:User) -> [follows@f:Follows { since: 2024 }] -> (friends@v:User)
-        return f.since }
+        ; f.since }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -750,7 +750,7 @@ struct User { id: i32 }
 struct Follows { since: i32 }
 fn main() -> i32 {
     unlink { (users@u:User) -> [follows@f:Follows] -> (friends@v:User)
-        return f.since }
+        ; f.since }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -762,7 +762,7 @@ fn mutation_query_where_must_be_bool() {
     let src = r#"
 struct User { id: i32 }
 fn main() -> i32 {
-    delete { users@u:User where u.id return u.id }
+    delete { users@u:User where u.id ; u.id }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -774,7 +774,7 @@ fn create_query_data_fields_typecheck() {
     let src = r#"
 struct User { id: i32 }
 fn main() -> i32 {
-    create { user@u:User { id: 1 } return u.id }
+    create { user@u:User { id: 1 } ; u.id }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -786,7 +786,7 @@ fn create_query_data_field_type_mismatch() {
     let src = r#"
 struct User { id: i32 }
 fn main() -> i32 {
-    create { user@u:User { id: "not an int" } return u.id }
+    create { user@u:User { id: "not an int" } ; u.id }
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
