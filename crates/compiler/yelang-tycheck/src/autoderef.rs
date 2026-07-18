@@ -156,6 +156,19 @@ pub fn emit_deref_trait_obligations(fcx: &mut FnCtxt<'_>, source: TyId, target: 
 /// automut variants.
 pub fn probe_types(fcx: &mut FnCtxt<'_>, receiver_ty: TyId) -> Vec<(TyId, Vec<Adjustment>)> {
     let steps = probe_deref_steps(fcx, receiver_ty);
+    let interner = fcx.tcx.interner();
+    // Only allow `&mut` reborrows when the original receiver is itself a mutable
+    // reference (or mutable raw pointer). This prevents calling `&mut self`
+    // methods through an immutable reference.
+    let allow_mut_autoref = matches!(
+        interner.ty(receiver_ty),
+        Ty::Ref(_, Mutability::Mut)
+            | Ty::RawPtr(TypeAndMut {
+                mutbl: Mutability::Mut,
+                ..
+            })
+    );
+
     let mut probes = Vec::with_capacity(steps.len() * 3);
     for (ty, adjs) in steps {
         probes.push((ty, adjs.clone()));
@@ -164,9 +177,11 @@ pub fn probe_types(fcx: &mut FnCtxt<'_>, receiver_ty: TyId) -> Vec<(TyId, Vec<Ad
         ref_adjs.push(Adjustment::Ref);
         probes.push((fcx.mk_ref(ty, Mutability::Not), ref_adjs));
 
-        let mut refmut_adjs = adjs;
-        refmut_adjs.push(Adjustment::RefMut);
-        probes.push((fcx.mk_ref(ty, Mutability::Mut), refmut_adjs));
+        if allow_mut_autoref {
+            let mut refmut_adjs = adjs;
+            refmut_adjs.push(Adjustment::RefMut);
+            probes.push((fcx.mk_ref(ty, Mutability::Mut), refmut_adjs));
+        }
     }
     probes
 }

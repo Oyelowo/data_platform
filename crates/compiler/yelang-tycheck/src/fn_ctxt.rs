@@ -15,7 +15,9 @@ use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use yelang_ty::generic::GenericArg;
 use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
-use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate};
+use yelang_ty::predicate::{
+    ParamEnv, Predicate, ProjectionPredicate, TraitPredicate, WellFormedPredicate,
+};
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{
     AdtDef, Const, ConstId, ConstVid, FloatVid, ImplPolarity, InferTy, IntVid, Mutability, Ty,
@@ -44,6 +46,23 @@ pub struct BreakableScope {
 pub enum BreakableKind {
     Loop,
     Block,
+}
+
+/// Why a trait obligation could not be proven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObligationStatus {
+    /// The solver found no applicable impl/assumption.
+    NoSolution,
+    /// The solver could not make progress due to unresolved inference variables
+    /// or ambiguity between candidates.
+    Ambiguous,
+}
+
+/// An obligation that the trait solver could not prove with certainty.
+#[derive(Debug, Clone)]
+pub struct UnprovenObligation {
+    pub pred: Predicate,
+    pub status: ObligationStatus,
 }
 
 /// The function body type-checking context.
@@ -216,12 +235,9 @@ impl<'a> FnCtxt<'a> {
     }
 
     /// Report an unproven or ambiguous trait obligation.
-    pub fn report_obligation_error(&mut self, span: Span, pred: Predicate) {
-        let err = match pred {
-            Predicate::Trait(trait_pred) => TypeError::TraitNotImplemented(trait_pred),
-            _ => TypeError::Custom(format!("unsolved obligation: {:?}", pred)),
-        };
-        self.report_type_error(span, err);
+    pub fn report_obligation_error(&mut self, span: Span, obligation: UnprovenObligation) {
+        let msg = format_unproven_obligation(self.tcx, &obligation);
+        self.report_type_error(span, TypeError::Custom(msg));
     }
 
     /// Create a fresh substitution that maps an item's generic parameters to
@@ -426,7 +442,7 @@ impl<'a> FnCtxt<'a> {
     /// Returns the list of obligations that could not be proven with certainty.
     /// `NoSolution` results and ambiguous (`Maybe`) goals are both returned as
     /// unproven; Phase E will turn them into diagnostics.
-    pub fn prove_obligations(&mut self) -> Vec<Predicate> {
+    pub fn prove_obligations(&mut self) -> Vec<UnprovenObligation> {
         let mut unproven = Vec::new();
         let obligations = std::mem::take(&mut self.obligations);
 
@@ -447,7 +463,22 @@ impl<'a> FnCtxt<'a> {
                 Ok(response) if response.value.certainty == Certainty::Yes => {
                     self.apply_response_to_body(&body_vars, &response);
                 }
-                _ => unproven.push(goal.predicate),
+                Ok(response) => {
+                    unproven.push(UnprovenObligation {
+                        pred: goal.predicate,
+                        status: if response.value.certainty == Certainty::Maybe {
+                            ObligationStatus::Ambiguous
+                        } else {
+                            ObligationStatus::NoSolution
+                        },
+                    });
+                }
+                Err(_) => {
+                    unproven.push(UnprovenObligation {
+                        pred: goal.predicate,
+                        status: ObligationStatus::NoSolution,
+                    });
+                }
             }
         }
 
@@ -626,4 +657,272 @@ impl<'a> TyLowerCtxt for FnCtxt<'a> {
     fn lower_typeof(&mut self, expr: yelang_hir::ids::ExprId) -> TyId {
         crate::check::check_expr(self, expr)
     }
+}
+
+// -----------------------------------------------------------------------------
+// User-facing formatting for types and obligations.
+// -----------------------------------------------------------------------------
+
+/// Format a `TypeError` into a human-readable message.
+pub fn format_type_error(tcx: &TyCtxt, err: &TypeError) -> String {
+    match err {
+        TypeError::Mismatch { expected, found } => format!(
+            "type mismatch: expected `{}`, found `{}`",
+            format_ty(tcx, *expected),
+            format_ty(tcx, *found)
+        ),
+        TypeError::CyclicTy(vid) => format!("cyclic type: `?T{}`", vid.0),
+        TypeError::UnresolvedInferenceVariable(vid) => {
+            format!("unresolved inference variable: `?T{}`", vid.0)
+        }
+        TypeError::ProjectionNotFound(p) => format_projection_predicate(tcx, p),
+        TypeError::TraitNotImplemented(p) => format_trait_predicate(tcx, p),
+        TypeError::AmbiguousTrait(p) => format!(
+            "ambiguous trait bound: `{}`",
+            format_trait_predicate(tcx, p)
+        ),
+        TypeError::NoSuchField { ty, field } => format!(
+            "no field `{}` on type `{}`",
+            symbol_str(tcx, *field),
+            format_ty(tcx, *ty)
+        ),
+        TypeError::NoSuchMethod { ty, method } => format!(
+            "no method `{}` on type `{}`",
+            symbol_str(tcx, *method),
+            format_ty(tcx, *ty)
+        ),
+        TypeError::ArgCount { expected, found } => format!(
+            "argument count mismatch: expected {}, found {}",
+            expected, found
+        ),
+        TypeError::GenericArgCount { expected, found } => format!(
+            "generic argument count mismatch: expected {}, found {}",
+            expected, found
+        ),
+        TypeError::GenericArgKindMismatch { index } => {
+            format!("generic argument kind mismatch at index {}", index)
+        }
+        TypeError::IntMismatch { expected, found } => format!(
+            "integer type mismatch: expected `{:?}`, found `{:?}`",
+            expected, found
+        ),
+        TypeError::FloatMismatch { expected, found } => format!(
+            "floating-point type mismatch: expected `{:?}`, found `{:?}`",
+            expected, found
+        ),
+        TypeError::ConstMismatch { expected, found } => format!(
+            "const mismatch: expected `{:?}`, found `{:?}`",
+            expected, found
+        ),
+        TypeError::TraitRefMismatch { expected, found } => format!(
+            "trait reference mismatch: expected `{:?}`, found `{:?}`",
+            expected, found
+        ),
+        TypeError::ExistentialMismatch { expected, found } => format!(
+            "existential predicate mismatch: expected `{:?}`, found `{:?}`",
+            expected, found
+        ),
+        TypeError::Custom(msg) => msg.clone(),
+    }
+}
+
+/// Format an unproven obligation into a human-readable message.
+pub fn format_unproven_obligation(tcx: &TyCtxt, obligation: &UnprovenObligation) -> String {
+    let pred_str = format_predicate(tcx, &obligation.pred);
+    match obligation.status {
+        ObligationStatus::Ambiguous => format!("ambiguous trait bound: `{}`", pred_str),
+        ObligationStatus::NoSolution => format!("trait bound not satisfied: `{}`", pred_str),
+    }
+}
+
+/// Format a predicate using item names from `TyCtxt` where possible.
+fn format_predicate(tcx: &TyCtxt, pred: &Predicate) -> String {
+    match pred {
+        Predicate::Trait(tp) => format_trait_predicate(tcx, tp),
+        Predicate::Projection(pp) => format_projection_predicate(tcx, pp),
+        Predicate::NormalizesTo(np) => format!(
+            "<{} as _>::{} = {}",
+            format_ty(
+                tcx,
+                np.projection_ty
+                    .trait_ref
+                    .args
+                    .iter()
+                    .next()
+                    .map(|a| a.expect_type())
+                    .unwrap_or_else(|| tcx.interner().mk_ty(Ty::Error))
+            ),
+            "Target",
+            format_ty(tcx, np.term)
+        ),
+        Predicate::WellFormed(WellFormedPredicate { ty }) => {
+            format!("{} well-formed", format_ty(tcx, *ty))
+        }
+        Predicate::TypeOutlives(_) => "_: _".to_string(),
+        Predicate::ConstEvaluatable(_) => "_: _".to_string(),
+    }
+}
+
+fn format_trait_predicate(tcx: &TyCtxt, tp: &TraitPredicate) -> String {
+    let self_ty = tp
+        .trait_ref
+        .args
+        .iter()
+        .next()
+        .map(|a| a.expect_type())
+        .unwrap_or_else(|| tcx.interner().mk_ty(Ty::Error));
+    let trait_name = tcx
+        .trait_def(tp.trait_ref.def_id)
+        .map(|d| symbol_str(tcx, d.ident.symbol).to_string())
+        .unwrap_or_else(|| format!("Trait({})", tp.trait_ref.def_id.raw()));
+    let args: Vec<String> = tp
+        .trait_ref
+        .args
+        .iter()
+        .skip(1)
+        .map(|a| match a {
+            GenericArg::Type(ty) => format_ty(tcx, *ty),
+            GenericArg::Const(ct) => format!("const#{}?", ct.raw()),
+        })
+        .collect();
+    if args.is_empty() {
+        format!("{}: {}", format_ty(tcx, self_ty), trait_name)
+    } else {
+        format!(
+            "{}: {}<{}>",
+            format_ty(tcx, self_ty),
+            trait_name,
+            args.join(", ")
+        )
+    }
+}
+
+fn format_projection_predicate(tcx: &TyCtxt, pp: &ProjectionPredicate) -> String {
+    format!(
+        "<{} as {}>::{} = {}",
+        format_ty(
+            tcx,
+            pp.projection_ty
+                .trait_ref
+                .args
+                .iter()
+                .next()
+                .map(|a| a.expect_type())
+                .unwrap_or_else(|| tcx.interner().mk_ty(Ty::Error))
+        ),
+        tcx.trait_def(pp.projection_ty.trait_ref.def_id)
+            .map(|d| symbol_str(tcx, d.ident.symbol).to_string())
+            .unwrap_or_else(|| "_".to_string()),
+        pp.projection_ty.item_def_id.raw(),
+        format_ty(tcx, pp.term)
+    )
+}
+
+/// Format a `TyId` using item names from `TyCtxt` where possible.
+pub fn format_ty(tcx: &TyCtxt, ty: TyId) -> String {
+    let interner = tcx.interner();
+    match interner.ty(ty) {
+        Ty::Bool => "bool".to_string(),
+        Ty::Char => "char".to_string(),
+        Ty::Str => "str".to_string(),
+        Ty::Int(it) => match it {
+            IntTy::I8 => "i8",
+            IntTy::I16 => "i16",
+            IntTy::I32 => "i32",
+            IntTy::I64 => "i64",
+            IntTy::I128 => "i128",
+            IntTy::Isize => "isize",
+        }
+        .to_string(),
+        Ty::Uint(it) => match it {
+            yelang_ty::primitive::UintTy::U8 => "u8",
+            yelang_ty::primitive::UintTy::U16 => "u16",
+            yelang_ty::primitive::UintTy::U32 => "u32",
+            yelang_ty::primitive::UintTy::U64 => "u64",
+            yelang_ty::primitive::UintTy::U128 => "u128",
+            yelang_ty::primitive::UintTy::Usize => "usize",
+        }
+        .to_string(),
+        Ty::Float(ft) => match ft {
+            yelang_ty::primitive::FloatTy::F32 => "f32",
+            yelang_ty::primitive::FloatTy::F64 => "f64",
+        }
+        .to_string(),
+        Ty::Never => "!".to_string(),
+        Ty::Param(p) => symbol_str(tcx, p.name).to_string(),
+        Ty::Infer(InferTy::TyVar(vid)) => format!("?T{}", vid.0),
+        Ty::Infer(InferTy::IntVar(vid)) => format!("?I{}", vid.0),
+        Ty::Infer(InferTy::FloatVar(vid)) => format!("?F{}", vid.0),
+        Ty::Tuple(args) if args.is_empty() => "()".to_string(),
+        Ty::Tuple(args) => {
+            let elems: Vec<_> = args.iter().map(|a| format_generic_arg(tcx, a)).collect();
+            format!("({})", elems.join(", "))
+        }
+        Ty::FnPtr(sig) => {
+            let inputs: Vec<_> = sig
+                .sig
+                .inputs
+                .iter()
+                .map(|a| format_generic_arg(tcx, a))
+                .collect();
+            format!(
+                "fn({}) -> {}",
+                inputs.join(", "),
+                format_ty(tcx, sig.sig.output)
+            )
+        }
+        Ty::FnDef(def) => format_fn_def(tcx, def.def_id),
+        Ty::Adt(adt, args) => {
+            let name = tcx
+                .adt_def(adt.def_id)
+                .map(|d| symbol_str(tcx, d.ident.symbol).to_string())
+                .unwrap_or_else(|| format!("Adt({})", adt.def_id.raw()));
+            if args.is_empty() {
+                name
+            } else {
+                let targs: Vec<_> = args.iter().map(|a| format_generic_arg(tcx, a)).collect();
+                format!("{}<{}>", name, targs.join(", "))
+            }
+        }
+        Ty::Ref(inner, Mutability::Not) => format!("&{}", format_ty(tcx, inner)),
+        Ty::Ref(inner, Mutability::Mut) => format!("&mut {}", format_ty(tcx, inner)),
+        Ty::RawPtr(TypeAndMut { ty, mutbl }) => {
+            let kw = match mutbl {
+                Mutability::Mut => "mut",
+                Mutability::Not => "const",
+            };
+            format!("*{} {}", kw, format_ty(tcx, ty))
+        }
+        Ty::Array(ty, _) => format!("[{}; _]", format_ty(tcx, ty)),
+        Ty::Slice(ty) => format!("[{}]", format_ty(tcx, ty)),
+        Ty::AnonStruct(anon) => {
+            let fields: Vec<_> = anon
+                .fields
+                .iter()
+                .map(|f| format!("{}: {}", symbol_str(tcx, f.name), format_ty(tcx, f.ty)))
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
+        Ty::Error => "{error}".to_string(),
+        _ => format!("{:?}", ty),
+    }
+}
+
+fn format_generic_arg(tcx: &TyCtxt, arg: &GenericArg) -> String {
+    match arg {
+        GenericArg::Type(ty) => format_ty(tcx, *ty),
+        GenericArg::Const(ct) => format!("const#{}?", ct.raw()),
+    }
+}
+
+fn format_fn_def(tcx: &TyCtxt, def_id: DefId) -> String {
+    if let Some(item) = tcx.crate_hir().items.get(def_id).and_then(|o| o.as_ref()) {
+        symbol_str(tcx, item.ident.symbol).to_string()
+    } else {
+        format!("fn_item({})", def_id.raw())
+    }
+}
+
+fn symbol_str(tcx: &TyCtxt, symbol: yelang_interner::Symbol) -> &str {
+    tcx.resolve_symbol(symbol).unwrap_or("_")
 }

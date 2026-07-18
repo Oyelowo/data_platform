@@ -8,6 +8,7 @@
 use yelang_arena::{DefId, FxHashMap, Id, index_vec as iv};
 use yelang_ast::Ident;
 use yelang_hir::Crate as HirCrate;
+use yelang_interner::Interner as StringInterner;
 use yelang_trait_solver::solver_ctx::{AssocItemInfo, ImplInfo};
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitRef};
@@ -59,10 +60,23 @@ pub struct TyCtxt {
     pub deref_trait: Option<DefId>,
     /// `Deref::Target` associated-type lang item, if registered.
     pub deref_target: Option<DefId>,
+    /// Optional string interner for resolving `Symbol`s in diagnostics.
+    string_interner: Option<StringInterner>,
 }
 
 impl TyCtxt {
     pub fn new(crate_hir: HirCrate) -> Self {
+        Self::with_optional_string_interner(crate_hir, None)
+    }
+
+    pub fn with_string_interner(crate_hir: HirCrate, string_interner: StringInterner) -> Self {
+        Self::with_optional_string_interner(crate_hir, Some(string_interner))
+    }
+
+    fn with_optional_string_interner(
+        crate_hir: HirCrate,
+        string_interner: Option<StringInterner>,
+    ) -> Self {
         Self {
             interner: Interner::new(),
             crate_hir,
@@ -80,7 +94,18 @@ impl TyCtxt {
             adt_field_tys_cache: FxHashMap::default(),
             deref_trait: None,
             deref_target: None,
+            string_interner,
         }
+    }
+
+    /// Resolve a `Symbol` to its textual form if a string interner was supplied.
+    pub fn resolve_symbol(&self, symbol: yelang_interner::Symbol) -> Option<&str> {
+        self.string_interner.as_ref().map(|i| i.resolve(&symbol))
+    }
+
+    /// Set the string interner used for diagnostic symbol resolution.
+    pub fn set_string_interner(&mut self, string_interner: StringInterner) {
+        self.string_interner = Some(string_interner);
     }
 
     /// The interner for creating canonical types and lists.

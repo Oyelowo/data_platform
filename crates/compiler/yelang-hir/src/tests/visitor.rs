@@ -51,6 +51,7 @@ fn stub_resolved() -> ResolvedCrate {
         def_resolutions: yelang_arena::FxHashMap::default(),
         enum_variants: yelang_arena::FxHashMap::default(),
         prelude: None,
+        lang_items: yelang_resolve::lang_items::LangItems::new(),
         generic_param_defs: yelang_arena::FxHashMap::default(),
         generic_params: yelang_arena::FxHashMap::default(),
     }

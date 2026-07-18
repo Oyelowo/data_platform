@@ -69,6 +69,7 @@ pub enum LangItem {
     Not,
     Deref,
     DerefMut,
+    DerefTarget,
     Index,
     IndexMut,
     EqTrait, // `==`
@@ -152,6 +153,7 @@ impl LangItem {
             "not" => Not,
             "deref" => Deref,
             "deref_mut" => DerefMut,
+            "deref_target" => DerefTarget,
             "index" => Index,
             "index_mut" => IndexMut,
             "eq" => EqTrait,
@@ -222,6 +224,7 @@ impl LangItem {
             Not => "not",
             Deref => "deref",
             DerefMut => "deref_mut",
+            DerefTarget => "deref_target",
             Index => "index",
             IndexMut => "index_mut",
             EqTrait => "eq",
@@ -257,6 +260,7 @@ impl LangItem {
                 "operator trait"
             }
             Drop | Clone | Default | Debug | Display | Iterator | IntoIterator => "standard trait",
+            DerefTarget => "associated type",
             Box | PhantomData | Formatter => "special type",
             Panic | PanicBoundsCheck | DropInPlace => "panic/unwinding item",
             Start => "runtime entry point",

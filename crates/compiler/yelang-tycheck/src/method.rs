@@ -24,10 +24,11 @@ use yelang_interner::Symbol;
 use yelang_ty::generic::{GenericArg, Substitution};
 use yelang_ty::predicate::{Predicate, TraitPredicate, TraitRef};
 use yelang_ty::subst::substitute;
-use yelang_ty::ty::{ImplPolarity, Mutability, PolyFnSig, Ty, TyId};
+use yelang_ty::ty::{ImplPolarity, PolyFnSig, Ty, TyId};
 
 use crate::autoderef::{Adjustment, probe_types};
 use crate::check::check_expr;
+use crate::coerce::Coerce;
 use crate::fn_ctxt::FnCtxt;
 use crate::tcx::{ImplDefId, ImplItemDefData, TraitItemDefData};
 
@@ -79,8 +80,8 @@ pub fn check_method_call(
     let receiver_ty = check_expr(fcx, receiver);
     let probes = probe_types(fcx, receiver_ty);
 
-    // Inherent candidates have priority over extension candidates, and earlier
-    // deref steps have priority over later ones.
+    // At each deref step, inherent candidates take priority over trait
+    // candidates. Earlier deref steps take priority over later ones.
     for (probe_ty, adjustments) in &probes {
         if let Some(candidate) = pick_inherent_candidate(fcx, *probe_ty, method) {
             return confirm_and_record(
@@ -94,10 +95,6 @@ pub fn check_method_call(
                 args,
             );
         }
-    }
-
-    // Trait (extension) method lookup.
-    for (probe_ty, adjustments) in &probes {
         if let Some(candidate) = pick_trait_candidate(fcx, *probe_ty, adjustments, method) {
             return confirm_and_record(
                 fcx,
@@ -318,7 +315,10 @@ fn confirm_method(fcx: &mut FnCtxt<'_>, pick: &MethodPick, args: &[ExprId]) -> T
             GenericArg::Type(ty) => *ty,
             _ => continue,
         };
-        let _ = fcx.eq(expected, arg_ty);
+        if fcx.coerce(arg_ty, expected).is_err() {
+            let span = crate::check::expr_span(fcx, *arg_expr);
+            fcx.report_mismatch(span, expected, arg_ty);
+        }
     }
 
     // Emit obligations implied by the chosen candidate.

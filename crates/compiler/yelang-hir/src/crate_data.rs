@@ -10,6 +10,9 @@ use yelang_lexer::Span;
 use crate::hir::core::{ForeignItem, Impl};
 use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 
+// Re-export so callers can query lang items without a separate dependency.
+pub use yelang_resolve::lang_items::LangItems;
+
 /// The root of the HIR for a single compilation unit.
 #[derive(Debug, Clone)]
 pub struct Crate {
@@ -32,6 +35,8 @@ pub struct Crate {
     pub stmts: Arena<StmtId, Option<Stmt>>,
     /// All HIR type syntax nodes keyed by `HirTyId`.
     pub tys: Arena<HirTyId, Option<Ty>>,
+    /// Registry of language items discovered during name resolution.
+    pub lang_items: LangItems,
     /// Secondary map from `ExprId` to the source span of the expression.
     pub expr_spans: ArenaMap<ExprId, Span>,
     /// Secondary map from `PatId` to the source span of the pattern.
@@ -57,6 +62,7 @@ impl Crate {
             pats: Arena::new(),
             stmts: Arena::new(),
             tys: Arena::new(),
+            lang_items: LangItems::new(),
             expr_spans: ArenaMap::new(),
             pat_spans: ArenaMap::new(),
             stmt_spans: ArenaMap::new(),

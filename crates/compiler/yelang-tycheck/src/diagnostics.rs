@@ -8,6 +8,9 @@
 use yelang_infer::error::TypeError;
 use yelang_lexer::Span;
 
+use crate::fn_ctxt::format_type_error;
+use crate::tcx::TyCtxt;
+
 /// Severity of a diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -33,7 +36,7 @@ impl Diagnostic {
         }
     }
 
-    pub fn from_type_error(span: Span, err: &TypeError) -> Self {
-        Self::error(span, err.to_string())
+    pub fn from_type_error(span: Span, err: &TypeError, tcx: &TyCtxt) -> Self {
+        Self::error(span, format_type_error(tcx, err))
     }
 }

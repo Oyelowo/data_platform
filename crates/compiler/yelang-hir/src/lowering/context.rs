@@ -91,6 +91,7 @@ impl<'a> LoweringContext<'a> {
 /// Lower an entire AST `Program` into a HIR `Crate`.
 pub fn lower_crate(program: &Program, resolved: &ResolvedCrate, interner: &Interner) -> Crate {
     let mut ctx = LoweringContext::new(interner, resolved);
+    ctx.crate_hir.lang_items = resolved.lang_items.clone();
 
     for item in &program.items {
         let _ = crate::lowering::item::lower_item(&mut ctx, item);

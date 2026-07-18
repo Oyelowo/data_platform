@@ -59,8 +59,8 @@ pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
 
     // Prove trait/well-formedness obligations accumulated during checking.
     let unproven = fcx.prove_obligations();
-    for pred in unproven {
-        fcx.report_obligation_error(body.span, pred);
+    for obligation in unproven {
+        fcx.report_obligation_error(body.span, obligation);
     }
 
     // Write final inferred types back, resolving remaining variables.
@@ -385,7 +385,9 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
                         continue;
                     }
                 };
-                fcx.demand_eq(arg_span, expected, arg_ty);
+                if fcx.coerce(arg_ty, expected).is_err() {
+                    fcx.report_mismatch(arg_span, expected, arg_ty);
+                }
             }
 
             output
@@ -438,7 +440,9 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
                         continue;
                     }
                 };
-                fcx.demand_eq(arg_span, expected, arg_ty);
+                if fcx.coerce(arg_ty, expected).is_err() {
+                    fcx.report_mismatch(arg_span, expected, arg_ty);
+                }
             }
 
             // Emit substituted where-clause obligations.
@@ -645,7 +649,7 @@ fn check_stmt(fcx: &mut FnCtxt<'_>, stmt_id: StmtId) {
                 let init_span = init
                     .map(|e| expr_span(fcx, e))
                     .unwrap_or_else(yelang_lexer::Span::default);
-                if let Some(init_expr) = init {
+                if init.is_some() {
                     if let Err(()) = fcx.coerce(init_ty, annotated) {
                         fcx.report_mismatch(init_span, annotated, init_ty);
                     }

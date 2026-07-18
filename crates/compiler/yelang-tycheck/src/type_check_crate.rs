@@ -60,7 +60,7 @@ pub fn type_check_crate(tcx: &mut TyCtxt) -> Vec<Diagnostic> {
 
         // Convert FnCtxt errors into diagnostics.
         for (span, err) in &fcx.errors {
-            all_diagnostics.push(Diagnostic::from_type_error(*span, err));
+            all_diagnostics.push(Diagnostic::from_type_error(*span, err, tcx));
         }
 
         // Report any unresolved inference variables as errors.

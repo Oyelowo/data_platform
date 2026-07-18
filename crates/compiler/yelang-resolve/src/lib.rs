@@ -48,6 +48,8 @@ pub struct ResolvedCrate {
     /// built-in derive expansion) can look up prelude types and traits directly
     /// without relying on them being present in any module's namespace table.
     pub prelude: Option<crate::prelude::Prelude>,
+    /// Registry of language items discovered during name resolution.
+    pub lang_items: crate::lang_items::LangItems,
     /// Maps a generic parameter's source span to its `DefId`.
     pub generic_param_defs: FxHashMap<yelang_lexer::Span, DefId>,
     /// Maps a parent item's `DefId` to the ordered list of its generic param `DefId`s.
@@ -87,6 +89,7 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         def_resolutions: resolver.def_resolutions,
         enum_variants: resolver.enum_variants,
         prelude: resolver.prelude,
+        lang_items: resolver.lang_items,
         generic_param_defs: resolver.generic_param_defs,
         generic_params: resolver.generic_params,
     }

@@ -18,7 +18,7 @@ use yelang_hir::res::Res;
 use yelang_interner::Symbol;
 use yelang_lexer::{Position, Span};
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{Mutability, Ty, TyId};
+use yelang_ty::ty::{AnonField, AnonStructDef, Mutability, Ty, TyId};
 
 use crate::autoderef::Adjustment;
 use crate::check::{check_body, check_expr};
@@ -1738,6 +1738,67 @@ fn coerce_mismatch_fails() {
     let bool_ty = tcx.interner().mk_ty(Ty::Bool);
     let result = fcx.coerce(i32_ty, bool_ty);
     assert!(result.is_err());
+}
+
+#[test]
+fn coerce_anon_struct_width_subtyping() {
+    let mut hir = hir_crate();
+    let tcx = TyCtxt::new(hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(Ty::Int(IntTy::I32));
+    let bool_ty = tcx.interner().mk_ty(Ty::Bool);
+
+    let x_sym = Symbol::from(1);
+    let y_sym = Symbol::from(2);
+
+    let wide = tcx.interner().mk_ty(Ty::AnonStruct(AnonStructDef {
+        fields: tcx.interner().mk_anon_struct_fields(&[
+            AnonField {
+                name: x_sym,
+                ty: i32_ty,
+            },
+            AnonField {
+                name: y_sym,
+                ty: bool_ty,
+            },
+        ]),
+    }));
+
+    let narrow = tcx.interner().mk_ty(Ty::AnonStruct(AnonStructDef {
+        fields: tcx.interner().mk_anon_struct_fields(&[AnonField {
+            name: x_sym,
+            ty: i32_ty,
+        }]),
+    }));
+
+    assert_eq!(fcx.coerce(wide, narrow), Ok(narrow));
+}
+
+#[test]
+fn coerce_anon_struct_width_subtyping_field_mismatch_fails() {
+    let mut hir = hir_crate();
+    let tcx = TyCtxt::new(hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(Ty::Int(IntTy::I32));
+    let bool_ty = tcx.interner().mk_ty(Ty::Bool);
+
+    let x_sym = Symbol::from(1);
+
+    let wide = tcx.interner().mk_ty(Ty::AnonStruct(AnonStructDef {
+        fields: tcx.interner().mk_anon_struct_fields(&[AnonField {
+            name: x_sym,
+            ty: i32_ty,
+        }]),
+    }));
+
+    let narrow = tcx.interner().mk_ty(Ty::AnonStruct(AnonStructDef {
+        fields: tcx.interner().mk_anon_struct_fields(&[AnonField {
+            name: x_sym,
+            ty: bool_ty,
+        }]),
+    }));
+
+    assert!(fcx.coerce(wide, narrow).is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -3877,7 +3938,7 @@ fn return_type_infer_from_body() {
 
     let fn_def_id = def_id(2);
     let infer_return = hir.alloc_ty(hir::Ty::Infer, dummy_span());
-    let i32_hir_ty = hir_i32_id(&mut hir);
+    let _i32_hir_ty = hir_i32_id(&mut hir);
 
     let body_value = expr(
         &mut hir,

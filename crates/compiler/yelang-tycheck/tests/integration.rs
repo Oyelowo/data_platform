@@ -28,7 +28,7 @@ fn type_check_src(src: &str) -> (TyCtxt, Vec<Diagnostic>) {
     );
 
     let crate_hir = lower_crate(&program, &resolved, &interner);
-    let mut tcx = TyCtxt::new(crate_hir);
+    let mut tcx = TyCtxt::with_string_interner(crate_hir, interner.clone());
     let diagnostics = type_check_crate(&mut tcx);
     (tcx, diagnostics)
 }
@@ -57,6 +57,19 @@ fn assert_error_contains<'a>(diagnostics: &'a [Diagnostic], needle: &str) -> &'a
         err.message
     );
     err
+}
+
+fn assert_no_errors_named(diagnostics: &[Diagnostic], test_name: &str) {
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "{}: expected no errors, got: {:?}",
+        test_name,
+        errors
+    );
 }
 
 #[test]
@@ -98,7 +111,7 @@ fn main() {
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
-    assert_error_contains(&diagnostics, "trait not implemented");
+    assert_error_contains(&diagnostics, "trait bound not satisfied");
 }
 
 #[test]
@@ -160,4 +173,141 @@ fn main() -> i32 { f(true) }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
     assert_error_contains(&diagnostics, "type mismatch");
+}
+
+// ---------------------------------------------------------------------------
+// Integer/float inference fallback at coercion sites
+// ---------------------------------------------------------------------------
+
+#[test]
+fn integer_literal_coerces_to_annotated_i32() {
+    let src = r#"
+fn main() -> i32 {
+    let x: i32 = 1;
+    x
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "integer fallback");
+}
+
+#[test]
+fn float_literal_coerces_to_annotated_f64() {
+    let src = r#"
+fn main() -> f64 {
+    let y: f64 = 1.0;
+    y
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "float fallback");
+}
+
+// ---------------------------------------------------------------------------
+// Method dispatch: inherent priority and mutability
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inherent_method_takes_priority_over_trait_method() {
+    let src = r#"
+trait Noise {
+    fn noise(&self) -> i32;
+}
+struct S {}
+impl S {
+    fn noise(&self) -> i32 { 1 }
+}
+impl Noise for S {
+    fn noise(&self) -> i32 { 2 }
+}
+fn main() -> i32 {
+    S {}.noise()
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "inherent priority");
+}
+
+#[test]
+fn mut_self_method_requires_mutable_receiver() {
+    let src = r#"
+struct C { value: i32 }
+impl C {
+    fn inc(&mut self) {}
+}
+fn main() {
+    let c = C { value: 0 };
+    c.inc();
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "no method");
+}
+
+#[test]
+fn mut_self_method_works_through_mutable_reference() {
+    let src = r#"
+struct C { value: i32 }
+impl C {
+    fn inc(&mut self) {}
+}
+fn use_c(c: &mut C) {
+    c.inc();
+}
+fn main() {}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "mutable ref receiver");
+}
+
+// ---------------------------------------------------------------------------
+// Deref coercion and method dispatch via the Deref lang item
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deref_trait_coerces_reference_to_target() {
+    let src = r#"
+@lang("deref")
+trait Deref {
+    type Target;
+}
+struct Inner { val: i32 }
+struct Wrapper { inner: Inner }
+impl Deref for Wrapper {
+    type Target = Inner;
+}
+fn wants(r: &Inner) -> i32 {
+    r.val
+}
+fn main() -> i32 {
+    let w = Wrapper { inner: Inner { val: 3 } };
+    wants(&w)
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "deref coercion");
+}
+
+#[test]
+fn method_dispatches_through_deref_trait() {
+    let src = r#"
+@lang("deref")
+trait Deref {
+    type Target;
+}
+struct Inner { val: i32 }
+impl Inner {
+    fn value(&self) -> i32 { self.val }
+}
+struct Wrapper { inner: Inner }
+impl Deref for Wrapper {
+    type Target = Inner;
+}
+fn main() -> i32 {
+    let w = Wrapper { inner: Inner { val: 7 } };
+    (&w).value()
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "method via deref");
 }

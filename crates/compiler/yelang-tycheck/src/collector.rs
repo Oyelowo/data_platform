@@ -22,6 +22,7 @@ use crate::tcx::{
     AdtDefData, AdtKind, FieldData, GenericParamData, GenericParamKind, GenericsData, ImplDefData,
     ImplItemDefData, TraitDefData, TraitItemDefData, TyCtxt,
 };
+use yelang_resolve::lang_items::LangItem;
 
 /// Collect item signatures from the HIR crate into `tcx`.
 pub fn collect_crate_types(tcx: &mut TyCtxt) {
@@ -56,6 +57,16 @@ pub fn collect_crate_types(tcx: &mut TyCtxt) {
     }
 
     tcx.populate_solver_caches();
+    register_lang_items(tcx);
+}
+
+/// Register lang items that the type checker needs for built-in reasoning.
+fn register_lang_items(tcx: &mut TyCtxt) {
+    if let Some(deref_trait) = tcx.crate_hir().lang_items.get(LangItem::Deref) {
+        if let Some(target_item) = tcx.crate_hir().lang_items.get(LangItem::DerefTarget) {
+            tcx.register_deref_lang_item(deref_trait, target_item);
+        }
+    }
 }
 
 fn collect_item(tcx: &mut TyCtxt, def_id: DefId, item: &Item) {

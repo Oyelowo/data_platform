@@ -9,6 +9,7 @@ use crate::hir::core::{
 };
 use crate::ids::{DefId, HirTyId};
 use crate::lowering::LoweringContext;
+use yelang_resolve::lang_items::LangItem;
 
 /// Lower a single AST item into HIR.
 pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
@@ -241,6 +242,7 @@ fn lower_trait_item(
     t: &yelang_ast::item::Trait,
     def_id: DefId,
 ) -> ItemKind {
+    let trait_def_id = def_id;
     let prev_self_type = ctx.self_type;
     ctx.self_type = Some(def_id);
 
@@ -295,6 +297,18 @@ fn lower_trait_item(
                 yelang_ast::TraitItemKind::Constant(c) => c.name,
                 yelang_ast::TraitItemKind::AssociatedType(t) => t.name,
             };
+
+            // If this is the `Target` associated type inside the lang-item `Deref`
+            // trait, record its `DefId` so the type checker can build projection
+            // goals (`<T as Deref>::Target`).
+            if let Some(deref_trait) = ctx.resolved.lang_items.get(LangItem::Deref) {
+                if deref_trait == trait_def_id && ctx.interner.resolve(&ident.symbol) == "Target" {
+                    ctx.crate_hir
+                        .lang_items
+                        .insert(LangItem::DerefTarget, def_id);
+                }
+            }
+
             crate::hir::core::TraitItem {
                 def_id,
                 ident,

@@ -6,7 +6,7 @@
 
 use yelang_ty::generic::GenericArg;
 use yelang_ty::subst::substitute;
-use yelang_ty::ty::{Ty, TyId};
+use yelang_ty::ty::{InferTy, Ty, TyId};
 
 use crate::fn_ctxt::FnCtxt;
 
@@ -33,9 +33,21 @@ impl Coerce for FnCtxt<'_> {
             // Function items coerce to matching function pointers.
             (Ty::FnDef(_), Ty::FnPtr(_)) => coerce_fn_item_to_ptr(self, from, to),
 
-            // TODO: deref coercion, width subtyping for anonymous structs,
-            // int/float fallback at coercion sites.
-            _ => Err(()),
+            // Deref coercion: `&T` -> `&U` when `T` can be dereffed to `U`.
+            (Ty::Ref(_, _), Ty::Ref(_, _)) => coerce_ref_deref(self, from, to),
+
+            // Width subtyping for anonymous structs: `{x, y}` -> `{x}`.
+            (Ty::AnonStruct(_), Ty::AnonStruct(_)) => coerce_anon_struct(self, from, to),
+
+            _ => {
+                // Integer/float fallback at coercion sites: if one side is an
+                // inference variable and the other is concrete, try to assign it.
+                if let Ok(ty) = coerce_infer_fallback(self, from, to) {
+                    Ok(ty)
+                } else {
+                    Err(())
+                }
+            }
         }
     }
 }
@@ -76,4 +88,89 @@ fn coerce_fn_item_to_ptr(fcx: &mut FnCtxt<'_>, from: TyId, to: TyId) -> Result<T
     }
 
     Ok(to)
+}
+
+/// Deref coercion between reference types (`&T` -> `&U`).
+///
+/// Uses the same autoderef probe as method dispatch, then commits any
+/// user-defined `Deref` steps as obligations.
+fn coerce_ref_deref(fcx: &mut FnCtxt<'_>, from: TyId, to: TyId) -> Result<TyId, ()> {
+    let probes = crate::autoderef::probe_types(fcx, from);
+
+    for (probe_ty, adjustments) in probes {
+        if probe_ty == to {
+            // Commit the deref obligations for any user-defined steps.
+            for adj in &adjustments {
+                if let crate::autoderef::Adjustment::DerefTrait { source, target } = adj {
+                    crate::autoderef::emit_deref_trait_obligations(fcx, *source, *target);
+                }
+            }
+            return Ok(to);
+        }
+    }
+
+    Err(())
+}
+
+/// Width subtyping for anonymous structs: `{ a: A, b: B }` coerces to `{ a: A }`.
+fn coerce_anon_struct(fcx: &mut FnCtxt<'_>, from: TyId, to: TyId) -> Result<TyId, ()> {
+    let interner = fcx.tcx.interner();
+    let (Ty::AnonStruct(from_def), Ty::AnonStruct(to_def)) = (interner.ty(from), interner.ty(to))
+    else {
+        return Err(());
+    };
+
+    for to_field in to_def.fields.iter() {
+        let matching = from_def
+            .fields
+            .iter()
+            .find(|f| f.name == to_field.name)
+            .ok_or(())?;
+        if fcx.eq(matching.ty, to_field.ty).is_err() {
+            return Err(());
+        }
+    }
+
+    Ok(to)
+}
+
+/// Try to resolve an integer/float inference variable against a concrete type.
+fn coerce_infer_fallback(fcx: &mut FnCtxt<'_>, from: TyId, to: TyId) -> Result<TyId, ()> {
+    let interner = fcx.tcx.interner();
+
+    // `?I` -> `i32`/`i64`/... via unification.
+    if let Ty::Infer(InferTy::IntVar(_)) = interner.ty(from) {
+        if is_integral_ty(interner, to) && fcx.eq(from, to).is_ok() {
+            return Ok(to);
+        }
+    }
+
+    // `?F` -> `f32`/`f64` via unification.
+    if let Ty::Infer(InferTy::FloatVar(_)) = interner.ty(from) {
+        if is_floating_ty(interner, to) && fcx.eq(from, to).is_ok() {
+            return Ok(to);
+        }
+    }
+
+    // And the reverse direction: concrete numeric -> inference variable.
+    if let Ty::Infer(InferTy::IntVar(_)) = interner.ty(to) {
+        if is_integral_ty(interner, from) && fcx.eq(from, to).is_ok() {
+            return Ok(to);
+        }
+    }
+    if let Ty::Infer(InferTy::FloatVar(_)) = interner.ty(to) {
+        if is_floating_ty(interner, from) && fcx.eq(from, to).is_ok() {
+            return Ok(to);
+        }
+    }
+
+    Err(())
+}
+
+fn is_integral_ty(interner: &yelang_ty::interner::Interner, ty: TyId) -> bool {
+    matches!(interner.ty(ty), Ty::Int(_) | Ty::Uint(_))
+}
+
+fn is_floating_ty(interner: &yelang_ty::interner::Interner, ty: TyId) -> bool {
+    matches!(interner.ty(ty), Ty::Float(_))
 }
