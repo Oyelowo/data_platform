@@ -48,6 +48,10 @@ pub enum Error {
     /// A read-only transaction attempted a write.
     #[error("read-only transaction cannot write")]
     ReadOnlyTxn,
+
+    /// A page does not have enough free space for the requested record.
+    #[error("page full")]
+    PageFull,
 }
 
 /// The kind of size bound that was violated.

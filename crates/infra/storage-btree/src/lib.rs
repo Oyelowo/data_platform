@@ -35,6 +35,10 @@ mod transaction;
 mod tree;
 mod wal_record;
 
+// Next-generation in-place building blocks.  This will move to the crate root
+// once the redesign replaces the COW implementation.
+mod v2;
+
 pub use cursor::BtreeCursor;
 pub use engine::BtreeEngine;
 pub use error::{Error, Result};
