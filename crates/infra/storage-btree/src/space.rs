@@ -4,7 +4,7 @@
 //! allocator hands out never-used IDs monotonically, then reuses IDs from a
 //! freelist once pages are freed by the B+ tree.
 
-use crate::v2::page::{NULL_PAGE_ID, PageId};
+use crate::page::{NULL_PAGE_ID, PageId};
 
 /// Manages the set of reusable and newly-minted page IDs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +64,20 @@ impl PageAllocator {
     /// Next never-used id that would be minted.
     pub fn next_id(&self) -> PageId {
         self.next
+    }
+
+    /// Ensure `id` is considered allocated.  If it is in the freelist it is
+    /// removed; if it is >= `next`, `next` is advanced past it.  Used by
+    /// recovery to resurrect pages that were allocated during forward
+    /// processing but never flushed.
+    pub fn allocate_specific(&mut self, id: PageId) {
+        if id == NULL_PAGE_ID {
+            return;
+        }
+        self.freelist.retain(|&x| x != id);
+        if id >= self.next {
+            self.next = id + 1;
+        }
     }
 }
 

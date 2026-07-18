@@ -9,7 +9,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::v2::page::PageId;
+use crate::page::PageId;
 
 const MIN_PAGE_SIZE: usize = 512;
 

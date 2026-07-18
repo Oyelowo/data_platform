@@ -16,6 +16,8 @@ pub const VALUE_KIND_INLINE: u8 = 0;
 pub const VALUE_KIND_VALUE_LOG: u8 = 1;
 /// Value-kind tag for a deleted-record tombstone.
 pub const VALUE_KIND_TOMBSTONE: u8 = 2;
+/// Bit set in the value-kind byte when the cell carries an MVCC header.
+pub const VALUE_KIND_MVCC_FLAG: u8 = 0x80;
 
 /// One entry in the slot directory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,7 +94,7 @@ impl OwnedValue {
 
 impl ValueKind<'_> {
     /// Convert to an owned value.
-    pub fn to_owned(self) -> OwnedValue {
+    pub fn into_owned(self) -> OwnedValue {
         match self {
             ValueKind::Inline(v) => OwnedValue::Inline(v.to_vec()),
             ValueKind::ValueLog { offset, len } => OwnedValue::ValueLog { offset, len },
@@ -128,17 +130,63 @@ pub struct Cell<'a> {
     pub key: &'a [u8],
     /// The value or tombstone.
     pub value: ValueKind<'a>,
+    /// Optional MVCC metadata.  `None` means the cell is an autocommit value
+    /// with no version history.
+    pub mvcc: Option<crate::version::MvccHeader>,
+}
+
+/// An owned cell that does not borrow the page buffer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedCell {
+    /// The key bytes.
+    pub key: Vec<u8>,
+    /// The value or tombstone.
+    pub value: OwnedValue,
+    /// Optional MVCC metadata.
+    pub mvcc: Option<crate::version::MvccHeader>,
+}
+
+impl OwnedCell {
+    /// Return a borrowed [`Cell`] view of this owned cell.
+    pub fn as_cell(&self) -> Cell<'_> {
+        Cell {
+            key: &self.key,
+            value: self.value.as_value_kind(),
+            mvcc: self.mvcc,
+        }
+    }
 }
 
 /// Total serialized size of a cell with the given key and value.
+#[cfg(test)]
 pub fn cell_size(key_len: usize, value: &ValueKind<'_>) -> usize {
-    2 + key_len + value.payload_size()
+    cell_size_with_mvcc(key_len, value, None)
+}
+
+/// Total serialized size of a cell that may carry an MVCC header.
+pub fn cell_size_with_mvcc(
+    key_len: usize,
+    value: &ValueKind<'_>,
+    mvcc: Option<&crate::version::MvccHeader>,
+) -> usize {
+    2 + key_len + value.payload_size() + mvcc.map_or(0, |_| crate::version::MvccHeader::SIZE)
 }
 
 /// Serialize a cell into `buf`, which must be exactly `cell_size(key, value)`
 /// bytes long.
+#[cfg(test)]
 pub fn write_cell(buf: &mut [u8], key: &[u8], value: &ValueKind<'_>) -> Result<()> {
-    let expected = cell_size(key.len(), value);
+    write_cell_with_mvcc(buf, key, value, None)
+}
+
+/// Serialize a cell that may carry MVCC metadata into `buf`.
+pub fn write_cell_with_mvcc(
+    buf: &mut [u8],
+    key: &[u8],
+    value: &ValueKind<'_>,
+    mvcc: Option<&crate::version::MvccHeader>,
+) -> Result<()> {
+    let expected = cell_size_with_mvcc(key.len(), value, mvcc);
     if buf.len() != expected {
         return Err(Error::Corruption(format!(
             "cell buffer size mismatch: expected {expected}, got {}",
@@ -156,8 +204,14 @@ pub fn write_cell(buf: &mut [u8], key: &[u8], value: &ValueKind<'_>) -> Result<(
     let mut off = 0;
     buf[off..off + 2].copy_from_slice(&(key.len() as u16).to_le_bytes());
     off += 2;
-    buf[off] = value.tag();
+    let kind_byte = value.tag() | mvcc.map_or(0, |_| VALUE_KIND_MVCC_FLAG);
+    buf[off] = kind_byte;
     off += 1;
+
+    if let Some(header) = mvcc {
+        header.encode(&mut buf[off..off + crate::version::MvccHeader::SIZE])?;
+        off += crate::version::MvccHeader::SIZE;
+    }
 
     match value {
         ValueKind::Inline(v) => {
@@ -195,8 +249,21 @@ pub fn parse_cell(buf: &[u8]) -> Result<Cell<'_>> {
         return Err(Error::Corruption("cell too short for key length".into()));
     }
     let key_len = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-    let kind = buf[2];
+    let kind_byte = buf[2];
+    let has_mvcc = (kind_byte & VALUE_KIND_MVCC_FLAG) != 0;
+    let kind = kind_byte & !VALUE_KIND_MVCC_FLAG;
     let mut off = 3;
+
+    let mvcc = if has_mvcc {
+        if buf.len() < off + crate::version::MvccHeader::SIZE {
+            return Err(Error::Corruption("cell MVCC header truncated".into()));
+        }
+        let header = crate::version::MvccHeader::decode(&buf[off..])?;
+        off += crate::version::MvccHeader::SIZE;
+        Some(header)
+    } else {
+        None
+    };
 
     let value = match kind {
         VALUE_KIND_INLINE => {
@@ -240,7 +307,7 @@ pub fn parse_cell(buf: &[u8]) -> Result<Cell<'_>> {
         return Err(Error::Corruption("cell key truncated".into()));
     }
     let key = &buf[off..off + key_len];
-    Ok(Cell { key, value })
+    Ok(Cell { key, value, mvcc })
 }
 
 #[cfg(test)]
@@ -297,5 +364,24 @@ mod tests {
         let mut buf = vec![1u8, 0, 255, 0, b"k"[0]];
         buf.resize(cell_size(1, &ValueKind::Tombstone), 0);
         assert!(parse_cell(&buf).is_err());
+    }
+
+    #[test]
+    fn mvcc_cell_roundtrip() {
+        use crate::version::MvccHeader;
+        let key = b"mvcc";
+        let value = ValueKind::Inline(b"data");
+        let header = MvccHeader {
+            begin_ts: 5,
+            end_ts: 7,
+            prev_version_lsn: 123,
+        };
+        let size = cell_size_with_mvcc(key.len(), &value, Some(&header));
+        let mut buf = vec![0u8; size];
+        write_cell_with_mvcc(&mut buf, key, &value, Some(&header)).unwrap();
+        let parsed = parse_cell(&buf).unwrap();
+        assert_eq!(parsed.key, key);
+        assert_eq!(parsed.value, value);
+        assert_eq!(parsed.mvcc, Some(header));
     }
 }

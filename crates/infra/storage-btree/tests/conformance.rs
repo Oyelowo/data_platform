@@ -1,4 +1,4 @@
-//! `storage-testkit` conformance suite for `storage-btree`.
+//! `storage-testkit` conformance suite for the v2 in-place B+ tree engine.
 
 use storage_btree::{BtreeEngine, BtreeOptions};
 use storage_testkit::conformance;

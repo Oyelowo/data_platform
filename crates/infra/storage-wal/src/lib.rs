@@ -28,11 +28,13 @@
 //! ```
 
 mod committer;
+mod fault;
 mod reader;
 mod record;
 mod segment;
 mod wal;
 
+pub use fault::{FaultConfig, FaultInjector};
 pub use record::{Durability, RECORD_HEADER_SIZE, Record, RecordType};
 pub use wal::{Wal, WalOptions};
 

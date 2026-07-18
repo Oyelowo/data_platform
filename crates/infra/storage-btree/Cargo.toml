@@ -3,7 +3,7 @@ name = "storage-btree"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-description = "Persistent copy-on-write B+ tree key-value storage engine."
+description = "Persistent in-place B+ tree key-value storage engine with OLC, WAL, and MVCC."
 license.workspace = true
 
 [dependencies]
@@ -20,3 +20,8 @@ storage-testkit = { path = "../storage-testkit" }
 tempfile = "3.19"
 proptest = "1.6"
 criterion = "0.5"
+loom = "0.7"
+
+[[bench]]
+name = "btree_bench"
+harness = false

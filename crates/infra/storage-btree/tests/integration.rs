@@ -1,11 +1,12 @@
-//! Integration tests for `storage-btree`.
+//! Integration tests for the in-place B+ tree engine.
 
+use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
 use std::thread;
 
 use bytes::Bytes;
 use storage_btree::{BtreeEngine, BtreeOptions};
-use storage_traits::{Cursor, Engine, Transaction, TxnOptions};
+use storage_traits::{Engine, Transaction, TxnOptions};
 use tempfile::TempDir;
 
 fn open_engine() -> (BtreeEngine, TempDir) {
@@ -16,6 +17,19 @@ fn open_engine() -> (BtreeEngine, TempDir) {
 
 fn reopen_engine(dir: &TempDir) -> BtreeEngine {
     BtreeEngine::open(dir.path(), BtreeOptions::default()).unwrap()
+}
+
+fn small_page_options() -> BtreeOptions {
+    BtreeOptions {
+        page_size: 512,
+        max_inline_value_size: 64,
+        min_fill_percent: 50,
+        min_cells: Some(1),
+        cache_size: 0,
+        max_value_size: 16 * 1024 * 1024,
+        max_batch_ops: 10_000,
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -303,7 +317,7 @@ fn recover_after_meta_deleted() {
     tx.put(b"a", b"1").unwrap();
     tx.put(b"b", b"2").unwrap();
     tx.commit().unwrap();
-    // Do NOT sync; the WAL still contains the committed batch. Losing META
+    // Do NOT sync; the WAL still contains the committed records. Losing META
     // should be recoverable by replaying the WAL from scratch.
     drop(engine);
 
@@ -317,20 +331,8 @@ fn recover_after_meta_deleted() {
 
 #[test]
 fn scan_across_split_boundary() {
-    // Use a tiny page size so a modest number of keys forces leaf splits.
     let dir = tempfile::tempdir().unwrap();
-    let engine = BtreeEngine::open(
-        dir.path(),
-        BtreeOptions {
-            page_size: 512,
-            max_inline_value_size: 64,
-            min_fill_percent: 50,
-            cache_size: 0,
-            max_value_size: 16 * 1024 * 1024,
-            max_batch_ops: 10_000,
-        },
-    )
-    .unwrap();
+    let engine = BtreeEngine::open(dir.path(), small_page_options()).unwrap();
 
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     for i in 0..500u32 {
@@ -356,18 +358,7 @@ fn scan_across_split_boundary() {
 #[test]
 fn delete_many_and_scan() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = BtreeEngine::open(
-        dir.path(),
-        BtreeOptions {
-            page_size: 512,
-            max_inline_value_size: 64,
-            min_fill_percent: 50,
-            cache_size: 0,
-            max_value_size: 16 * 1024 * 1024,
-            max_batch_ops: 10_000,
-        },
-    )
-    .unwrap();
+    let engine = BtreeEngine::open(dir.path(), small_page_options()).unwrap();
 
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     for i in 0..200u32 {
@@ -409,13 +400,13 @@ fn max_value_size_rejected() {
             cache_size: 0,
             max_value_size: 64,
             max_batch_ops: 10_000,
+            ..Default::default()
         },
     )
     .unwrap();
 
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
-    tx.put(b"k", &[0u8; 65]).unwrap();
-    assert!(tx.commit().is_err());
+    assert!(tx.put(b"k", &[0u8; 65]).is_err());
 
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     tx.put(b"k", &[0u8; 64]).unwrap();
@@ -432,104 +423,10 @@ fn retired_pages(engine: &BtreeEngine) -> u64 {
         .unwrap_or(0)
 }
 
-fn freelist_pages(engine: &BtreeEngine) -> u64 {
-    engine
-        .stats()
-        .unwrap()
-        .metrics
-        .get("storage_btree.freelist_pages")
-        .copied()
-        .unwrap_or(0)
-}
-
-#[test]
-fn compact_reclaims_retired_pages() {
-    let dir = tempfile::tempdir().unwrap();
-    let options = BtreeOptions {
-        page_size: 512,
-        max_inline_value_size: 64,
-        min_fill_percent: 50,
-        cache_size: 0,
-        max_value_size: 16 * 1024 * 1024,
-        max_batch_ops: 10_000,
-    };
-    let engine = BtreeEngine::open(dir.path(), options.clone()).unwrap();
-
-    // Create many keys across multiple leaves.
-    let mut tx = engine.begin(TxnOptions::default()).unwrap();
-    for i in 0..500u32 {
-        let key = format!("k{:08}", i);
-        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
-            .unwrap();
-    }
-    tx.commit().unwrap();
-    engine.check_integrity().unwrap();
-
-    // Overwrite half and delete the other half to generate retired pages.
-    let mut tx = engine.begin(TxnOptions::default()).unwrap();
-    for i in 0..250u32 {
-        let key = format!("k{:08}", i);
-        tx.put(key.as_bytes(), format!("updated{}", i).as_bytes())
-            .unwrap();
-    }
-    for i in 250..500u32 {
-        let key = format!("k{:08}", i);
-        tx.delete(key.as_bytes()).unwrap();
-    }
-    tx.commit().unwrap();
-    engine.check_integrity().unwrap();
-
-    assert!(
-        retired_pages(&engine) > 0,
-        "expected retired pages after updates/deletes"
-    );
-
-    engine.compact().unwrap();
-    engine.check_integrity().unwrap();
-
-    assert_eq!(
-        retired_pages(&engine),
-        0,
-        "compact should reclaim all retired pages"
-    );
-    assert!(
-        freelist_pages(&engine) > 0,
-        "expected freelist entries after compaction"
-    );
-
-    // Reopen and ensure the live state is intact and ids are reused.
-    drop(engine);
-    let engine = BtreeEngine::open(dir.path(), options).unwrap();
-    for i in 0..250u32 {
-        let key = format!("k{:08}", i);
-        let expected = format!("updated{}", i);
-        assert_eq!(
-            engine.get(key.as_bytes()).unwrap(),
-            Some(Bytes::from(expected))
-        );
-    }
-    for i in 250..500u32 {
-        let key = format!("k{:08}", i);
-        assert_eq!(engine.get(key.as_bytes()).unwrap(), None);
-    }
-    engine.check_integrity().unwrap();
-}
-
 #[test]
 fn active_snapshot_pins_old_pages() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = BtreeEngine::open(
-        dir.path(),
-        BtreeOptions {
-            page_size: 512,
-            max_inline_value_size: 64,
-            min_fill_percent: 50,
-            cache_size: 0,
-            max_value_size: 16 * 1024 * 1024,
-            max_batch_ops: 10_000,
-        },
-    )
-    .unwrap();
+    let engine = BtreeEngine::open(dir.path(), small_page_options()).unwrap();
 
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     for i in 0..200u32 {
@@ -578,41 +475,40 @@ fn active_snapshot_pins_old_pages() {
 }
 
 #[test]
-fn overflow_pages_reclaimed() {
+fn value_log_dead_space_reclaimed() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = BtreeEngine::open(
-        dir.path(),
-        BtreeOptions {
-            page_size: 512,
-            max_inline_value_size: 64,
-            min_fill_percent: 50,
-            cache_size: 0,
-            max_value_size: 16 * 1024 * 1024,
-            max_batch_ops: 10_000,
-        },
-    )
-    .unwrap();
+    let engine = BtreeEngine::open(dir.path(), small_page_options()).unwrap();
 
     let large = vec![0xABu8; 8_192];
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     tx.put(b"big", &large).unwrap();
     tx.commit().unwrap();
+    engine.sync().unwrap();
+    let value_log_before = std::fs::metadata(dir.path().join("values.log"))
+        .unwrap()
+        .len();
 
-    // Overwrite with a tiny value; the overflow chain becomes retired.
+    // Overwrite with a tiny value; the old value-log record becomes dead.
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     tx.put(b"big", b"small").unwrap();
     tx.commit().unwrap();
+    engine.sync().unwrap();
 
-    assert!(retired_pages(&engine) > 0);
+    // Stop-the-world value-log GC reclaims the dead record.
+    let _ = engine.compact_value_log().unwrap();
+    engine.check_integrity_with_value_log().unwrap();
 
-    engine.compact().unwrap();
-    engine.check_integrity().unwrap();
-
-    assert_eq!(retired_pages(&engine), 0);
-    assert!(freelist_pages(&engine) > 0);
     assert_eq!(
         engine.get(b"big").unwrap(),
         Some(Bytes::from_static(b"small"))
+    );
+
+    let value_log_after = std::fs::metadata(dir.path().join("values.log"))
+        .unwrap()
+        .len();
+    assert!(
+        value_log_after < value_log_before,
+        "value log did not shrink after GC: before={value_log_before}, after={value_log_after}"
     );
 }
 
@@ -628,6 +524,7 @@ fn file_size_stabilizes_after_updates() {
             cache_size: 64 * 1024 * 1024,
             max_value_size: 16 * 1024 * 1024,
             max_batch_ops: 10_000,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -660,9 +557,6 @@ fn file_size_stabilizes_after_updates() {
     let final_size = std::fs::metadata(dir.path().join("pages.dat"))
         .unwrap()
         .len();
-    // With reuse, pages.dat should not grow linearly with churn. A small
-    // increase is acceptable due to tree-shape variance; a leak would produce
-    // a much larger number.
     assert!(
         final_size <= baseline.saturating_mul(2),
         "pages.dat grew from {} to {} despite compaction",
@@ -675,18 +569,7 @@ fn file_size_stabilizes_after_updates() {
 #[test]
 fn concurrent_reader_writer_compact() {
     let dir = tempfile::tempdir().unwrap();
-    let engine = BtreeEngine::open(
-        dir.path(),
-        BtreeOptions {
-            page_size: 512,
-            max_inline_value_size: 64,
-            min_fill_percent: 50,
-            cache_size: 64 * 1024 * 1024,
-            max_value_size: 16 * 1024 * 1024,
-            max_batch_ops: 10_000,
-        },
-    )
-    .unwrap();
+    let engine = BtreeEngine::open(dir.path(), small_page_options()).unwrap();
 
     let engine = Arc::new(engine);
 
@@ -740,76 +623,6 @@ fn concurrent_reader_writer_compact() {
 }
 
 #[test]
-fn recovery_reclaims_leaked_retired_pages() {
-    let dir = tempfile::tempdir().unwrap();
-    let options = BtreeOptions {
-        page_size: 512,
-        max_inline_value_size: 64,
-        min_fill_percent: 50,
-        cache_size: 0,
-        max_value_size: 16 * 1024 * 1024,
-        max_batch_ops: 10_000,
-    };
-    let engine = BtreeEngine::open(dir.path(), options.clone()).unwrap();
-
-    // Create a tree and fully compact it so the WAL is empty and the freelist
-    // is up to date.
-    let mut tx = engine.begin(TxnOptions::default()).unwrap();
-    for i in 0..200u32 {
-        let key = format!("k{:08}", i);
-        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
-            .unwrap();
-    }
-    tx.commit().unwrap();
-    engine.sync().unwrap();
-    assert_eq!(retired_pages(&engine), 0);
-    assert!(freelist_pages(&engine) > 0);
-
-    // Delete everything without compacting. The retired pages are not persisted
-    // in META, simulating a leak after an unclean shutdown.
-    let mut tx = engine.begin(TxnOptions::default()).unwrap();
-    for i in 0..200u32 {
-        let key = format!("k{:08}", i);
-        tx.delete(key.as_bytes()).unwrap();
-    }
-    tx.commit().unwrap();
-    // Retired pages exist in memory but are about to be lost on drop.
-    assert!(retired_pages(&engine) > 0);
-    drop(engine);
-
-    // On reopen the engine must recover the leaked ids into the freelist.
-    let engine = BtreeEngine::open(dir.path(), options).unwrap();
-    engine.check_integrity().unwrap();
-    assert_eq!(engine.get(b"k00000000").unwrap(), None);
-    assert!(freelist_pages(&engine) > 0);
-
-    // New allocations should reuse the reclaimed ids, not grow pages.dat.
-    let before_pages = std::fs::metadata(dir.path().join("pages.dat"))
-        .unwrap()
-        .len();
-    let before_freelist = freelist_pages(&engine);
-    let mut tx = engine.begin(TxnOptions::default()).unwrap();
-    for i in 0..50u32 {
-        let key = format!("new{:08}", i);
-        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
-            .unwrap();
-    }
-    tx.commit().unwrap();
-    engine.sync().unwrap();
-    let after_pages = std::fs::metadata(dir.path().join("pages.dat"))
-        .unwrap()
-        .len();
-    let after_freelist = freelist_pages(&engine);
-    assert_eq!(
-        after_pages, before_pages,
-        "new writes should reuse reclaimed ids without growing pages.dat"
-    );
-    // Compact() may reclaim additional pages, so the freelist can move in
-    // either direction. The important invariant is that pages.dat did not grow.
-    let _ = (before_freelist, after_freelist);
-}
-
-#[test]
 fn write_after_sync_survives_reopen() {
     // Regression test for the active-WAL-segment truncation bug: sync() must
     // not truncate the segment that the committer still has open.
@@ -821,9 +634,6 @@ fn write_after_sync_survives_reopen() {
     tx.commit().unwrap();
     engine.sync().unwrap();
 
-    // The critical write happens on the *same* engine after sync(). With an
-    // unsafe active-segment truncation, this write would go to an unlinked
-    // inode and be lost on the next open.
     let mut tx = engine.begin(TxnOptions::default()).unwrap();
     tx.put(b"second", b"2").unwrap();
     tx.commit().unwrap();
@@ -852,6 +662,7 @@ fn max_batch_ops_rejected() {
             cache_size: 0,
             max_value_size: 16 * 1024 * 1024,
             max_batch_ops: 3,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -862,4 +673,163 @@ fn max_batch_ops_rejected() {
     tx.put(b"c", b"3").unwrap();
     tx.put(b"d", b"4").unwrap();
     assert!(tx.commit().is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Engine-level deterministic fault-injection tests
+// ---------------------------------------------------------------------------
+
+/// Corrupt a data page that was flushed as part of a checkpoint.  The engine
+/// must detect the checksum mismatch on the next open rather than returning
+/// stale or garbage data.
+#[test]
+fn torn_page_detected_after_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = BtreeEngine::open(dir.path(), small_page_options()).unwrap();
+
+    // Insert enough data to trigger at least one split (root stays page 1,
+    // page 2 becomes a leaf).
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    for i in 0..20u32 {
+        let key = format!("k{:08}", i);
+        tx.put(key.as_bytes(), format!("v{}", i).as_bytes())
+            .unwrap();
+    }
+    tx.commit().unwrap();
+
+    // Sync flushes dirty pages and writes META; afterwards the leaf pages are
+    // on disk and WAL before the checkpoint may be truncated.
+    engine.sync().unwrap();
+    drop(engine);
+
+    // Simulate a torn write on page 2 by overwriting its body but leaving the
+    // header/checksum region untouched so the checksum verification fails.
+    const PAGE_SIZE: usize = 512;
+    let page_path = dir.path().join("pages.dat");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&page_path)
+        .unwrap();
+    let offset = 2 * PAGE_SIZE as u64;
+    file.seek(SeekFrom::Start(offset + 64)).unwrap();
+    file.write_all(&[0u8; PAGE_SIZE - 64]).unwrap();
+    file.flush().unwrap();
+    drop(file);
+
+    // Reopening must detect the corruption.
+    let result = BtreeEngine::open(dir.path(), small_page_options());
+    assert!(
+        result.is_err(),
+        "opening with a torn page should fail with a corruption error"
+    );
+}
+
+/// A partially-written or corrupt primary META file must be recoverable from
+/// the `META.bak` backup written by the previous checkpoint.  This test also
+/// verifies that the backup can be stale: data committed after the backup was
+/// taken is replayed from the WAL.
+#[test]
+fn partial_meta_recovered_from_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = small_page_options();
+
+    // First checkpoint: writes META v1 and META.bak v1.
+    let engine = BtreeEngine::open(dir.path(), opts.clone()).unwrap();
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"first", b"1").unwrap();
+    tx.commit().unwrap();
+    engine.sync().unwrap();
+    drop(engine);
+
+    // Second checkpoint: overwrites META with v2; backup now holds v1.
+    let engine = BtreeEngine::open(dir.path(), opts.clone()).unwrap();
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"second", b"2").unwrap();
+    tx.commit().unwrap();
+    engine.sync().unwrap();
+    drop(engine);
+
+    // Corrupt the primary META file.
+    let meta_path = dir.path().join("META");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&meta_path)
+        .unwrap();
+    file.write_all(&[0u8; 32]).unwrap();
+    file.flush().unwrap();
+    drop(file);
+
+    // Reopen must fall back to META.bak and replay the WAL to recover both
+    // keys.
+    let engine = BtreeEngine::open(dir.path(), opts.clone()).unwrap();
+    assert_eq!(
+        engine.get(b"first").unwrap(),
+        Some(Bytes::from_static(b"1"))
+    );
+    assert_eq!(
+        engine.get(b"second").unwrap(),
+        Some(Bytes::from_static(b"2"))
+    );
+    engine.check_integrity().unwrap();
+}
+
+/// Recovery rebuilds the in-memory value-log reference counts by scanning every
+/// live leaf cell.  After reopening, an old large value can be safely reclaimed
+/// by value-log compaction because the refcounts correctly reflect the current
+/// tree contents.
+#[test]
+fn value_log_refcounts_rebuilt_after_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = BtreeOptions {
+        page_size: 512,
+        max_inline_value_size: 64,
+        min_fill_percent: 50,
+        min_cells: Some(1),
+        cache_size: 0,
+        max_value_size: 16 * 1024 * 1024,
+        max_batch_ops: 10_000,
+        ..Default::default()
+    };
+
+    let large1: Vec<u8> = (0..200).map(|i| (i % 256) as u8).collect();
+    let large2: Vec<u8> = (0..200).map(|i| ((i + 7) % 256) as u8).collect();
+
+    let engine = BtreeEngine::open(dir.path(), opts.clone()).unwrap();
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"k", &large1).unwrap();
+    tx.commit().unwrap();
+    engine.sync().unwrap();
+    drop(engine);
+
+    // Reopen: recovery scans leaves and rebuilds ref counts from scratch.
+    let engine = BtreeEngine::open(dir.path(), opts.clone()).unwrap();
+    assert_eq!(engine.get(b"k").unwrap(), Some(Bytes::from(large1.clone())));
+
+    // Overwrite with a new large value, releasing the old reference.
+    let mut tx = engine.begin(TxnOptions::default()).unwrap();
+    tx.put(b"k", &large2).unwrap();
+    tx.commit().unwrap();
+    engine.sync().unwrap();
+
+    let value_log_before = std::fs::metadata(dir.path().join("values.log"))
+        .unwrap()
+        .len();
+
+    // Compact the value log; the old value should be reclaimable because the
+    // rebuilt reference counts know it is no longer reachable.
+    engine.compact_value_log().unwrap();
+
+    let value_log_after = std::fs::metadata(dir.path().join("values.log"))
+        .unwrap()
+        .len();
+    assert!(
+        value_log_after < value_log_before,
+        "value log did not shrink after replacing a large value: before={}, after={}",
+        value_log_before,
+        value_log_after
+    );
+
+    assert_eq!(engine.get(b"k").unwrap(), Some(Bytes::from(large2)));
+    engine.check_integrity_with_value_log().unwrap();
 }

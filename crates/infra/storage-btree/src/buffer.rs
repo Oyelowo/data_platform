@@ -7,15 +7,16 @@
 //! `Page::latch_word` serialises concurrent access to the page contents.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 
+use crate::disk::PagedFile;
 use crate::error::{Error, Result};
-use crate::v2::disk::PagedFile;
-use crate::v2::page::{NULL_PAGE_ID, Page, PageId};
-use crate::v2::space::PageAllocator;
+use crate::page::{NULL_PAGE_ID, Page, PageId};
+use crate::space::PageAllocator;
+use crate::sync::Mutex as SyncMutex;
 
 /// Index of a frame inside the buffer pool.
 pub type FrameId = usize;
@@ -65,7 +66,10 @@ impl PageGuard {
             .lock()
             .pin_count
             .fetch_add(1, Ordering::Relaxed);
-        pool.frames[frame_id].lock().ref_bit.store(true, Ordering::Relaxed);
+        pool.frames[frame_id]
+            .lock()
+            .ref_bit
+            .store(true, Ordering::Relaxed);
         Self {
             frame_id,
             page,
@@ -114,7 +118,7 @@ impl Drop for PageGuard {
 pub struct BufferPool {
     page_size: usize,
     disk: Arc<PagedFile>,
-    allocator: Arc<Mutex<PageAllocator>>,
+    allocator: Arc<SyncMutex<PageAllocator>>,
     frames: Vec<ParkingMutex<Frame>>,
     /// Sharded page table: `PageId -> FrameId`.
     page_table: Vec<RwLock<HashMap<PageId, FrameId>>>,
@@ -132,7 +136,7 @@ impl BufferPool {
         capacity: usize,
         page_size: usize,
         disk: Arc<PagedFile>,
-        allocator: Arc<Mutex<PageAllocator>>,
+        allocator: Arc<SyncMutex<PageAllocator>>,
     ) -> Result<Self> {
         if capacity == 0 {
             return Err(Error::InvalidArgument(
@@ -221,13 +225,19 @@ impl BufferPool {
 
     /// Allocate a new page id and install an empty page in the buffer pool.
     pub fn new_page(self: &Arc<Self>) -> Result<PageGuard> {
-        let page_id = {
-            let mut alloc = self
-                .allocator
-                .lock()
-                .map_err(|_| Error::Corruption("page allocator mutex poisoned".into()))?;
-            alloc.allocate()
-        };
+        let page_id = self.allocator.with_mut(|alloc| alloc.allocate());
+        self.install_new_page(page_id)
+    }
+
+    /// Install an empty page with the given `page_id`, marking it as allocated.
+    /// Used by recovery to resurrect pages that were allocated but not flushed.
+    pub fn new_page_with_id(self: &Arc<Self>, page_id: PageId) -> Result<PageGuard> {
+        self.allocator
+            .with_mut(|alloc| alloc.allocate_specific(page_id));
+        self.install_new_page(page_id)
+    }
+
+    fn install_new_page(self: &Arc<Self>, page_id: PageId) -> Result<PageGuard> {
         let _evict = self.eviction_lock.lock();
         let frame_id = self.evict()?;
         {
@@ -251,7 +261,7 @@ impl BufferPool {
     pub fn flush_frame(&self, frame_id: FrameId) -> Result<()> {
         let frame = self.frames[frame_id].lock();
         if frame.dirty.load(Ordering::Relaxed) && frame.page_id != NULL_PAGE_ID {
-            self.disk.write_page(frame.page_id, frame.page.data())?;
+            self.disk.write_page(frame.page_id, &frame.page.data())?;
             frame.dirty.store(false, Ordering::Relaxed);
         }
         Ok(())
@@ -263,6 +273,48 @@ impl BufferPool {
             self.flush_frame(frame_id)?;
         }
         Ok(())
+    }
+
+    /// Flush every dirty frame that is not currently pinned.
+    ///
+    /// This is the core operation of the background page cleaner. Pinned frames
+    /// are skipped because they may still be mutated by the holder of the pin.
+    pub fn flush_dirty_unpinned(&self) -> Result<()> {
+        for frame_id in 0..self.frames.len() {
+            let frame = match self.frames[frame_id].try_lock() {
+                Some(g) => g,
+                None => continue,
+            };
+            if frame.page_id != NULL_PAGE_ID
+                && frame.dirty.load(Ordering::Relaxed)
+                && frame.pin_count.load(Ordering::Acquire) == 0
+            {
+                self.disk.write_page(frame.page_id, &frame.page.data())?;
+                frame.dirty.store(false, Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
+    /// Return whether the frame holding `page_id` is currently dirty.
+    ///
+    /// Returns `Err` if the page is not resident in the pool.
+    #[cfg(test)]
+    pub fn is_frame_dirty(&self, page_id: PageId) -> Result<bool> {
+        let shard = self.shard(page_id);
+        let frame_id = {
+            let table = self.page_table[shard].read();
+            table.get(&page_id).copied()
+        };
+        if let Some(frame_id) = frame_id {
+            let frame = self.frames[frame_id].lock();
+            if frame.page_id == page_id {
+                return Ok(frame.dirty.load(Ordering::Relaxed));
+            }
+        }
+        Err(Error::NotFound(format!(
+            "page {page_id} not resident in pool"
+        )))
     }
 
     /// Mark the frame containing `page_id` dirty.
@@ -317,11 +369,7 @@ impl BufferPool {
                 table.remove(&page_id);
             }
         }
-        let mut alloc = self
-            .allocator
-            .lock()
-            .map_err(|_| Error::Corruption("page allocator mutex poisoned".into()))?;
-        alloc.free(page_id);
+        self.allocator.with_mut(|alloc| alloc.free(page_id));
         Ok(())
     }
 
@@ -346,7 +394,7 @@ impl BufferPool {
             // Found a victim.
             if frame.page_id != NULL_PAGE_ID {
                 if frame.dirty.load(Ordering::Relaxed) {
-                    self.disk.write_page(frame.page_id, frame.page.data())?;
+                    self.disk.write_page(frame.page_id, &frame.page.data())?;
                 }
                 let shard = self.shard(frame.page_id);
                 let mut table = self.page_table[shard].write();
@@ -374,7 +422,7 @@ mod tests {
     fn make_pool(capacity: usize) -> (Arc<BufferPool>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(Mutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
         let pool = Arc::new(BufferPool::new(capacity, 512, disk, alloc).unwrap());
         (pool, dir)
     }
@@ -393,14 +441,17 @@ mod tests {
         let id = guard.page().id;
         guard
             .page()
-            .insert(b"k", &crate::v2::slot::ValueKind::Inline(b"v"))
+            .insert(b"k", &crate::slot::ValueKind::Inline(b"v"))
             .unwrap();
         guard.mark_dirty();
         drop(guard);
 
         let guard = pool.fetch(id).unwrap();
         let cell = guard.page().get(b"k").unwrap().unwrap();
-        assert_eq!(cell.value, crate::v2::slot::ValueKind::Inline(b"v"));
+        assert_eq!(
+            cell.value.as_value_kind(),
+            crate::slot::ValueKind::Inline(b"v")
+        );
     }
 
     #[test]
@@ -446,7 +497,7 @@ mod tests {
         let id = guard.page().id;
         guard
             .page()
-            .insert(b"k", &crate::v2::slot::ValueKind::Inline(b"v"))
+            .insert(b"k", &crate::slot::ValueKind::Inline(b"v"))
             .unwrap();
         guard.mark_dirty();
         drop(guard);
@@ -455,10 +506,13 @@ mod tests {
 
         // Open a fresh pool over the same file and read the page.
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(Mutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
         let pool2 = Arc::new(BufferPool::new(4, 512, disk, alloc).unwrap());
         let guard = pool2.fetch_or_read(id).unwrap();
         let cell = guard.page().get(b"k").unwrap().unwrap();
-        assert_eq!(cell.value, crate::v2::slot::ValueKind::Inline(b"v"));
+        assert_eq!(
+            cell.value.as_value_kind(),
+            crate::slot::ValueKind::Inline(b"v")
+        );
     }
 }

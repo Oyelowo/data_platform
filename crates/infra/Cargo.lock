@@ -1691,6 +1691,7 @@ dependencies = [
  "bytes",
  "crc32c",
  "criterion",
+ "loom",
  "lru",
  "parking_lot",
  "proptest",

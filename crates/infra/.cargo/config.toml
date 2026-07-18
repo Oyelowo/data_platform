@@ -1,0 +1,6 @@
+[env]
+# Tree Borrows is required because the OLC protocol intentionally allows
+# optimistic readers to race with writers that hold the exclusive latch.
+# The data-race detector is disabled for the same reason: the logical
+# serialisation is provided by the latch version, not by Rust's memory model.
+MIRIFLAGS = "-Zmiri-disable-isolation -Zmiri-tree-borrows -Zmiri-disable-data-race-detector"

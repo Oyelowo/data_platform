@@ -52,6 +52,10 @@ pub enum Error {
     /// A page does not have enough free space for the requested record.
     #[error("page full")]
     PageFull,
+
+    /// A transactional write conflicted with another committed writer.
+    #[error("write conflict")]
+    Conflict,
 }
 
 /// The kind of size bound that was violated.

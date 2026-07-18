@@ -6,7 +6,7 @@ use crate::committer::Committer;
 use crate::reader::{WalIterator, WalReader};
 use crate::record::{Durability, Record, RecordType};
 use crate::segment::{list_segments, segment_path};
-use crate::{Error, Lsn, Result};
+use crate::{Lsn, Result};
 
 /// Configuration for a WAL.
 #[derive(Debug, Clone, Copy)]
@@ -51,9 +51,24 @@ impl std::fmt::Debug for Wal {
 impl Wal {
     /// Open or create a WAL at `dir`.
     pub fn open(dir: impl AsRef<Path>, options: WalOptions) -> Result<Self> {
+        Self::open_with_fault_config(dir, options, None)
+    }
+
+    /// Open or create a WAL at `dir` with an optional fault-injection config.
+    ///
+    /// The fault config is intended for deterministic testing of durability
+    /// boundaries.
+    pub fn open_with_fault_config(
+        dir: impl AsRef<Path>,
+        options: WalOptions,
+        fault_config: Option<crate::FaultConfig>,
+    ) -> Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
-        let committer = Committer::start(dir.clone(), options.segment_size)?;
+        let committer = match fault_config {
+            Some(cfg) => Committer::start_with_fault_config(dir.clone(), options.segment_size, cfg)?,
+            None => Committer::start(dir.clone(), options.segment_size)?,
+        };
         Ok(Self {
             dir,
             options,
@@ -76,15 +91,14 @@ impl Wal {
     /// Append an arbitrary record.
     pub fn append_record(&self, record: Record, durability: Durability) -> Result<Lsn> {
         match durability {
-            Durability::Buffered => {
-                // Buffered durability is not implemented; immediate is required
-                // for correctness. Returning an error avoids silently lying.
-                Err(Error::InvalidArgument(
-                    "buffered durability is not supported".into(),
-                ))
-            }
+            Durability::Buffered => self.committer.append_buffered(record),
             Durability::Immediate => self.committer.append(record),
         }
+    }
+
+    /// Force a flush of all buffered records. Blocks until durable.
+    pub fn sync(&self) -> Result<()> {
+        self.committer.sync()
     }
 
     /// Append a checkpoint record. This is durable and may be used to truncate
