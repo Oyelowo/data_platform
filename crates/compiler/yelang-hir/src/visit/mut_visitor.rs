@@ -428,37 +428,49 @@ pub fn walk_expr_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr: &mut 
                 visit_expr_id_mut(v, crate_hir, *cond);
             }
         }
-        Expr::Query(query) => match &mut query.kind {
-            crate::hir::query::QueryKind::Select(select) => {
-                visit_expr_id_mut(v, crate_hir, select.projection);
-                for from in &mut select.from {
-                    visit_expr_id_mut(v, crate_hir, from.source);
-                    visit_pat_id_mut(v, crate_hir, from.binder);
-                    if let Some(ty) = from.elem_ty {
-                        visit_ty_id_mut(v, crate_hir, ty);
-                    }
-                    if let Some(filter) = from.filter {
-                        visit_expr_id_mut(v, crate_hir, filter);
-                    }
-                    for part in &mut from.order_by {
-                        visit_expr_id_mut(v, crate_hir, part.expr);
-                    }
-                    if let Some(range) = &mut from.range {
-                        if let Some(start) = range.start {
-                            visit_expr_id_mut(v, crate_hir, start);
-                        }
-                        if let Some(end) = range.end {
-                            visit_expr_id_mut(v, crate_hir, end);
-                        }
-                    }
+        Expr::Query(query_id) => {
+            let Some(mut query) = crate_hir
+                .queries
+                .get_mut(*query_id)
+                .and_then(|slot| std::mem::take(slot))
+            else {
+                return;
+            };
+            visit_query_mut(v, crate_hir, &mut query);
+            if let Some(slot) = crate_hir.queries.get_mut(*query_id) {
+                *slot = Some(query);
+            }
+        }
+        Expr::ArrayRepeat { value, count } => {
+            visit_expr_id_mut(v, crate_hir, *value);
+            visit_expr_id_mut(v, crate_hir, *count);
+        }
+        Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
+    }
+}
+
+pub fn visit_query_mut<V: MutVisitor + ?Sized>(
+    v: &mut V,
+    crate_hir: &mut Crate,
+    query: &mut crate::hir::query::Query,
+) {
+    use crate::hir::query::QueryKind;
+    match &mut query.kind {
+        QueryKind::Select(select) => {
+            visit_expr_id_mut(v, crate_hir, select.projection);
+            for from in &mut select.from {
+                visit_expr_id_mut(v, crate_hir, from.source);
+                visit_pat_id_mut(v, crate_hir, from.binder);
+                if let Some(ty) = from.elem_ty {
+                    visit_ty_id_mut(v, crate_hir, ty);
                 }
-                if let Some(where_clause) = select.where_clause {
-                    visit_expr_id_mut(v, crate_hir, where_clause);
+                if let Some(filter) = from.filter {
+                    visit_expr_id_mut(v, crate_hir, filter);
                 }
-                for part in &mut select.order_by {
+                for part in &mut from.order_by {
                     visit_expr_id_mut(v, crate_hir, part.expr);
                 }
-                if let Some(range) = &mut select.range {
+                if let Some(range) = &mut from.range {
                     if let Some(start) = range.start {
                         visit_expr_id_mut(v, crate_hir, start);
                     }
@@ -467,8 +479,29 @@ pub fn walk_expr_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr: &mut 
                     }
                 }
             }
-        },
-        Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
+            if let Some(where_clause) = select.where_clause {
+                visit_expr_id_mut(v, crate_hir, where_clause);
+            }
+            for part in &mut select.order_by {
+                visit_expr_id_mut(v, crate_hir, part.expr);
+            }
+            if let Some(range) = &mut select.range {
+                if let Some(start) = range.start {
+                    visit_expr_id_mut(v, crate_hir, start);
+                }
+                if let Some(end) = range.end {
+                    visit_expr_id_mut(v, crate_hir, end);
+                }
+            }
+        }
+        QueryKind::Create(_)
+        | QueryKind::Update(_)
+        | QueryKind::Upsert(_)
+        | QueryKind::Delete(_)
+        | QueryKind::Link(_)
+        | QueryKind::Unlink(_) => {
+            // Expanded once mutation query HIR structs are defined.
+        }
     }
 }
 

@@ -6,8 +6,13 @@
 
 use yelang_ast::{AssignOpKind, BinaryOp};
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
+use yelang_hir::hir::ty::Ty as HirTy;
 use yelang_hir::hir::expr::ComprehensionKind;
-use yelang_hir::hir::query::QueryKind;
+use yelang_hir::hir::query::{
+    ConflictAction, CreateData, CreateLinkPath, CreateNode, CreateQuery, CreateEdge, DeleteQuery,
+    LinkQuery, Query, QueryKind, SelectQuery, Setter, SetterOp, UnlinkPath, UnlinkQuery,
+    UpdateMutation, UpdateQuery, UpsertQuery,
+};
 use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
 use yelang_infer::error::TypeError;
@@ -179,7 +184,10 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
             variables,
             condition,
         } => check_comprehension(fcx, expr_span(fcx, _expr_id), *kind, *element, variables, condition.as_ref()),
-        Expr::Query(query) => check_query(fcx, expr_span(fcx, _expr_id), &query.kind),
+        Expr::Query(query_id) => check_query(fcx, expr_span(fcx, _expr_id), *query_id),
+        Expr::ArrayRepeat { value, count } => {
+            check_array_repeat(fcx, expr_span(fcx, _expr_id), *value, *count)
+        }
         Expr::Err => fcx.mk_error(),
     }
 }
@@ -225,9 +233,15 @@ fn check_comprehension(
 fn check_query(
     fcx: &mut FnCtxt<'_>,
     span: yelang_lexer::Span,
-    kind: &QueryKind,
+    query_id: yelang_hir::ids::QueryId,
 ) -> TyId {
-    match kind {
+    let query = fcx
+        .tcx
+        .crate_hir()
+        .query(query_id)
+        .expect("QueryId should be valid")
+        .clone();
+    match &query.kind {
         QueryKind::Select(select) => {
             if select.from.len() != 1 {
                 fcx.report_type_error(
@@ -244,13 +258,49 @@ fn check_query(
             fcx.pop_scope();
             result
         }
+        QueryKind::Create(create) => {
+            fcx.push_scope();
+            let result = check_create_query(fcx, span, create);
+            fcx.pop_scope();
+            result
+        }
+        QueryKind::Update(update) => {
+            fcx.push_scope();
+            let result = check_update_query(fcx, span, update);
+            fcx.pop_scope();
+            result
+        }
+        QueryKind::Upsert(upsert) => {
+            fcx.push_scope();
+            let result = check_upsert_query(fcx, span, upsert);
+            fcx.pop_scope();
+            result
+        }
+        QueryKind::Delete(delete) => {
+            fcx.push_scope();
+            let result = check_delete_query(fcx, span, delete);
+            fcx.pop_scope();
+            result
+        }
+        QueryKind::Link(link) => {
+            fcx.push_scope();
+            let result = check_link_query(fcx, span, link);
+            fcx.pop_scope();
+            result
+        }
+        QueryKind::Unlink(unlink) => {
+            fcx.push_scope();
+            let result = check_unlink_query(fcx, span, unlink);
+            fcx.pop_scope();
+            result
+        }
     }
 }
 
 fn check_select_query(
     fcx: &mut FnCtxt<'_>,
     span: yelang_lexer::Span,
-    select: &yelang_hir::hir::query::SelectQuery,
+    select: &SelectQuery,
 ) -> TyId {
     for from in &select.from {
         let source_ty = check_expr(fcx, from.source);
@@ -304,6 +354,342 @@ fn check_select_query(
     }
 
     check_expr(fcx, select.projection)
+}
+
+fn check_create_query(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    create: &CreateQuery,
+) -> TyId {
+    let table_ty = lower_hir_ty_id(fcx, create.table);
+    check_pat(fcx, create.binder, table_ty);
+
+    match &create.data {
+        CreateData::Object(fields) => {
+            check_create_object_fields(fcx, table_ty, fields);
+        }
+        CreateData::Array(exprs) => {
+            for expr in exprs {
+                check_expr(fcx, *expr);
+            }
+        }
+    }
+
+    for path in &create.links {
+        check_create_link_path(fcx, span, path);
+    }
+
+    if let Some(ret) = create.return_ {
+        check_expr(fcx, ret)
+    } else {
+        fcx.mk_unit()
+    }
+}
+
+/// Check the fields of a `create`/`upsert` object payload against the declared
+/// table type and report mismatches.
+fn check_create_object_fields(
+    fcx: &mut FnCtxt<'_>,
+    table_ty: TyId,
+    fields: &[(yelang_ast::Ident, ExprId)],
+) {
+    let interner = fcx.tcx.interner();
+    let (def_id, args) = match interner.ty(table_ty) {
+        Ty::Adt(AdtDef { def_id }, args) => (def_id, args),
+        _ => {
+            // Non-ADT table types can't be checked structurally here.
+            for (_, expr) in fields {
+                check_expr(fcx, *expr);
+            }
+            return;
+        }
+    };
+
+    let Some(adt) = fcx.tcx.adt_def(def_id) else {
+        for (_, expr) in fields {
+            check_expr(fcx, *expr);
+        }
+        return;
+    };
+
+    let variant = match adt.variants.first() {
+        Some(v) => v,
+        None => {
+            for (_, expr) in fields {
+                check_expr(fcx, *expr);
+            }
+            return;
+        }
+    };
+
+    let subst = Substitution::from_args(args.iter().copied().collect());
+
+    for (field, expr) in fields {
+        let field_ty = variant
+            .fields
+            .iter()
+            .find(|f| f.ident.symbol == field.symbol)
+            .map(|f| substitute(interner, f.ty, &subst));
+
+        let expr_ty = check_expr(fcx, *expr);
+        if let Some(expected) = field_ty {
+            if let Err(()) = fcx.coerce(expr_ty, expected) {
+                fcx.report_mismatch(expr_span(fcx, *expr), expected, expr_ty);
+            }
+        }
+    }
+}
+
+fn check_update_query(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    update: &UpdateQuery,
+) -> TyId {
+    let table_ty = lower_hir_ty_id(fcx, update.table);
+    check_pat(fcx, update.binder, table_ty);
+
+    match &update.mutation {
+        UpdateMutation::Merge(fields) => {
+            check_create_object_fields(fcx, table_ty, fields);
+        }
+        UpdateMutation::Set(setters) => {
+            for setter in setters {
+                check_setter(fcx, span, setter);
+            }
+        }
+    }
+
+    for path in &update.links {
+        check_create_link_path(fcx, span, path);
+    }
+
+    if let Some(cond) = update.condition {
+        let cond_ty = check_expr(fcx, cond);
+        fcx.demand_eq(span, fcx.mk_bool(), cond_ty);
+    }
+
+    if let Some(ret) = update.return_ {
+        check_expr(fcx, ret)
+    } else {
+        fcx.mk_unit()
+    }
+}
+
+fn check_upsert_query(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    upsert: &UpsertQuery,
+) -> TyId {
+    let table_ty = lower_hir_ty_id(fcx, upsert.table);
+    check_pat(fcx, upsert.binder, table_ty);
+
+    match &upsert.data {
+        CreateData::Object(fields) => {
+            check_create_object_fields(fcx, table_ty, fields);
+        }
+        CreateData::Array(exprs) => {
+            for expr in exprs {
+                check_expr(fcx, *expr);
+            }
+        }
+    }
+
+    for path in &upsert.links {
+        check_create_link_path(fcx, span, path);
+    }
+
+    if let Some(ret) = upsert.return_ {
+        check_expr(fcx, ret)
+    } else {
+        fcx.mk_unit()
+    }
+}
+
+fn check_delete_query(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    delete: &DeleteQuery,
+) -> TyId {
+    let table_ty = lower_hir_ty_id(fcx, delete.table);
+    check_pat(fcx, delete.binder, table_ty);
+
+    if let Some(cond) = delete.condition {
+        let cond_ty = check_expr(fcx, cond);
+        fcx.demand_eq(span, fcx.mk_bool(), cond_ty);
+    }
+
+    if let Some(ret) = delete.return_ {
+        check_expr(fcx, ret)
+    } else {
+        fcx.mk_unit()
+    }
+}
+
+fn check_link_query(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, link: &LinkQuery) -> TyId {
+    for path in &link.paths {
+        check_create_link_path(fcx, span, path);
+    }
+
+    if let Some(ret) = link.return_ {
+        check_expr(fcx, ret)
+    } else {
+        fcx.mk_unit()
+    }
+}
+
+fn check_unlink_query(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, unlink: &UnlinkQuery) -> TyId {
+    for path in &unlink.paths {
+        check_unlink_path(fcx, span, path);
+    }
+
+    if let Some(ret) = unlink.return_ {
+        check_expr(fcx, ret)
+    } else {
+        fcx.mk_unit()
+    }
+}
+
+fn check_create_link_path(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    path: &CreateLinkPath,
+) {
+    for segment in &path.segments {
+        match segment {
+            yelang_hir::hir::query::CreatePathSegment::Node(node) => {
+                check_create_node(fcx, span, node)
+            }
+            yelang_hir::hir::query::CreatePathSegment::Edge(edge) => {
+                check_create_edge(fcx, span, edge)
+            }
+        }
+    }
+}
+
+fn check_create_node(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, node: &CreateNode) {
+    let table_ty = lower_hir_ty_id(fcx, node.table);
+    check_pat(fcx, node.binder, table_ty);
+    check_node_modifiers(fcx, span, &node.modifiers);
+}
+
+fn check_create_edge(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, edge: &CreateEdge) {
+    let table_ty = lower_hir_ty_id(fcx, edge.table);
+    check_pat(fcx, edge.binder, table_ty);
+    for (_, expr) in &edge.data {
+        check_expr(fcx, *expr);
+    }
+}
+
+fn check_unlink_path(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, path: &UnlinkPath) {
+    for segment in &path.segments {
+        match segment {
+            yelang_hir::hir::query::UnlinkPathSegment::Node(node) => {
+                check_link_node(fcx, span, node)
+            }
+            yelang_hir::hir::query::UnlinkPathSegment::Edge(edge) => {
+                check_link_edge(fcx, span, edge)
+            }
+        }
+    }
+}
+
+fn check_link_node(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, node: &yelang_hir::hir::query::LinkNode) {
+    if let Some(binder) = node.binder {
+        if let Some(table) = node.table {
+            let table_ty = lower_hir_ty_id(fcx, table);
+            check_pat(fcx, binder, table_ty);
+        }
+    }
+    check_node_modifiers(fcx, span, &node.modifiers);
+}
+
+fn check_link_edge(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, edge: &yelang_hir::hir::query::LinkEdge) {
+    if let Some(binder) = edge.binder {
+        if let Some(table) = edge.table {
+            let table_ty = lower_hir_ty_id(fcx, table);
+            check_pat(fcx, binder, table_ty);
+        }
+    }
+    check_node_modifiers(fcx, span, &edge.modifiers);
+}
+
+fn check_node_modifiers(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    modifiers: &yelang_hir::hir::query::NodeModifiers,
+) {
+    if let Some(filter) = modifiers.filter {
+        let filter_ty = check_expr(fcx, filter);
+        fcx.demand_eq(span, fcx.mk_bool(), filter_ty);
+    }
+    for part in &modifiers.order_by {
+        check_expr(fcx, part.expr);
+    }
+    if let Some(range) = &modifiers.range {
+        if let Some(start) = range.start {
+            check_expr(fcx, start);
+        }
+        if let Some(end) = range.end {
+            check_expr(fcx, end);
+        }
+    }
+}
+
+fn check_setter(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, setter: &Setter) {
+    let path_ty = check_expr(fcx, setter.path);
+    let value_ty = check_expr(fcx, setter.value);
+
+    match setter.op {
+        SetterOp::Assign => {
+            if let Err(()) = fcx.coerce(value_ty, path_ty) {
+                fcx.report_mismatch(span, path_ty, value_ty);
+            }
+        }
+        SetterOp::Increment | SetterOp::Decrement => {
+            // Path and value must be numeric. Demand equality as a simple check.
+            fcx.demand_eq(span, path_ty, value_ty);
+        }
+    }
+}
+
+fn check_array_repeat(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, value: ExprId, count: ExprId) -> TyId {
+    let value_ty = check_expr(fcx, value);
+    let count_ty = check_expr(fcx, count);
+    // The repeat count must be an integer.  Use `i32` as the default fallback
+    // for unresolved integer literals, mirroring the general integer fallback.
+    fcx.demand_eq(span, fcx.mk_int(IntTy::I32), count_ty);
+
+    let len_const = if let Some(lit) = fcx.tcx.crate_hir().expr(count) {
+        match lit {
+            Expr::Lit {
+                lit: yelang_hir::hir::core::Lit::Int(il),
+            } => {
+                let s = il.value.to_string();
+                if let Ok(v) = s.parse::<i128>() {
+                    fcx.tcx.interner().mk_const_from_parts(
+                        yelang_ty::ty::Const::Value(yelang_ty::ty::ConstValue::Int(v)),
+                        fcx.mk_uint(yelang_ty::primitive::UintTy::Usize),
+                    )
+                } else {
+                    fcx.tcx.interner().mk_const_from_parts(
+                        yelang_ty::ty::Const::Error,
+                        fcx.mk_uint(yelang_ty::primitive::UintTy::Usize),
+                    )
+                }
+            }
+            _ => fcx.tcx.interner().mk_const_from_parts(
+                yelang_ty::ty::Const::Error,
+                fcx.mk_uint(yelang_ty::primitive::UintTy::Usize),
+            ),
+        }
+    } else {
+        fcx.tcx.interner().mk_const_from_parts(
+            yelang_ty::ty::Const::Error,
+            fcx.mk_uint(yelang_ty::primitive::UintTy::Usize),
+        )
+    };
+
+    fcx.mk_array(value_ty, len_const)
 }
 
 // ---------------------------------------------------------------------------
@@ -967,12 +1353,57 @@ fn check_let_expr(fcx: &mut FnCtxt<'_>, pat: PatId, expr: ExprId) -> TyId {
 
 fn check_closure(
     fcx: &mut FnCtxt<'_>,
-    params: &[yelang_hir::hir::body::Param],
+    _params: &[yelang_hir::hir::body::Param],
     body_id: BodyId,
 ) -> TyId {
-    let _ = (params, body_id);
-    // TODO: look up body from crate, check with new FnCtxt
-    fcx.new_ty_var()
+    check_closure_with_expected(fcx, body_id, &[])
+}
+
+/// Type-check a closure whose parameter types are partially or fully known from
+/// the call context (e.g. `users.any(|u| u.id > 0)` where `u` must be `User`).
+///
+/// `expected_inputs[i]` is used for parameter `i` when the source does not
+/// supply an explicit type annotation. Extra expected types beyond the number
+/// of parameters are ignored; missing expectations fall back to fresh type
+/// variables.
+pub(crate) fn check_closure_with_expected(
+    fcx: &mut FnCtxt<'_>,
+    body_id: BodyId,
+    expected_inputs: &[TyId],
+) -> TyId {
+    let body = match fcx.tcx.crate_hir().body(body_id) {
+        Some(b) => b.clone(),
+        None => return fcx.mk_error(),
+    };
+
+    fcx.push_scope();
+
+    let mut param_tys = Vec::with_capacity(body.params.len());
+    for (idx, param) in body.params.iter().enumerate() {
+        let annotated = lower_hir_ty_id(fcx, param.ty);
+        let annotated_is_inferred = fcx
+            .tcx
+            .crate_hir()
+            .ty(param.ty)
+            .is_some_and(|t| matches!(t, HirTy::Infer | HirTy::Missing | HirTy::Err));
+        let param_ty = if annotated_is_inferred {
+            expected_inputs.get(idx).copied().unwrap_or_else(|| fcx.new_ty_var())
+        } else {
+            annotated
+        };
+        param_tys.push(param_ty);
+        crate::pat::check_pat(fcx, param.pat, param_ty);
+    }
+
+    let output_ty = check_expr(fcx, body.value);
+
+    fcx.pop_scope();
+
+    let inputs = fcx
+        .tcx
+        .interner()
+        .mk_generic_args(&param_tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
+    fcx.mk_fn_ptr(inputs, output_ty)
 }
 
 // ---------------------------------------------------------------------------

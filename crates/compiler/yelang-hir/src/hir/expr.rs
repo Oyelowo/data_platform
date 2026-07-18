@@ -4,8 +4,7 @@ use yelang_ast::{AssignOpKind, Ident, Label};
 
 use crate::hir::body::Param;
 use crate::hir::core::{Arm, Block, CaptureClause, FieldExpr, Lit};
-use crate::hir::query::Query;
-use crate::ids::{BodyId, ExprId, HirTyId, PatId};
+use crate::ids::{BodyId, ExprId, HirTyId, PatId, QueryId};
 use crate::res::Res;
 
 /// Kind of generator expression.
@@ -132,8 +131,10 @@ pub enum Expr {
         variables: Vec<ComprehensionVar>,
         condition: Option<ExprId>,
     },
-    /// Query expression (`select ... from ...`).
-    Query(Box<Query>),
+    /// Query expression (`select ... from ...`, `create ...`, etc.).
+    Query(QueryId),
+    /// Array repeat literal: `[value; count]`.
+    ArrayRepeat { value: ExprId, count: ExprId },
     /// Error recovery.
     Err,
 }

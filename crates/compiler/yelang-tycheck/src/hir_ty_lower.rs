@@ -50,7 +50,8 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &hir::Ty, cx: &mut Cx) -> TyId {
         }
         hir::Ty::Array { ty, len } => {
             let elem_ty = lower_hir_ty_id(*ty, cx);
-            let len_const = lower_hir_const(len, elem_ty, cx);
+            // Array lengths are always `usize`.
+            let len_const = lower_hir_const(len, cx.mk_uint(UintTy::Usize), cx);
             cx.mk_ty(Ty::Array(elem_ty, len_const))
         }
         hir::Ty::Slice { ty } => {
@@ -204,11 +205,27 @@ fn lower_hir_const<Cx: TyLowerCtxt>(
             | yelang_lexer::Literal::RecordId(_)
             | yelang_lexer::Literal::Unit => Const::Error,
         },
-        HirConstKind::Expr { body: _ } => {
-            // TODO: const-eval the body once the const evaluator is available.
-            // For now leave the length/dimension as an error constant so that
-            // type checking does not crash.
-            Const::Error
+        HirConstKind::Expr { body } => {
+            // FIXME:
+            // Fast path for simple literal bodies (e.g. `[T; 3]`).  A full
+            // const evaluator will replace this once it is available.
+            if let Some(b) = cx.crate_hir().body(*body) {
+                if let Some(hir::Expr::Lit {
+                    lit: hir::core::Lit::Int(il),
+                }) = cx.crate_hir().expr(b.value)
+                {
+                    let s = il.value.to_string();
+                    if let Ok(v) = s.parse::<i128>() {
+                        Const::Value(ConstValue::Int(v))
+                    } else {
+                        Const::Error
+                    }
+                } else {
+                    Const::Error
+                }
+            } else {
+                Const::Error
+            }
         }
         HirConstKind::Err => Const::Error,
     };
@@ -223,13 +240,21 @@ fn lower_res<Cx: TyLowerCtxt>(res: &Res, args: &[HirGenericArg], cx: &mut Cx) ->
         Res::Def { def_id } => {
             // Type parameters are resolved to DefIds too; check those first.
             if let Some(ty) = cx.param_ty(*def_id) {
-                ty
-            } else if let Some(ty) = cx.item_ty(*def_id) {
-                ty
-            } else {
-                // Fallback: create an ADT type with the lowered generic args.
-                cx.mk_ty(Ty::Adt(AdtDef { def_id: *def_id }, lowered_args))
+                return ty;
             }
+
+            // If no explicit generic arguments were supplied and the item already
+            // has a cached canonical type (e.g. a non-generic struct or a type
+            // alias), reuse it.  When arguments are present we must build the
+            // applied ADT type directly so that `Array<User>` does not collapse
+            // into the unapplied `Array<T>`.
+            if lowered_args.is_empty() {
+                if let Some(ty) = cx.item_ty(*def_id) {
+                    return ty;
+                }
+            }
+
+            cx.mk_ty(Ty::Adt(AdtDef { def_id: *def_id }, lowered_args))
         }
         Res::Local { .. } => {
             // Local variables shouldn't appear in type position

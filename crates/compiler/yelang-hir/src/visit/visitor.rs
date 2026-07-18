@@ -171,6 +171,19 @@ pub trait Visitor<'hir>: Sized {
             }
         }
     }
+
+    /// Visit a query by its arena ID.
+    fn visit_query_by_id(&mut self, id: crate::ids::QueryId) {
+        if let Some(crate_hir) = self.crate_hir() {
+            if let Some(query) = crate_hir.queries.get(id).and_then(|o| o.as_ref()) {
+                self.visit_query(query);
+            }
+        }
+    }
+
+    fn visit_query(&mut self, query: &'hir crate::hir::query::Query) {
+        walk_query(self, query)
+    }
 }
 
 pub fn walk_crate<'hir, V: Visitor<'hir>>(visitor: &mut V, crate_hir: &'hir Crate) {
@@ -454,37 +467,36 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &'hir Expr) {
                 visitor.visit_expr_by_id(*cond);
             }
         }
-        Expr::Query(query) => match &query.kind {
-            crate::hir::query::QueryKind::Select(select) => {
-                visitor.visit_expr_by_id(select.projection);
-                for from in &select.from {
-                    visitor.visit_expr_by_id(from.source);
-                    visitor.visit_pat_by_id(from.binder);
-                    if let Some(ty) = from.elem_ty {
-                        visitor.visit_ty_by_id(ty);
-                    }
-                    if let Some(filter) = from.filter {
-                        visitor.visit_expr_by_id(filter);
-                    }
-                    for part in &from.order_by {
-                        visitor.visit_expr_by_id(part.expr);
-                    }
-                    if let Some(range) = &from.range {
-                        if let Some(start) = range.start {
-                            visitor.visit_expr_by_id(start);
-                        }
-                        if let Some(end) = range.end {
-                            visitor.visit_expr_by_id(end);
-                        }
-                    }
+        Expr::Query(query_id) => visitor.visit_query_by_id(*query_id),
+        Expr::ArrayRepeat { value, count } => {
+            visitor.visit_expr_by_id(*value);
+            visitor.visit_expr_by_id(*count);
+        }
+        Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
+    }
+}
+
+pub fn walk_query<'hir, V: Visitor<'hir>>(
+    visitor: &mut V,
+    query: &'hir crate::hir::query::Query,
+) {
+    use crate::hir::query::QueryKind;
+    match &query.kind {
+        QueryKind::Select(select) => {
+            visitor.visit_expr_by_id(select.projection);
+            for from in &select.from {
+                visitor.visit_expr_by_id(from.source);
+                visitor.visit_pat_by_id(from.binder);
+                if let Some(ty) = from.elem_ty {
+                    visitor.visit_ty_by_id(ty);
                 }
-                if let Some(where_clause) = select.where_clause {
-                    visitor.visit_expr_by_id(where_clause);
+                if let Some(filter) = from.filter {
+                    visitor.visit_expr_by_id(filter);
                 }
-                for part in &select.order_by {
+                for part in &from.order_by {
                     visitor.visit_expr_by_id(part.expr);
                 }
-                if let Some(range) = &select.range {
+                if let Some(range) = &from.range {
                     if let Some(start) = range.start {
                         visitor.visit_expr_by_id(start);
                     }
@@ -493,8 +505,30 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &'hir Expr) {
                     }
                 }
             }
-        },
-        Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
+            if let Some(where_clause) = select.where_clause {
+                visitor.visit_expr_by_id(where_clause);
+            }
+            for part in &select.order_by {
+                visitor.visit_expr_by_id(part.expr);
+            }
+            if let Some(range) = &select.range {
+                if let Some(start) = range.start {
+                    visitor.visit_expr_by_id(start);
+                }
+                if let Some(end) = range.end {
+                    visitor.visit_expr_by_id(end);
+                }
+            }
+        }
+        QueryKind::Create(_)
+        | QueryKind::Update(_)
+        | QueryKind::Upsert(_)
+        | QueryKind::Delete(_)
+        | QueryKind::Link(_)
+        | QueryKind::Unlink(_) => {
+            // Mutation queries are walked by the type checker; the generic visitor
+            // will gain full traversal once the HIR query structs are expanded.
+        }
     }
 }
 

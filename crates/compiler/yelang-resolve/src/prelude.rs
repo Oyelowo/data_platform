@@ -83,7 +83,9 @@ impl Prelude {
         add("Vec", DefKind::Struct, Namespace::Value, None);
 
         add("Array", DefKind::Struct, Namespace::Type, Some(LangItem::Array));
-        add("Array", DefKind::Struct, Namespace::Value, Some(LangItem::Array));
+        // The value-namespace entry is the same logical type used in value
+        // positions; it must not overwrite the type-namespace lang-item mapping.
+        add("Array", DefKind::Struct, Namespace::Value, None);
 
         add("String", DefKind::TypeAlias, Namespace::Type, None);
         add("String", DefKind::TypeAlias, Namespace::Value, None);

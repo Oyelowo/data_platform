@@ -5,7 +5,7 @@
  * Date 31/12/2024
  */
 
-use super::EdgeDirection;
+use super::{EdgeDirection, parse_query_tail};
 use super::select::Node;
 use crate::{Expr, Ident, Object, T, TokenKind, Type};
 use yelang_lexer::{ParseTokenStream, SeparatedList, Span, TokenError, TokenResult, TokenStream};
@@ -32,9 +32,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for LinkQ {
                 .parse::<SeparatedList<CreatePath, T![,], true>>()?
                 .value_owned();
 
-            let tail = stream
-                .parse::<Option<(T![;], Expr)>>()?
-                .map(|(_, expr)| expr);
+            let tail = parse_query_tail(stream)?;
 
             stream.parse::<T!['}']>()?;
 

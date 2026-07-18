@@ -14,7 +14,7 @@ use yelang_resolve::lang_items::LangItem;
 use yelang_ty::primitive::UintTy;
 use yelang_ty::ty::{Ty, TyId};
 
-use crate::check::{check_expr, expr_span};
+use crate::check::{check_closure_with_expected, check_expr, expr_span};
 use crate::fn_ctxt::FnCtxt;
 
 /// If `func` is the prelude `len` or `count` function, type-check the call as a
@@ -96,15 +96,53 @@ fn try_check_any_all(
     let elem_ty = fcx.expect_array(expr_span(fcx, receiver), receiver_ty);
 
     let predicate = args[0];
-    let pred_ty = check_expr(fcx, predicate);
+    let pred_ty = if let Some(yelang_hir::hir::expr::Expr::Closure { body, .. }) =
+        fcx.tcx.crate_hir().expr(predicate)
+    {
+        // Closures passed to `any`/`all` can infer their parameter type from
+        // the array element type.
+        check_closure_with_expected(fcx, *body, &[elem_ty])
+    } else {
+        check_expr(fcx, predicate)
+    };
     let interner = fcx.tcx.interner();
 
     // The predicate must be callable with the element type and return bool.
     match interner.ty(pred_ty) {
-        Ty::FnPtr(_) | Ty::FnDef(_) => {
-            // TODO: once closure signatures are represented directly, verify the
-            // input unifies with `elem_ty` and the output unifies with bool.
-            let _ = (elem_ty, method_name);
+        Ty::FnPtr(sig) => {
+            let inputs = &sig.sig.inputs;
+            if inputs.len() != 1 {
+                let span = expr_span(fcx, predicate);
+                fcx.report_type_error(
+                    span,
+                    yelang_infer::error::TypeError::Custom(format!(
+                        "expected a single-argument predicate for `{}`",
+                        method_name
+                    )),
+                );
+                return Some(fcx.mk_bool());
+            }
+            let expected_input = match inputs.iter().next().unwrap() {
+                yelang_ty::generic::GenericArg::Type(ty) => *ty,
+                _ => {
+                    let span = expr_span(fcx, predicate);
+                    fcx.report_type_error(
+                        span,
+                        yelang_infer::error::TypeError::Custom(format!(
+                            "expected a type argument for predicate `{}`",
+                            method_name
+                        )),
+                    );
+                    return Some(fcx.mk_bool());
+                }
+            };
+            let span = expr_span(fcx, predicate);
+            if fcx.eq(expected_input, elem_ty).is_err() {
+                fcx.report_mismatch(span, elem_ty, expected_input);
+            }
+            if fcx.eq(sig.sig.output, fcx.mk_bool()).is_err() {
+                fcx.report_mismatch(span, fcx.mk_bool(), sig.sig.output);
+            }
         }
         _ => {
             let span = expr_span(fcx, predicate);

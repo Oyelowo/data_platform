@@ -323,6 +323,7 @@ struct User { id: i32 }
 fn main() -> i32 {
     select 1 from users@u:User
 }
+fn users() -> Array<User> { [] }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
     assert_no_errors_named(&diagnostics, "query scalar projection");
@@ -335,6 +336,7 @@ struct User { id: i32 }
 fn main() -> Array<i32> {
     select users@u[*].id from users@u:User
 }
+fn users() -> Array<User> { [] }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
     assert_no_errors_named(&diagnostics, "query array projection");
@@ -347,6 +349,7 @@ struct User { id: i32, age: i32 }
 fn main() -> Array<i32> {
     select users@u[*].id from users@u:User where u.age > 18
 }
+fn users() -> Array<User> { [] }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
     assert_no_errors_named(&diagnostics, "query where clause");
@@ -359,6 +362,7 @@ struct User { id: i32 }
 fn main() -> Array<i32> {
     select users@u[*].id from users@u:User where u.id
 }
+fn users() -> Array<User> { [] }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
     assert_error_contains(&diagnostics, "type mismatch");
@@ -565,7 +569,7 @@ fn main() -> usize {
 fn is_empty_requires_array() {
     let src = r#"
 fn main() -> bool {
-    1.is_empty()
+    (1).is_empty()
 }
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
@@ -594,6 +598,196 @@ fn main() -> Array<User> {
     users@u[where u.id]
 }
 fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "type mismatch");
+}
+
+// -----------------------------------------------------------------------------
+// Fixed-size arrays `[T; N]` and repeat expressions `[value; count]`
+// -----------------------------------------------------------------------------
+
+#[test]
+fn fixed_size_array_literal_typechecks() {
+    let src = r#"
+fn main() -> [i32; 3] {
+    [1; 3]
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "fixed-size array literal");
+}
+
+#[test]
+fn fixed_size_array_repeat_requires_usize_count() {
+    let src = r#"
+fn main() -> [i32; 3] {
+    [1; true]
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "type mismatch");
+}
+
+#[test]
+fn fixed_size_array_mismatch_reports_error() {
+    let src = r#"
+fn main() -> [i32; 3] {
+    [true; 3]
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "type mismatch");
+}
+
+#[test]
+fn array_repeat_return_type_inferred() {
+    let src = r#"
+fn main() -> _ {
+    [1; 3]
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array repeat return inference");
+}
+
+// -----------------------------------------------------------------------------
+// Mutation query expressions: create, update, upsert, delete, link, unlink
+// -----------------------------------------------------------------------------
+
+#[test]
+fn create_query_returns_projection() {
+    let src = r#"
+struct User { id: i32, name: str }
+fn main() -> str {
+    create { user@u:User { id: 1, name: 'Alice' } return u.name }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "create query return projection");
+}
+
+#[test]
+fn create_query_return_type_inferred() {
+    let src = r#"
+struct User { id: i32, name: str }
+fn main() -> _ {
+    create { user@u:User { id: 1, name: 'Alice' } return u.name }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "create query inferred return");
+}
+
+#[test]
+fn update_query_set_returns_projection() {
+    let src = r#"
+struct User { id: i32, name: str }
+fn main() -> str {
+    update { users@u:User set u.name = 'Bob' where u.id == 1 return u.name }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "update query set");
+}
+
+#[test]
+fn update_query_merge_returns_projection() {
+    let src = r#"
+struct User { id: i32, name: str }
+fn main() -> i32 {
+    update { users@u:User { name: 'Bob' } where u.id == 1 return u.id }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "update query merge");
+}
+
+#[test]
+fn upsert_query_with_conflict_clause() {
+    let src = r#"
+struct User { id: i32, name: str }
+fn main() -> i32 {
+    upsert { user@u:User { id: 1, name: 'Alice' }
+        on conflict (id) merge
+        return u.id }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "upsert query conflict");
+}
+
+#[test]
+fn delete_query_returns_projection() {
+    let src = r#"
+struct User { id: i32, name: str }
+fn main() -> i32 {
+    delete { users@u:User where u.id == 1 return u.id }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "delete query");
+}
+
+#[test]
+fn create_link_query_returns_edge_field() {
+    let src = r#"
+struct User { id: i32 }
+struct Follows { since: i32 }
+fn main() -> i32 {
+    link { (users@u:User) -> [follows@f:Follows { since: 2024 }] -> (friends@v:User)
+        return f.since }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "create link query");
+}
+
+#[test]
+fn unlink_query_returns_edge_field() {
+    let src = r#"
+struct User { id: i32 }
+struct Follows { since: i32 }
+fn main() -> i32 {
+    unlink { (users@u:User) -> [follows@f:Follows] -> (friends@v:User)
+        return f.since }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "unlink query");
+}
+
+#[test]
+fn mutation_query_where_must_be_bool() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> i32 {
+    delete { users@u:User where u.id return u.id }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "type mismatch");
+}
+
+#[test]
+fn create_query_data_fields_typecheck() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> i32 {
+    create { user@u:User { id: 1 } return u.id }
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "create data fields");
+}
+
+#[test]
+fn create_query_data_field_type_mismatch() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> i32 {
+    create { user@u:User { id: "not an int" } return u.id }
+}
 "#;
     let (_tcx, diagnostics) = type_check_src(src);
     assert_error_contains(&diagnostics, "type mismatch");

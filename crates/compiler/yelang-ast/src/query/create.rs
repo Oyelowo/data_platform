@@ -5,7 +5,7 @@
  * Date 08/03/2025
  */
 
-use super::CreatePath;
+use super::{CreatePath, parse_query_tail};
 use crate::{Array, Expr, Ident, Object, T, TokenKind, Type};
 use yelang_lexer::{ParseTokenStream, SeparatedList, Span, TokenResult, TokenStream, match_map};
 
@@ -37,9 +37,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for CreateQ {
             stream.parse::<T!['{']>()?;
             let (var, at, binding, col, table, data, links) = stream.parse::<InsertBody>()?;
 
-            let tail = stream
-                .parse::<Option<(T![;], Expr)>>()?
-                .map(|(_, expr)| expr);
+            let tail = parse_query_tail(stream)?;
 
             stream.parse::<T!['}']>()?;
 

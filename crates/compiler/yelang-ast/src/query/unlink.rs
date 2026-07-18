@@ -5,7 +5,7 @@
  * Date 31/12/2024
  */
 
-use super::LinkPath;
+use super::{LinkPath, parse_query_tail};
 use crate::{Expr, T, TokenKind};
 use yelang_lexer::{ParseTokenStream, SeparatedList, TokenResult, TokenStream};
 
@@ -26,9 +26,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for UnlinkQ {
             stream.parse::<T!['{']>()?;
             type MultiPaths = SeparatedList<LinkPath, T![,], true>;
             let (links, _) = stream.parse::<(MultiPaths, Option<T![,]>)>()?;
-            let tail = stream
-                .parse::<Option<(T![;], Expr)>>()?
-                .map(|(_, expr)| expr);
+            let tail = parse_query_tail(stream)?;
             stream.parse::<T!['}']>()?;
 
             Ok(UnlinkQ {

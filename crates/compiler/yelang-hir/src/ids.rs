@@ -14,6 +14,7 @@ new_key_type! {
     pub struct StmtId;
     pub struct HirTyId;
     pub struct BodyId;
+    pub struct QueryId;
 }
 
 /// Items are keyed by their `DefId` from name resolution.

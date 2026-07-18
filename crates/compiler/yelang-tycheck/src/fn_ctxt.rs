@@ -220,6 +220,7 @@ impl<'a> FnCtxt<'a> {
                 }
             }
             Ty::Slice(elem) => elem,
+            Ty::Array(elem, _) => elem,
             Ty::Infer(InferTy::TyVar(_)) => {
                 let elem = self.new_ty_var();
                 let array_ty = self.mk_array_ty(elem);

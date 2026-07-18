@@ -860,7 +860,210 @@ impl<'a, 'b> LateResolver<'a, 'b> {
 
                 self.resolve_expr(&select.projection);
             }
-            _ => {}
+            yelang_ast::QueryKind::Create(create) => {
+                self.resolve_create_update_header(
+                    create.var.symbol,
+                    create.binding.symbol,
+                    &create.table,
+                    query.span,
+                );
+                self.resolve_creation_data(&create.data);
+                for path in &create.links {
+                    self.resolve_create_path(path);
+                }
+                if let Some(ret) = &create.return_ {
+                    self.resolve_expr(ret);
+                }
+            }
+            yelang_ast::QueryKind::Update(update) => {
+                self.resolve_create_update_header(
+                    update.var.symbol,
+                    update.binding.symbol,
+                    &update.table,
+                    query.span,
+                );
+                match &update.mutation {
+                    yelang_ast::query::UpdateMutation::Merge(obj) => {
+                        for field in &obj.fields {
+                            self.resolve_expr(&field.value());
+                        }
+                    }
+                    yelang_ast::query::UpdateMutation::Set(setters) => {
+                        for setter in setters {
+                            self.resolve_expr(&setter.path);
+                            self.resolve_expr(&setter.value);
+                        }
+                    }
+                }
+                for path in &update.links {
+                    self.resolve_create_path(path);
+                }
+                if let Some(cond) = &update.condition {
+                    self.resolve_expr(cond);
+                }
+                if let Some(ret) = &update.return_ {
+                    self.resolve_expr(ret);
+                }
+            }
+            yelang_ast::QueryKind::Upsert(upsert) => {
+                self.resolve_create_update_header(
+                    upsert.var.symbol,
+                    upsert.binding.symbol,
+                    &upsert.table,
+                    query.span,
+                );
+                self.resolve_creation_data(&upsert.data);
+                for path in &upsert.links {
+                    self.resolve_create_path(path);
+                }
+                if let Some(ret) = &upsert.return_ {
+                    self.resolve_expr(ret);
+                }
+            }
+            yelang_ast::QueryKind::Delete(delete) => {
+                self.resolve_create_update_header(
+                    delete.var.symbol,
+                    delete.binding.symbol,
+                    &delete.table,
+                    query.span,
+                );
+                if let Some(cond) = &delete.condition {
+                    self.resolve_expr(cond);
+                }
+                if let Some(ret) = &delete.return_ {
+                    self.resolve_expr(ret);
+                }
+            }
+            yelang_ast::QueryKind::Link(link) => {
+                for path in &link.paths {
+                    self.resolve_create_path(path);
+                }
+                if let Some(ret) = &link.return_ {
+                    self.resolve_expr(ret);
+                }
+            }
+            yelang_ast::QueryKind::Unlink(unlink) => {
+                for path in &unlink.paths {
+                    self.resolve_link_path(path);
+                }
+                if let Some(ret) = &unlink.return_ {
+                    self.resolve_expr(ret);
+                }
+            }
+        }
+    }
+
+    fn resolve_create_update_header(
+        &mut self,
+        var: Symbol,
+        binding: Symbol,
+        table: &yelang_ast::Type,
+        span: Span,
+    ) {
+        self.add_value_binding(var, span);
+        self.resolve_type(table);
+        self.add_value_binding(binding, span);
+    }
+
+    fn resolve_creation_data(&mut self, data: &yelang_ast::query::CreationData) {
+        match data {
+            yelang_ast::query::CreationData::Object(obj) => {
+                for field in &obj.fields {
+                    self.resolve_expr(field.value());
+                }
+            }
+            yelang_ast::query::CreationData::Array(arr) => {
+                if let yelang_ast::ArrayKind::List(elems) = &arr.kind {
+                    for elem in elems {
+                        self.resolve_expr(elem);
+                    }
+                } else if let yelang_ast::ArrayKind::Repeat { value, count } = &arr.kind {
+                    self.resolve_expr(value);
+                    self.resolve_expr(count);
+                }
+            }
+        }
+    }
+
+    fn resolve_create_path(&mut self, path: &yelang_ast::query::CreatePath) {
+        for segment in &path.segments {
+            match segment {
+                yelang_ast::query::CreatePathSegment::Node(node) => {
+                    self.resolve_link_node(node);
+                }
+                yelang_ast::query::CreatePathSegment::Edge(edge) => {
+                    self.add_value_binding(edge.var.symbol, edge.var.span);
+                    self.add_value_binding(edge.binding.symbol, edge.binding.span);
+                    self.resolve_type(&edge.table);
+                    for field in &edge.data.fields {
+                        self.resolve_expr(field.value());
+                    }
+                }
+            }
+        }
+    }
+
+    fn resolve_link_path(&mut self, path: &yelang_ast::query::LinkPath) {
+        self.resolve_link_node(&path.start);
+        for segment in &path.segments {
+            self.resolve_link_edge(&segment.edge);
+            self.resolve_link_node(&segment.target);
+        }
+    }
+
+    fn resolve_link_node(&mut self, node: &yelang_ast::query::Node) {
+        if let Some(var) = &node.var {
+            self.add_value_binding(var.symbol, var.span);
+        }
+        if let Some(bind) = &node.bind {
+            self.add_value_binding(bind.symbol, bind.span);
+        }
+        if let Some(ty) = &node.ty {
+            self.resolve_type(ty);
+        }
+        if let Some(filter) = &node.modifiers.filter {
+            self.resolve_expr(filter);
+        }
+        if let Some(order) = &node.modifiers.order {
+            for part in order {
+                self.resolve_expr(&part.field);
+            }
+        }
+        if let Some(range) = &node.modifiers.range {
+            if let Some(start) = &range.start {
+                self.resolve_expr(start);
+            }
+            if let Some(end) = &range.end {
+                self.resolve_expr(end);
+            }
+        }
+    }
+
+    fn resolve_link_edge(&mut self, edge: &yelang_ast::query::Edge) {
+        if let Some(var) = &edge.var {
+            self.add_value_binding(var.symbol, var.span);
+        }
+        if let Some(bind) = &edge.bind {
+            self.add_value_binding(bind.symbol, bind.span);
+        }
+        if let Some(ty) = &edge.ty {
+            self.resolve_type(ty);
+        }
+        if let Some(filter) = &edge.modifiers.filter {
+            self.resolve_expr(filter);
+        }
+        if let Some(order) = &edge.modifiers.order {
+            for part in order {
+                self.resolve_expr(&part.field);
+            }
+        }
+        if let Some(range) = &edge.modifiers.range {
+            if let Some(start) = &range.start {
+                self.resolve_expr(start);
+            }
+            if let Some(end) = &range.end {
+                self.resolve_expr(end);
+            }
         }
     }
 

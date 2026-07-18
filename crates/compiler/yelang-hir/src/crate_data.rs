@@ -8,7 +8,7 @@ use yelang_arena::{Arena, ArenaMap, IndexVec};
 use yelang_lexer::Span;
 
 use crate::hir::core::{ForeignItem, Impl};
-use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
+use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, QueryId, StmtId};
 
 // Re-export so callers can query lang items without a separate dependency.
 pub use yelang_resolve::lang_items::LangItems;
@@ -35,6 +35,8 @@ pub struct Crate {
     pub stmts: Arena<StmtId, Option<Stmt>>,
     /// All HIR type syntax nodes keyed by `HirTyId`.
     pub tys: Arena<HirTyId, Option<Ty>>,
+    /// All query expression nodes keyed by `QueryId`.
+    pub queries: Arena<QueryId, Option<crate::hir::query::Query>>,
     /// Registry of language items discovered during name resolution.
     pub lang_items: LangItems,
     /// Secondary map from `ExprId` to the source span of the expression.
@@ -47,6 +49,8 @@ pub struct Crate {
     pub ty_spans: ArenaMap<HirTyId, Span>,
     /// Secondary map from `BodyId` to the source span of the body.
     pub body_spans: ArenaMap<BodyId, Span>,
+    /// Secondary map from `QueryId` to the source span of the query.
+    pub query_spans: ArenaMap<QueryId, Span>,
 }
 
 impl Crate {
@@ -62,12 +66,14 @@ impl Crate {
             pats: Arena::new(),
             stmts: Arena::new(),
             tys: Arena::new(),
+            queries: Arena::new(),
             lang_items: LangItems::new(),
             expr_spans: ArenaMap::new(),
             pat_spans: ArenaMap::new(),
             stmt_spans: ArenaMap::new(),
             ty_spans: ArenaMap::new(),
             body_spans: ArenaMap::new(),
+            query_spans: ArenaMap::new(),
         }
     }
 
@@ -103,6 +109,13 @@ impl Crate {
     pub fn alloc_body(&mut self, body: Body, span: Span) -> BodyId {
         let id = self.bodies.insert(Some(body));
         self.body_spans.insert(id, span);
+        id
+    }
+
+    /// Allocate a query node and its span, returning the `QueryId`.
+    pub fn alloc_query(&mut self, query: crate::hir::query::Query, span: Span) -> QueryId {
+        let id = self.queries.insert(Some(query));
+        self.query_spans.insert(id, span);
         id
     }
 
@@ -154,6 +167,16 @@ impl Crate {
     /// Look up a mutable body node by `BodyId`.
     pub fn body_mut(&mut self, id: BodyId) -> Option<&mut Body> {
         self.bodies.get_mut(id).and_then(|o| o.as_mut())
+    }
+
+    /// Look up a query node by `QueryId`.
+    pub fn query(&self, id: QueryId) -> Option<&crate::hir::query::Query> {
+        self.queries.get(id).and_then(|o| o.as_ref())
+    }
+
+    /// Look up a mutable query node by `QueryId`.
+    pub fn query_mut(&mut self, id: QueryId) -> Option<&mut crate::hir::query::Query> {
+        self.queries.get_mut(id).and_then(|o| o.as_mut())
     }
 
     /// Look up the source span of an expression.

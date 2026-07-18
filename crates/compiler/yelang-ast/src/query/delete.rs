@@ -5,6 +5,7 @@
  * Date 31/12/2024
  */
 
+use super::parse_query_tail;
 use crate::{Expr, Ident, T, TokenKind, Type};
 use yelang_lexer::{ParseTokenStream, Span, TokenResult, TokenStream, match_map_res};
 
@@ -48,13 +49,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for DeleteQ {
             .parse::<Option<(T![where], Expr)>>()?
             .map(|(_, expr)| expr);
 
-        let tail = if is_block {
-            stream
-                .parse::<Option<(T![;], Expr)>>()?
-                .map(|(_, expr)| expr)
-        } else {
-            None
-        };
+        let tail = if is_block { parse_query_tail(stream)? } else { None };
 
         if is_block {
             stream.parse::<T!['}']>()?;

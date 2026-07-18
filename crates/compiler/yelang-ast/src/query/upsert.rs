@@ -5,7 +5,7 @@
  * Date 08/03/2025
  */
 
-use super::{CreatePath, CreationData};
+use super::{CreatePath, CreationData, parse_query_tail};
 use crate::{Expr, Ident, T, TokenKind, Type};
 use yelang_lexer::{ParseTokenStream, SeparatedList, Span, TokenError, TokenResult, TokenStream};
 
@@ -49,9 +49,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for UpsertQ {
             let on_conflict = parse_conflict_clause(stream)?;
             let links =
                 stream.parse::<Option<(T![link], SeparatedList<CreatePath, T![,], true>)>>()?;
-            let tail = stream
-                .parse::<Option<(T![;], Expr)>>()?
-                .map(|(_, expr)| expr);
+            let tail = parse_query_tail(stream)?;
             stream.parse::<T!['}']>()?;
 
             (var, at, binding, col, table, data, on_conflict, links, tail)

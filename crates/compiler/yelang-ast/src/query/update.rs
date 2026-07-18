@@ -5,7 +5,7 @@
  * Date 31/12/2024
  */
 
-use super::CreatePath;
+use super::{CreatePath, parse_query_tail};
 use crate::{Expr, Ident, Object, T, Type, expr::AssignOpKind, tokenizer::TokenKind};
 use yelang_lexer::{
     ParseTokenStream, SeparatedList, Span, TokenError, TokenResult, TokenStream, match_map_res,
@@ -78,13 +78,7 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for UpdateQ {
             .parse::<Option<(T![where], Expr)>>()?
             .map(|(_, expr)| expr);
 
-        let tail = if is_block {
-            stream
-                .parse::<Option<(T![;], Expr)>>()?
-                .map(|(_, expr)| expr)
-        } else {
-            None
-        };
+        let tail = if is_block { parse_query_tail(stream)? } else { None };
 
         if is_block {
             stream.parse::<T!['}']>()?;
