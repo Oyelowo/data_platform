@@ -47,6 +47,7 @@ mod cursor;
 mod disk;
 mod engine;
 mod error;
+pub mod io;
 mod options;
 mod page;
 mod recovery;
@@ -64,5 +65,9 @@ mod wal;
 pub use cursor::BPlusTreeCursor as BtreeCursor;
 pub use engine::BtreeEngine;
 pub use error::{Error, Result};
+pub use io::{
+    Boundary, FaultRule, FaultSchedule, FaultyBackend, OpFamily, OpenOptions, RealBackend,
+    StorageBackend, StorageFile,
+};
 pub use options::BtreeOptions;
 pub use transaction::BtreeTransaction;

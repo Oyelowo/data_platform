@@ -23,12 +23,12 @@ fn active_volume_path(dir: &Path) -> PathBuf {
         let entry = entry.unwrap();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if let Some(stem) = name.strip_suffix(".blob") {
-            if let Ok(n) = stem.parse::<u64>() {
-                let path = entry.path();
-                if best.as_ref().map(|(bn, _)| n > *bn).unwrap_or(true) {
-                    best = Some((n, path));
-                }
+        if let Some(stem) = name.strip_suffix(".blob")
+            && let Ok(n) = stem.parse::<u64>()
+        {
+            let path = entry.path();
+            if best.as_ref().map(|(bn, _)| n > *bn).unwrap_or(true) {
+                best = Some((n, path));
             }
         }
     }
@@ -42,14 +42,13 @@ fn wal_segment_path(dir: &Path) -> PathBuf {
         let entry = entry.unwrap();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if let Some(stem) = name.strip_suffix(".log") {
-            if let Some(lsn_str) = stem.strip_prefix("wal-") {
-                if let Ok(n) = lsn_str.parse::<u64>() {
-                    let path = entry.path();
-                    if best.as_ref().map(|(bn, _)| n > *bn).unwrap_or(true) {
-                        best = Some((n, path));
-                    }
-                }
+        if let Some(stem) = name.strip_suffix(".log")
+            && let Some(lsn_str) = stem.strip_prefix("wal-")
+            && let Ok(n) = lsn_str.parse::<u64>()
+        {
+            let path = entry.path();
+            if best.as_ref().map(|(bn, _)| n > *bn).unwrap_or(true) {
+                best = Some((n, path));
             }
         }
     }
@@ -173,8 +172,7 @@ fn corrupt_volume_payload_is_detected_on_read() {
 
     // Flip one payload byte of the only record.
     let mut bytes = fs::read(&volume_path).unwrap();
-    let payload_offset =
-        offsets[0] as usize + storage_blob::format::HEADER_SIZE as usize + b"fragile".len();
+    let payload_offset = offsets[0] as usize + storage_blob::format::HEADER_SIZE + b"fragile".len();
     bytes[payload_offset] = bytes[payload_offset].wrapping_add(1);
     fs::write(&volume_path, bytes).unwrap();
 

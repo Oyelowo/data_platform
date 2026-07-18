@@ -10,8 +10,7 @@
 //! flushed.  Pages written during the flush reflect their on-page `page_lsn`;
 //! redo during recovery skips records whose LSN is already on the page.
 
-use std::fs::File;
-use std::io::Write;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +21,7 @@ use std::time::Duration;
 
 use crate::buffer::BufferPool;
 use crate::error::{Error, Result};
+use crate::io::{Boundary, OpenOptions, RealBackend, StorageBackend, StorageFile};
 use crate::page::PageId;
 use crate::recovery::{ActiveTxn, Recovery};
 use crate::space::PageAllocator;
@@ -68,7 +68,13 @@ impl Meta {
         dir.as_ref().join("META.bak")
     }
 
-    /// Read and validate `META` from `dir`.
+    /// Read and validate `META` from `dir` using the production backend.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn read(dir: impl AsRef<Path>) -> Result<Option<Self>> {
+        Self::read_with_backend(dir, &RealBackend)
+    }
+
+    /// Read and validate `META` from `dir` using the supplied backend.
     ///
     /// The primary `META` file is tried first.  If it is missing or corrupt, the
     /// `META.bak` backup written by the previous checkpoint is tried.  This
@@ -76,20 +82,26 @@ impl Meta {
     /// file after the atomic rename.
     ///
     /// Returns `Ok(None)` if neither file exists, allowing a fresh engine open.
-    pub fn read(dir: impl AsRef<Path>) -> Result<Option<Self>> {
+    pub fn read_with_backend(
+        dir: impl AsRef<Path>,
+        backend: &dyn StorageBackend,
+    ) -> Result<Option<Self>> {
         let path = Self::path(&dir);
         let backup = Self::backup_path(&dir);
         let mut last_error = None;
 
         for candidate in [&path, &backup] {
-            match std::fs::read(candidate) {
-                Ok(bytes) => match Self::decode(&bytes) {
+            if !backend.exists(candidate) {
+                continue;
+            }
+            match backend.open(candidate, OpenOptions::new().read(true)) {
+                Ok(file) => match Self::read_from_file(&file) {
                     Ok(meta) => return Ok(Some(meta)),
                     Err(e) => {
                         last_error = Some(e);
                     }
                 },
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
                 Err(e) => return Err(Error::Io(e)),
             }
         }
@@ -100,49 +112,60 @@ impl Meta {
         Ok(None)
     }
 
-    /// Atomically write `META` to `dir`.
+    fn read_from_file(file: &dyn StorageFile) -> Result<Self> {
+        let len = file.len().map_err(Error::Io)?;
+        if len == 0 {
+            return Err(Error::Corruption("META file is empty".into()));
+        }
+        let mut bytes = vec![0u8; len as usize];
+        file.read_at(&mut bytes, 0).map_err(Error::Io)?;
+        Self::decode(&bytes)
+    }
+
+    /// Atomically write `META` to `dir` using the production backend.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn write(&self, dir: impl AsRef<Path>) -> Result<()> {
+        Self::write_with_backend(self, dir, &RealBackend)
+    }
+
+    /// Atomically write `META` to `dir` using the supplied backend.
     ///
     /// A new `META` is written to a temporary file, fsynced, and renamed over the
     /// current primary.  Before the rename, any existing primary is moved to
     /// `META.bak`, giving recovery a fallback if the rename is interrupted or
     /// the primary is later corrupted.
-    pub fn write(&self, dir: impl AsRef<Path>) -> Result<()> {
+    pub fn write_with_backend(
+        &self,
+        dir: impl AsRef<Path>,
+        backend: &dyn StorageBackend,
+    ) -> Result<()> {
         let path = Self::path(&dir);
         let tmp = dir.as_ref().join(".META.tmp");
         let backup = Self::backup_path(&dir);
+
+        backend.pre_op(Boundary::MetaWriteTemp)?;
         {
             let bytes = self.encode();
-            let mut file = File::create(&tmp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
+            let file = backend.open(
+                &tmp,
+                OpenOptions::new().write(true).create(true).truncate(true),
+            )?;
+            file.write_at(&bytes, 0).map_err(Error::Io)?;
+            file.sync().map_err(Error::Io)?;
         }
-        if path.exists() {
-            std::fs::rename(&path, &backup)?;
+        if backend.exists(&path) {
+            backend.rename(&path, &backup).map_err(Error::Io)?;
         }
-        std::fs::rename(&tmp, &path)?;
-        Self::sync_parent_dir(&path)?;
+        backend.rename(&tmp, &path).map_err(Error::Io)?;
+        Self::sync_parent_dir(&path, backend)?;
         Ok(())
     }
 
-    fn sync_parent_dir(path: &Path) -> Result<()> {
+    fn sync_parent_dir(path: &Path, backend: &dyn StorageBackend) -> Result<()> {
         let parent = path
             .parent()
             .ok_or_else(|| Error::Corruption("META has no parent directory".into()))?;
-        let dir = File::open(parent)?;
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::fd::AsRawFd;
-            unsafe {
-                if libc::fsync(dir.as_raw_fd()) != 0 {
-                    return Err(Error::Io(std::io::Error::last_os_error()));
-                }
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            dir.sync_all()?;
-        }
-        Ok(())
+        backend.sync_dir(parent).map_err(Error::Io)
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -252,6 +275,7 @@ pub struct Checkpoint {
     root: Arc<dyn Fn() -> PageId + Send + Sync>,
     allocator: Arc<SyncMutex<PageAllocator>>,
     dir: PathBuf,
+    backend: Arc<dyn StorageBackend>,
 }
 
 impl Checkpoint {
@@ -264,6 +288,25 @@ impl Checkpoint {
         root_page_id: Arc<std::sync::atomic::AtomicU64>,
         allocator: Arc<SyncMutex<PageAllocator>>,
     ) -> Self {
+        Self::new_with_backend(
+            dir,
+            pool,
+            wal,
+            root_page_id,
+            allocator,
+            Arc::new(RealBackend),
+        )
+    }
+
+    #[cfg(test)]
+    fn new_with_backend(
+        dir: impl AsRef<Path>,
+        pool: Arc<BufferPool>,
+        wal: Arc<WalLog>,
+        root_page_id: Arc<std::sync::atomic::AtomicU64>,
+        allocator: Arc<SyncMutex<PageAllocator>>,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Self {
         let root: Arc<dyn Fn() -> PageId + Send + Sync> =
             Arc::new(move || PageId::new(root_page_id.load(Ordering::SeqCst)));
         Self {
@@ -272,6 +315,7 @@ impl Checkpoint {
             root,
             allocator,
             dir: dir.as_ref().to_path_buf(),
+            backend,
         }
     }
 
@@ -284,6 +328,7 @@ impl Checkpoint {
         wal: Arc<WalLog>,
         tree: Arc<BPlusTree>,
         allocator: Arc<SyncMutex<PageAllocator>>,
+        backend: Arc<dyn StorageBackend>,
     ) -> Self {
         let root: Arc<dyn Fn() -> PageId + Send + Sync> = Arc::new(move || tree.root_page_id());
         Self {
@@ -292,6 +337,7 @@ impl Checkpoint {
             root,
             allocator,
             dir: dir.as_ref().to_path_buf(),
+            backend,
         }
     }
 
@@ -308,6 +354,8 @@ impl Checkpoint {
         //    dirtied concurrently are written with their current page LSN and
         //    will be recovered by redo.
         self.pool.flush_all()?;
+        // Ensure flushed pages are durable before recording the checkpoint.
+        self.pool.sync_disk()?;
 
         // 3. Capture allocator state while pages are stable on disk.
         let allocator_snapshot = self.allocator.with_mut(|alloc| alloc.snapshot());
@@ -332,7 +380,7 @@ impl Checkpoint {
         };
 
         // 5. Atomically persist the metadata.
-        meta.write(&self.dir)?;
+        meta.write_with_backend(&self.dir, self.backend.as_ref())?;
 
         // 6. Truncate WAL segments that are fully before the checkpoint.  The
         //    storage-wal layer keeps the active segment intact.

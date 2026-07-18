@@ -252,11 +252,13 @@ impl BPlusTree {
     /// mutation durable. It is the caller's responsibility to ensure that all
     /// records for a single logical operation are synced together.
     pub(crate) fn sync(&self) -> Result<()> {
-        if let Some(wal) = self.wal() {
-            wal.sync()?;
-        }
+        // Sync the value log before the WAL: commit records in the WAL may
+        // reference value-log offsets, so the values must be durable first.
         if let Some(vl) = self.value_log() {
             vl.sync()?;
+        }
+        if let Some(wal) = self.wal() {
+            wal.sync()?;
         }
         Ok(())
     }
@@ -1216,6 +1218,10 @@ impl BPlusTree {
     /// Commit `txn`.  Returns the assigned commit timestamp.
     pub fn commit_txn(&self, txn: &Transaction) -> Result<Timestamp> {
         let commit_ts = self.txn_table.reserve_commit_ts();
+        // Make every update record durable before writing the commit marker.
+        // If this sync fails, no commit record exists, so recovery will undo
+        // the transaction and the caller can treat the commit as failed.
+        self.sync()?;
         let record = Record {
             header: RecordHeader::new(
                 RecordType::Commit,
@@ -1229,8 +1235,16 @@ impl BPlusTree {
         if let Some(wal) = self.wal() {
             wal.append_buffered(record)?;
         }
-        // Make the whole transaction durable with a single fsync.
-        self.sync()?;
+        // Make the commit marker itself durable.
+        if let Err(e) = self.sync() {
+            // The commit record may have been written to the OS page cache but
+            // not fsynced. Truncate the WAL to the last durable length so the
+            // uncommitted commit marker is not made durable by a later sync.
+            if let Some(wal) = self.wal() {
+                let _ = wal.crash();
+            }
+            return Err(e);
+        }
         self.txn_table.recover_committed(txn.txn_id, commit_ts)?;
         Ok(commit_ts)
     }

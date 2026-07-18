@@ -4,11 +4,12 @@
 //! reads and writes are whole pages at offsets `page_id * page_size`.  The
 //! file grows automatically when a page beyond the current end is written.
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
+use crate::io::{Boundary, OpenOptions, RealBackend, StorageBackend, StorageFile};
 use crate::page::PageId;
 
 const MIN_PAGE_SIZE: usize = 512;
@@ -17,12 +18,22 @@ const MIN_PAGE_SIZE: usize = 512;
 pub struct PagedFile {
     path: PathBuf,
     page_size: usize,
-    file: File,
+    file: Box<dyn StorageFile>,
+    backend: Arc<dyn StorageBackend>,
 }
 
 impl PagedFile {
-    /// Open or create a paged file at `path`.
+    /// Open or create a paged file at `path` using the production backend.
     pub fn open(path: impl AsRef<Path>, page_size: usize) -> Result<Self> {
+        Self::open_with_backend(path, page_size, Arc::new(RealBackend))
+    }
+
+    /// Open or create a paged file at `path` using the supplied backend.
+    pub fn open_with_backend(
+        path: impl AsRef<Path>,
+        page_size: usize,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Result<Self> {
         if page_size < MIN_PAGE_SIZE {
             return Err(Error::InvalidArgument(format!(
                 "page size {page_size} is below minimum {MIN_PAGE_SIZE}"
@@ -34,37 +45,43 @@ impl PagedFile {
             ));
         }
         let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
+        let file = backend.open(
+            &path,
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false),
+        )?;
         Ok(Self {
             path,
             page_size,
             file,
+            backend,
         })
     }
 
     /// Number of whole pages currently stored in the file.
     pub fn page_count(&self) -> Result<u64> {
-        let len = self.file.metadata()?.len();
+        let len = self.file.len()?;
         Ok(len / self.page_size as u64)
     }
 
     /// Read a whole page by id. Returns `Error::Corruption` if the file ends
     /// before the page is complete.
     pub fn read_page(&self, page_id: PageId) -> Result<Vec<u8>> {
+        self.backend.pre_op(Boundary::PageRead(page_id))?;
         let offset = page_id.get() * self.page_size as u64;
-        let mut file = &self.file;
-        file.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; self.page_size];
-        match file.read_exact(&mut buf) {
-            Ok(()) => Ok(buf),
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Err(Error::Corruption(
-                format!("page {page_id} read past end of file"),
-            )),
+        match self.file.read_at(&mut buf, offset) {
+            Ok(()) => {
+                self.backend
+                    .corrupt_read(Boundary::PageRead(page_id), &mut buf, offset)?;
+                Ok(buf)
+            }
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => Err(Error::Corruption(format!(
+                "page {page_id} read past end of file"
+            ))),
             Err(e) => Err(e.into()),
         }
     }
@@ -78,11 +95,14 @@ impl PagedFile {
                 data.len()
             )));
         }
+        self.backend.pre_op(Boundary::PageWrite(page_id))?;
         let offset = page_id.get() * self.page_size as u64;
-        let mut file = &self.file;
-        file.seek(SeekFrom::Start(offset))?;
-        file.write_all(data)?;
-        file.flush()?;
+        let len = self
+            .backend
+            .truncate_write(Boundary::PageWrite(page_id), data.len())?;
+        self.file.write_at(&data[..len], offset)?;
+        // Partial writes may leave a torn page; that is the intended fault
+        // behaviour and is detected by checksums on reopen.
         Ok(())
     }
 
@@ -93,11 +113,12 @@ impl PagedFile {
     /// error rather than panicking, because abort policy belongs to the
     /// engine.
     pub fn sync(&self) -> Result<()> {
-        self.file.sync_all()?;
+        self.backend.pre_op(Boundary::PageSync(PageId::new(0)))?;
+        self.file.sync()?;
         // Sync the parent directory so that file metadata (size, existence) is
         // durable.  This is required for crash-safe rename-free writes.
-        let dir = File::open(self.path.parent().unwrap_or_else(|| Path::new(".")))?;
-        dir.sync_all()?;
+        self.backend
+            .sync_dir(self.path.parent().unwrap_or_else(|| Path::new(".")))?;
         Ok(())
     }
 }

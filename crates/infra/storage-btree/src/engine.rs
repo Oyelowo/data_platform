@@ -12,6 +12,7 @@ use crate::cleaner::PageCleaner;
 use crate::cursor::BPlusTreeCursor;
 use crate::disk::PagedFile;
 use crate::error::{Error, Result};
+use crate::io::{FaultyBackend, RealBackend, StorageBackend};
 use crate::options::BtreeOptions;
 use crate::page::PageId;
 use crate::recovery::Recovery;
@@ -20,7 +21,7 @@ use crate::sync::Mutex as SyncMutex;
 use crate::transaction::BtreeTransaction;
 use crate::tree::BPlusTree;
 use crate::txn::{NULL_TXN_ID, Timestamp, Transaction as V2Transaction};
-use crate::valuelog::ValueLog;
+use crate::valuelog::{Durability, ValueLog};
 use crate::wal::{NULL_LSN, WalLog};
 
 /// Persistent in-place B+ tree key-value engine.
@@ -35,12 +36,25 @@ impl BtreeEngine {
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
 
-        let page_file = PagedFile::open(path.join("pages.dat"), options.page_size)?;
+        let base_backend: Arc<dyn StorageBackend> = options
+            .backend
+            .clone()
+            .unwrap_or_else(|| Arc::new(RealBackend));
+        let backend: Arc<dyn StorageBackend> = match options.fault_schedule.clone() {
+            Some(schedule) => Arc::new(FaultyBackend::new(base_backend, schedule)),
+            None => base_backend,
+        };
+
+        let page_file = PagedFile::open_with_backend(
+            path.join("pages.dat"),
+            options.page_size,
+            backend.clone(),
+        )?;
         let disk = Arc::new(page_file);
 
         // Read the latest checkpoint, if any, so the allocator starts from the
         // correct state.
-        let meta = Meta::read(&path)?;
+        let meta = Meta::read_with_backend(&path, backend.as_ref())?;
         let allocator = Arc::new(SyncMutex::new(if let Some(ref m) = meta {
             m.allocator.clone()
         } else {
@@ -61,9 +75,10 @@ impl BtreeEngine {
         )?);
         // Use buffered value-log appends: the engine calls sync at operation
         // boundaries, so we pay one fsync per commit instead of one per value.
-        let value_log = Arc::new(ValueLog::open_with_durability(
+        let value_log = Arc::new(ValueLog::open_with_backend(
             &path,
-            crate::valuelog::Durability::Buffered,
+            Durability::Buffered,
+            backend.clone(),
         )?);
 
         let (recovery_root, checkpoint_lsn) = match meta {
@@ -99,6 +114,7 @@ impl BtreeEngine {
             Arc::clone(&wal),
             Arc::clone(&tree),
             Arc::clone(&allocator),
+            backend.clone(),
         );
 
         let bg_handle = SyncMutex::new(None);
@@ -114,6 +130,7 @@ impl BtreeEngine {
             checkpoint,
             bg_handle,
             cleaner_handle,
+            backend,
         });
 
         inner.start_background_cleaner()?;
@@ -162,6 +179,16 @@ impl BtreeEngine {
         self.inner.value_log.close()?;
         self.inner.wal.close()?;
         Ok(())
+    }
+
+    /// Simulate a power loss by dropping all buffered writes.
+    ///
+    /// This is intended for fault-injection tests. It truncates the WAL to the
+    /// last fsynced record and truncates files managed by a `FaultyBackend` to
+    /// their last-synced length.
+    pub fn crash(&self) {
+        let _ = self.inner.wal.crash();
+        self.inner.backend.crash();
     }
 }
 
@@ -287,6 +314,7 @@ pub(crate) struct BtreeEngineInner {
     pub checkpoint: Checkpoint,
     pub bg_handle: SyncMutex<Option<CheckpointThread>>,
     pub cleaner_handle: SyncMutex<Option<PageCleaner>>,
+    pub backend: Arc<dyn StorageBackend>,
 }
 
 impl BtreeEngineInner {

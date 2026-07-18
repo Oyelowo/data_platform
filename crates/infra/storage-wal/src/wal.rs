@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::committer::Committer;
 use crate::reader::{WalIterator, WalReader};
 use crate::record::{Durability, Record, RecordType};
-use crate::segment::{list_segments, segment_path};
+use crate::segment::{Segment, list_segments, segment_path};
 use crate::{Lsn, Result};
 
 /// Configuration for a WAL.
@@ -66,7 +66,9 @@ impl Wal {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
         let committer = match fault_config {
-            Some(cfg) => Committer::start_with_fault_config(dir.clone(), options.segment_size, cfg)?,
+            Some(cfg) => {
+                Committer::start_with_fault_config(dir.clone(), options.segment_size, cfg)?
+            }
             None => Committer::start(dir.clone(), options.segment_size)?,
         };
         Ok(Self {
@@ -153,6 +155,20 @@ impl Wal {
         }
         let active_first = segments[segments.len() - 1];
         self.truncate_before(active_first)
+    }
+
+    /// Simulate a power-loss crash by truncating the active WAL segment to the
+    /// byte length that has actually been fsynced. Records that were written to
+    /// the OS page cache but not yet durable are dropped.
+    pub fn crash(&self) -> Result<()> {
+        let last_synced_len = self.committer.crash()?;
+        let segments = list_segments(&self.dir)?;
+        let active_first = segments.last().copied().unwrap_or(0);
+        let mut segment = Segment::open(&self.dir, active_first, self.options.segment_size)?;
+        if segment.written() > last_synced_len {
+            segment.truncate(last_synced_len)?;
+        }
+        Ok(())
     }
 
     /// Gracefully close the WAL, waiting for the commit worker to finish.

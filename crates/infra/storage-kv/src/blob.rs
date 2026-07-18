@@ -1256,7 +1256,7 @@ mod tests {
         // The file is rewritten (because no records are live) but deletion is
         // deferred.
         assert_eq!(stats.deleted_files, 0);
-        assert!(blob_file_path(&store.path(), r1.file_number).exists());
+        assert!(blob_file_path(store.path(), r1.file_number).exists());
 
         drop(lease);
 
@@ -1272,7 +1272,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stats.deleted_files, 1);
-        assert!(!blob_file_path(&store.path(), r1.file_number).exists());
+        assert!(!blob_file_path(store.path(), r1.file_number).exists());
     }
 
     #[test]
@@ -1344,7 +1344,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stats.deleted_files, 0);
-        assert!(blob_file_path(&store.path(), r1.file_number).exists());
+        assert!(blob_file_path(store.path(), r1.file_number).exists());
         drop(lease);
 
         // Simulate a crash/reopen. The pending-delete list must still be present.
@@ -1363,7 +1363,7 @@ mod tests {
             stats.deleted_files >= 1,
             "pending file should be deleted after reopen"
         );
-        assert!(!blob_file_path(&store.path(), r1.file_number).exists());
+        assert!(!blob_file_path(store.path(), r1.file_number).exists());
     }
 
     #[test]
@@ -1412,8 +1412,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = BlobStore::open(dir.path(), 200, Arc::new(Metrics::default())).unwrap();
 
-        let _r1 = store.put(0, b"live", &vec![b'x'; 100], 1).unwrap();
-        let _r2 = store.put(0, b"dead", &vec![b'y'; 100], 2).unwrap();
+        let _r1 = store.put(0, b"live", &[b'x'; 100], 1).unwrap();
+        let _r2 = store.put(0, b"dead", &[b'y'; 100], 2).unwrap();
         let _r3 = store.put(0, b"other", b"z", 3).unwrap();
 
         // No threshold configured -> never forced.

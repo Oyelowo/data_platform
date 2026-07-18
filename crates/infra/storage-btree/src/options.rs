@@ -1,9 +1,12 @@
 //! Configuration options for the in-place B+ tree engine.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::io::{FaultSchedule, StorageBackend};
+
 /// Options used when opening a [`BtreeEngine`](crate::engine::BtreeEngine).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct BtreeOptions {
     /// Size of each on-disk page in bytes.
     ///
@@ -64,6 +67,20 @@ pub struct BtreeOptions {
     /// `None`.
     #[cfg_attr(not(test), allow(dead_code))]
     pub wal_fault_config: Option<storage_wal::FaultConfig>,
+
+    /// Optional storage backend to use instead of the production `RealBackend`.
+    ///
+    /// This is primarily useful for tests that inject faults through a
+    /// [`FaultyBackend`](crate::io::FaultyBackend). The default is `None`, which
+    /// uses `RealBackend`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub backend: Option<Arc<dyn StorageBackend>>,
+
+    /// Optional fault schedule. When set, the engine wraps the configured (or
+    /// default) backend in a `FaultyBackend`.
+    ///
+    /// The default is `None`.
+    pub fault_schedule: Option<FaultSchedule>,
 
     /// Run the online integrity check after each automatic checkpoint.
     ///
@@ -131,6 +148,8 @@ impl BtreeOptions {
             background_checkpoint_interval: self.background_checkpoint_interval,
             background_page_cleaner_interval: self.background_page_cleaner_interval,
             wal_fault_config: self.wal_fault_config.clone(),
+            backend: self.backend.clone(),
+            fault_schedule: self.fault_schedule.clone(),
             checkpoint_integrity_check: self.checkpoint_integrity_check,
             checkpoint_compact_value_log: self.checkpoint_compact_value_log,
         })
@@ -182,9 +201,62 @@ impl Default for BtreeOptions {
             background_checkpoint_interval: None,
             background_page_cleaner_interval: None,
             wal_fault_config: None,
+            backend: None,
+            fault_schedule: None,
             checkpoint_integrity_check: false,
             checkpoint_compact_value_log: false,
         }
+    }
+}
+
+impl std::fmt::Debug for BtreeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BtreeOptions")
+            .field("page_size", &self.page_size)
+            .field("max_inline_value_size", &self.max_inline_value_size)
+            .field("min_fill_percent", &self.min_fill_percent)
+            .field("min_cells", &self.min_cells)
+            .field("cache_size", &self.cache_size)
+            .field("max_value_size", &self.max_value_size)
+            .field("max_batch_ops", &self.max_batch_ops)
+            .field(
+                "background_checkpoint_interval",
+                &self.background_checkpoint_interval,
+            )
+            .field(
+                "background_page_cleaner_interval",
+                &self.background_page_cleaner_interval,
+            )
+            .field("wal_fault_config", &self.wal_fault_config)
+            .field("backend", &self.backend.as_ref().map(|_| ".."))
+            .field("fault_schedule", &self.fault_schedule)
+            .field(
+                "checkpoint_integrity_check",
+                &self.checkpoint_integrity_check,
+            )
+            .field(
+                "checkpoint_compact_value_log",
+                &self.checkpoint_compact_value_log,
+            )
+            .finish()
+    }
+}
+
+impl PartialEq for BtreeOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.page_size == other.page_size
+            && self.max_inline_value_size == other.max_inline_value_size
+            && self.min_fill_percent == other.min_fill_percent
+            && self.min_cells == other.min_cells
+            && self.cache_size == other.cache_size
+            && self.max_value_size == other.max_value_size
+            && self.max_batch_ops == other.max_batch_ops
+            && self.background_checkpoint_interval == other.background_checkpoint_interval
+            && self.background_page_cleaner_interval == other.background_page_cleaner_interval
+            && self.wal_fault_config == other.wal_fault_config
+            && self.fault_schedule == other.fault_schedule
+            && self.checkpoint_integrity_check == other.checkpoint_integrity_check
+            && self.checkpoint_compact_value_log == other.checkpoint_compact_value_log
     }
 }
 

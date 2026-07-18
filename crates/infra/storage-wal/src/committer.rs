@@ -55,6 +55,9 @@ enum CommitRequest {
     },
     /// Force a flush of all buffered records and reply once durable.
     Sync { reply: Sender<Result<Reply>> },
+    /// Return the byte length of the active segment that has been durably
+    /// synced. Used by crash simulation to truncate unflushed data.
+    Crash { reply: Sender<Result<u64>> },
 }
 
 /// Handle to the group commit worker.
@@ -122,22 +125,24 @@ impl Committer {
     /// Submit a record for durable append. Blocks until the worker has
     /// acknowledged that the record is persisted.
     pub fn append(&self, record: Record) -> Result<Lsn> {
-        self.send_append(record, true).and_then(|reply| match reply {
-            Ok(Reply::Flushed(lsn)) => Ok(lsn),
-            Ok(Reply::Appended(_)) => unreachable!("append uses wait_for_fsync=true"),
-            Err(e) => Err(e),
-        })
+        self.send_append(record, true)
+            .and_then(|reply| match reply {
+                Ok(Reply::Flushed(lsn)) => Ok(lsn),
+                Ok(Reply::Appended(_)) => unreachable!("append uses wait_for_fsync=true"),
+                Err(e) => Err(e),
+            })
     }
 
     /// Submit a record without waiting for fsync. Returns the assigned LSN
     /// immediately. The record may be lost on power failure until `sync` is
     /// called.
     pub fn append_buffered(&self, record: Record) -> Result<Lsn> {
-        self.send_append(record, false).and_then(|reply| match reply {
-            Ok(Reply::Appended(lsn)) => Ok(lsn),
-            Ok(Reply::Flushed(_)) => unreachable!("append_buffered uses wait_for_fsync=false"),
-            Err(e) => Err(e),
-        })
+        self.send_append(record, false)
+            .and_then(|reply| match reply {
+                Ok(Reply::Appended(lsn)) => Ok(lsn),
+                Ok(Reply::Flushed(_)) => unreachable!("append_buffered uses wait_for_fsync=false"),
+                Err(e) => Err(e),
+            })
     }
 
     fn send_append(&self, record: Record, wait_for_fsync: bool) -> Result<Result<Reply>> {
@@ -176,6 +181,23 @@ impl Committer {
         }
     }
 
+    /// Return the byte length of the active segment that has been durably
+    /// synced. This is used by crash simulation to truncate records that were
+    /// written to the OS page cache but never fsynced.
+    pub fn crash(&self) -> Result<u64> {
+        if self.shutdown.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+        let (tx, rx) = bounded(1);
+        let sender = self.sender.lock().unwrap();
+        sender
+            .as_ref()
+            .ok_or(Error::Closed)?
+            .send(CommitRequest::Crash { reply: tx })
+            .map_err(|_| Error::Closed)?;
+        rx.recv().map_err(|_| Error::Closed)?
+    }
+
     /// Request a graceful shutdown and wait for the worker to finish.
     ///
     /// Idempotent: may be called more than once; subsequent calls return `Ok(())`.
@@ -205,6 +227,9 @@ struct WorkerState {
     next_lsn: Lsn,
     segment: Segment,
     fault: FaultInjector,
+    /// Byte length of the active segment that has been durably synced. Used by
+    /// crash simulation to truncate records that were written but not fsynced.
+    last_synced_len: u64,
 }
 
 fn handle_append_request(
@@ -213,6 +238,10 @@ fn handle_append_request(
     pending_durable: &mut Vec<(Sender<Result<Reply>>, Lsn)>,
 ) -> Result<()> {
     match req {
+        CommitRequest::Crash { .. } => {
+            // Crash requests are handled directly in the worker loop.
+            unreachable!("Crash requests should not reach handle_append_request")
+        }
         CommitRequest::Append {
             record,
             wait_for_fsync,
@@ -263,6 +292,11 @@ fn worker_loop_with_state(
             }
         };
 
+        if let CommitRequest::Crash { reply } = req {
+            let _ = reply.send(Ok(state.last_synced_len));
+            continue;
+        }
+
         handle_append_request(&mut state, req, &mut pending_durable)?;
 
         // Drain additional requests without blocking to build the group.
@@ -301,6 +335,7 @@ fn init_worker(
         next_lsn,
         segment,
         fault,
+        last_synced_len: valid_end,
     })
 }
 
@@ -341,8 +376,10 @@ fn write_record(state: &mut WorkerState, mut record: Record) -> Result<(Lsn, usi
             )));
         }
         state.segment.sync()?;
+        state.last_synced_len = state.segment.written();
         state.next_lsn += state.segment.written();
         state.segment = Segment::open(&state.dir, state.next_lsn, state.segment_size)?;
+        state.last_synced_len = 0;
         record.lsn = state.next_lsn;
         buf.clear();
         record.encode(&mut buf)?;
@@ -381,9 +418,7 @@ fn flush_pending(
                 "injected flush failure",
             ))));
         }
-        return Err(Error::Io(std::io::Error::other(
-            "injected flush failure",
-        )));
+        return Err(Error::Io(std::io::Error::other("injected flush failure")));
     }
 
     if let Err(e) = state.segment.flush() {
@@ -399,9 +434,7 @@ fn flush_pending(
                 "injected fsync failure",
             ))));
         }
-        return Err(Error::Io(std::io::Error::other(
-            "injected fsync failure",
-        )));
+        return Err(Error::Io(std::io::Error::other("injected fsync failure")));
     }
 
     if let Err(e) = state.segment.sync() {
@@ -410,6 +443,7 @@ fn flush_pending(
         }
         return Err(e);
     }
+    state.last_synced_len = state.segment.written();
 
     for (reply, lsn) in pending.drain(..) {
         // Best-effort reply; if the caller hung up, drop the result.

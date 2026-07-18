@@ -938,6 +938,11 @@ impl WalLog {
         Ok(record)
     }
 
+    /// Simulate a power-loss crash by truncating unfsynced WAL records.
+    pub fn crash(&self) -> Result<()> {
+        self.inner.crash().map_err(|e| Error::Io(map_wal_error(e)))
+    }
+
     /// Close the WAL gracefully.
     pub fn close(&self) -> Result<()> {
         self.inner.close().map_err(|e| Error::Io(map_wal_error(e)))

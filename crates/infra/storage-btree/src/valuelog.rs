@@ -5,12 +5,13 @@
 //! cells.  The log is append-only; dead values are reclaimed by an explicit
 //! stop-the-world GC pass.
 
-use crate::error::{Error, Result};
-use crate::sync::Mutex as SyncMutex;
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::error::{Error, Result};
+use crate::io::{Boundary, OpenOptions, RealBackend, StorageBackend, StorageFile};
+use crate::sync::Mutex as SyncMutex;
 
 pub type ValueOffset = u64;
 pub type ValueLen = u32;
@@ -28,11 +29,12 @@ pub enum Durability {
 /// A simple append-only value log file.
 pub struct ValueLog {
     path: PathBuf,
-    file: SyncMutex<Option<File>>,
+    file: SyncMutex<Option<Box<dyn StorageFile>>>,
     next_offset: SyncMutex<ValueOffset>,
     /// In-memory reference counts: (offset, len) -> count.
     ref_counts: SyncMutex<HashMap<(ValueOffset, ValueLen), usize>>,
     durability: Durability,
+    backend: Arc<dyn StorageBackend>,
 }
 
 impl ValueLog {
@@ -43,27 +45,39 @@ impl ValueLog {
 
     /// Open or create `<dir>/values.log` with the requested durability.
     pub fn open_with_durability(dir: impl AsRef<Path>, durability: Durability) -> Result<Self> {
+        Self::open_with_backend(dir, durability, Arc::new(RealBackend))
+    }
+
+    /// Open or create `<dir>/values.log` with the requested durability and
+    /// backend.
+    pub fn open_with_backend(
+        dir: impl AsRef<Path>,
+        durability: Durability,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Result<Self> {
         let path = dir.as_ref().join("values.log");
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(Error::Io)?;
-        let end = file.seek(SeekFrom::End(0)).map_err(Error::Io)?;
+        let file = backend.open(
+            &path,
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false),
+        )?;
+        let end = file.len().map_err(Error::Io)?;
         Ok(Self {
             path,
             file: SyncMutex::new(Some(file)),
             next_offset: SyncMutex::new(end),
             ref_counts: SyncMutex::new(HashMap::new()),
             durability,
+            backend,
         })
     }
 
     fn with_file<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&mut File) -> Result<T>,
+        F: FnOnce(&mut Box<dyn StorageFile>) -> Result<T>,
     {
         self.file.with_mut(|guard| {
             let file = guard
@@ -93,12 +107,26 @@ impl ValueLog {
             offset
         });
 
+        self.backend.pre_op(Boundary::ValueLogAppend)?;
+        if self.backend.drop_append(Boundary::ValueLogAppend) {
+            // Simulate a lost buffered append: the caller believes the append
+            // succeeded, but the bytes never reached stable storage.
+            return Ok((offset, len));
+        }
+
+        let mut record = Vec::with_capacity(4 + value.len());
+        record.extend_from_slice(&len.to_le_bytes());
+        record.extend_from_slice(value);
+        let write_len = self
+            .backend
+            .truncate_write(Boundary::ValueLogAppend, record.len())?;
+
         self.with_file(|file| {
-            file.seek(SeekFrom::Start(offset)).map_err(Error::Io)?;
-            file.write_all(&len.to_le_bytes()).map_err(Error::Io)?;
-            file.write_all(value).map_err(Error::Io)?;
+            file.write_at(&record[..write_len], offset)
+                .map_err(Error::Io)?;
             if self.durability == Durability::Immediate {
-                file.sync_all().map_err(Error::Io)?;
+                self.backend.pre_op(Boundary::ValueLogSync)?;
+                file.sync().map_err(Error::Io)?;
             }
             Ok(())
         })?;
@@ -108,10 +136,12 @@ impl ValueLog {
 
     /// Read the value stored at `(offset, len)`.
     pub fn read(&self, offset: ValueOffset, len: ValueLen) -> Result<Vec<u8>> {
+        self.backend.pre_op(Boundary::ValueLogRead)?;
         self.with_file(|file| {
-            file.seek(SeekFrom::Start(offset)).map_err(Error::Io)?;
             let mut len_buf = [0u8; 4];
-            file.read_exact(&mut len_buf).map_err(Error::Io)?;
+            file.read_at(&mut len_buf, offset).map_err(Error::Io)?;
+            self.backend
+                .corrupt_read(Boundary::ValueLogRead, &mut len_buf, offset)?;
             let stored_len = u32::from_le_bytes(len_buf);
             if stored_len != len {
                 return Err(Error::Corruption(format!(
@@ -119,22 +149,24 @@ impl ValueLog {
                 )));
             }
             let mut value = vec![0u8; len as usize];
-            file.read_exact(&mut value).map_err(Error::Io)?;
+            file.read_at(&mut value, offset + 4).map_err(Error::Io)?;
+            self.backend
+                .corrupt_read(Boundary::ValueLogRead, &mut value, offset + 4)?;
             Ok(value)
         })
     }
 
     /// fsync the log file.
     pub fn sync(&self) -> Result<()> {
-        self.with_file(|file| file.sync_all().map_err(Error::Io))
+        self.backend.pre_op(Boundary::ValueLogSync)?;
+        self.with_file(|file| file.sync().map_err(Error::Io))
     }
 
     /// Sync and close the log file.
     pub fn close(&self) -> Result<()> {
         self.file.with_mut(|guard| {
-            if let Some(mut file) = guard.take() {
-                file.flush().map_err(Error::Io)?;
-                file.sync_all().map_err(Error::Io)?;
+            if let Some(file) = guard.take() {
+                file.sync().map_err(Error::Io)?;
                 // file is dropped on take
             }
             Ok(())
@@ -214,7 +246,6 @@ impl ValueLog {
             // Nothing is live; truncate the log.
             self.with_file(|file| {
                 file.set_len(0).map_err(Error::Io)?;
-                file.seek(SeekFrom::Start(0)).map_err(Error::Io)?;
                 Ok(())
             })?;
             self.next_offset.with_mut(|offset_guard| {
@@ -232,35 +263,42 @@ impl ValueLog {
 
         let new_path = self.path.with_extension("log.new");
         {
-            let mut new_file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&new_path)
-                .map_err(Error::Io)?;
+            let new_file = self.backend.open(
+                &new_path,
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(true),
+            )?;
+            let mut write_offset: ValueOffset = 0;
             for (old_offset, len) in &sorted {
                 let value = self.read(*old_offset, *len)?;
                 new_file
-                    .write_all(&(value.len() as u32).to_le_bytes())
+                    .write_at(&(value.len() as u32).to_le_bytes(), write_offset)
                     .map_err(Error::Io)?;
-                new_file.write_all(&value).map_err(Error::Io)?;
+                write_offset += 4;
+                new_file.write_at(&value, write_offset).map_err(Error::Io)?;
+                write_offset += value.len() as u64;
             }
-            new_file.sync_all().map_err(Error::Io)?;
+            new_file.sync().map_err(Error::Io)?;
         }
 
         // Atomically install the compacted file.
-        std::fs::rename(&new_path, &self.path).map_err(Error::Io)?;
+        self.backend
+            .rename(&new_path, &self.path)
+            .map_err(Error::Io)?;
 
         // Reopen the file and rebuild offsets/counts.
-        let new_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(false)
-            .truncate(false)
-            .open(&self.path)
-            .map_err(Error::Io)?;
-        let new_len = new_file.metadata().map_err(Error::Io)?.len();
+        let new_file = self.backend.open(
+            &self.path,
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(false)
+                .truncate(false),
+        )?;
+        let new_len = new_file.len().map_err(Error::Io)?;
         self.file.with_mut(|file_guard| {
             *file_guard = Some(new_file);
         });

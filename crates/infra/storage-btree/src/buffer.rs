@@ -406,6 +406,11 @@ impl BufferPool {
         Ok(())
     }
 
+    /// fsync the underlying page file and its directory.
+    pub(crate) fn sync_disk(&self) -> Result<()> {
+        self.disk.sync()
+    }
+
     /// Flush every dirty frame that is not currently pinned.
     ///
     /// This is the core operation of the background page cleaner. Pinned frames
