@@ -1,0 +1,116 @@
+name: storage-btree
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/infra/storage-btree/**'
+      - 'crates/infra/storage-traits/**'
+      - 'crates/infra/storage-wal/**'
+      - 'crates/infra/storage-testkit/**'
+      - '.github/workflows/storage-btree.yml'
+      - 'Cargo.toml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/infra/storage-btree/**'
+      - 'crates/infra/storage-traits/**'
+      - 'crates/infra/storage-wal/**'
+      - 'crates/infra/storage-testkit/**'
+      - '.github/workflows/storage-btree.yml'
+      - 'Cargo.toml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt-clippy-test:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        working-directory: crates/infra/storage-btree
+        run: cargo fmt --check
+
+      - name: Run clippy
+        working-directory: crates/infra/storage-btree
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: crates/infra/storage-btree
+        run: cargo test --all-targets
+
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-miri-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-miri-
+
+      - name: Configure Miri
+        run: cargo miri setup
+
+      - name: Run Miri on unit tests
+        working-directory: crates/infra/storage-btree
+        # Miri is exercised on the library unit tests.  File-system-heavy
+        # integration, property, and loom tests are run natively in the main
+        # test job.
+        run: cargo miri test --lib
+
+  loom:
+    name: loom
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-loom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-loom-
+
+      - name: Run Loom model tests
+        working-directory: crates/infra/storage-btree
+        run: cargo test --test loom
