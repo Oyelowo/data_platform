@@ -199,7 +199,7 @@ fn blob_compaction_rewrite_counters_are_populated() {
     // Trigger background compaction.
     for i in 0..20usize {
         let k = format!("x{i:03}");
-        engine.put(k.as_bytes(), &vec![i as u8; 100]).unwrap();
+        engine.put(k.as_bytes(), &[i as u8; 100]).unwrap();
     }
     engine.sync().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(500));

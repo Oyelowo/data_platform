@@ -46,10 +46,12 @@ fn backup_restore_roundtrip() {
 fn backup_survives_live_compaction() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint = tempfile::tempdir().unwrap();
-    let mut opts = LsmOptions::default();
-    opts.write_buffer_size = 1024;
-    opts.target_file_size_base = 1024;
-    opts.level0_file_num_compaction_trigger = 2;
+    let opts = LsmOptions {
+        write_buffer_size: 1024,
+        target_file_size_base: 1024,
+        level0_file_num_compaction_trigger: 2,
+        ..Default::default()
+    };
     let engine = LsmEngine::open(dir.path(), opts).unwrap();
 
     // Write enough data to create several L0 files and trigger compaction.
@@ -178,9 +180,9 @@ fn checkpoint_does_not_include_later_writes_in_scan() {
     engine.sync().unwrap();
 
     let reopened = LsmEngine::open(checkpoint.path(), LsmOptions::default()).unwrap();
-    let mut cursor = reopened.scan(None, None).unwrap();
+    let cursor = reopened.scan(None, None).unwrap();
     let mut keys = Vec::new();
-    while let Some(item) = cursor.next() {
+    for item in cursor {
         let (k, _v) = item.unwrap();
         keys.push(k.to_vec());
     }
