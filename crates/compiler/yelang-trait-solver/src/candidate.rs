@@ -1,28 +1,28 @@
 /*! Candidate assembly for trait goals.
  *
  * Candidates are ways to prove a goal: param-env assumptions, user impls,
- * built-in rules, auto-trait derivations, etc.
+ * built-in rules, auto-trait derivations, and blanket impls.
  */
 
-use yelang_arena::DefId;
+use yelang_ty::predicate::Predicate;
+
+use crate::solver_ctx::{BuiltinTraitKind, ImplInfo};
 
 /// A candidate solution for a goal.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Candidate {
-    pub source: CandidateSource,
-    // In a full implementation, this would carry nested goals,
-    // constraints, etc.
+#[derive(Clone, Debug)]
+pub struct Candidate<'tcx> {
+    pub source: CandidateSource<'tcx>,
 }
 
 /// Where a candidate came from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum CandidateSource {
+#[derive(Clone, Debug)]
+pub enum CandidateSource<'tcx> {
     /// From a user-written impl block.
-    Impl(DefId),
+    UserImpl(ImplInfo<'tcx>),
     /// From a param-env assumption (where clause).
-    ParamEnv,
-    /// From a built-in rule (Sized, Copy, etc.).
-    Builtin,
+    ParamEnv(Predicate<'tcx>),
+    /// From a built-in rule (`Sized`, `Copy`, `Clone`, ...).
+    Builtin(BuiltinTraitKind),
     /// From an auto-trait derivation.
     AutoTrait,
     /// From a blanket impl.

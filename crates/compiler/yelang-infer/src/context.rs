@@ -19,7 +19,6 @@ use crate::occurs_check::occurs_check;
 use crate::snapshot::Snapshot;
 use crate::type_variable::{FloatVarValue, IntVarValue, TypeVarValue, VariableTables};
 
-
 /// The inference context.
 pub struct InferCtxt<'tcx> {
     tables: VariableTables<'tcx>,
@@ -112,14 +111,19 @@ impl<'tcx> InferCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     pub fn snapshot(&self) -> Snapshot {
-        self.tables.ty_vars.snapshot()
+        Snapshot {
+            ty: self.tables.ty_vars.snapshot(),
+            int: self.tables.int_vars.snapshot(),
+            float: self.tables.float_vars.snapshot(),
+            const_: self.tables.const_vars.snapshot(),
+        }
     }
 
     pub fn rollback_to(&mut self, snapshot: Snapshot) {
-        self.tables.ty_vars.rollback_to(snapshot);
-        self.tables.int_vars.rollback_to(snapshot);
-        self.tables.float_vars.rollback_to(snapshot);
-        self.tables.const_vars.rollback_to(snapshot);
+        self.tables.ty_vars.rollback_to(snapshot.ty);
+        self.tables.int_vars.rollback_to(snapshot.int);
+        self.tables.float_vars.rollback_to(snapshot.float);
+        self.tables.const_vars.rollback_to(snapshot.const_);
     }
 
     /// Execute `f` within a speculative snapshot, rolling back on failure.
@@ -297,7 +301,10 @@ impl<'tcx> InferCtxt<'tcx> {
             // Trait objects
             (TyKind::Dynamic(binder_a), TyKind::Dynamic(binder_b)) => {
                 if binder_a.bound_vars != binder_b.bound_vars {
-                    return Err(TypeError::Mismatch { expected: a, found: b });
+                    return Err(TypeError::Mismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq_dynamic_predicates(a, b, binder_a.value, binder_b.value)
             }
@@ -431,7 +438,7 @@ impl<'tcx> InferCtxt<'tcx> {
     // Structural helpers
     // -----------------------------------------------------------------------
 
-    fn eq_generic_args(
+    pub fn eq_generic_args(
         &mut self,
         a: &List<GenericArg<'tcx>>,
         b: &List<GenericArg<'tcx>>,
@@ -454,7 +461,11 @@ impl<'tcx> InferCtxt<'tcx> {
         Ok(())
     }
 
-    pub(crate) fn eq_const(&mut self, a: Const<'tcx>, b: Const<'tcx>) -> Result<(), TypeError<'tcx>> {
+    pub(crate) fn eq_const(
+        &mut self,
+        a: Const<'tcx>,
+        b: Const<'tcx>,
+    ) -> Result<(), TypeError<'tcx>> {
         self.eq(a.ty, b.ty)?;
         match (a.kind, b.kind) {
             (ConstKind::Infer(vid_a), ConstKind::Infer(vid_b)) => {
@@ -465,23 +476,30 @@ impl<'tcx> InferCtxt<'tcx> {
             (_, ConstKind::Infer(vid)) => self.unify_const_var_value(vid, a),
             (ConstKind::Value(va), ConstKind::Value(vb)) => {
                 if va != vb {
-                    return Err(TypeError::ConstMismatch { expected: a, found: b });
+                    return Err(TypeError::ConstMismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 Ok(())
             }
             (ConstKind::Param(pa), ConstKind::Param(pb)) if pa == pb => Ok(()),
             (ConstKind::Placeholder(pa), ConstKind::Placeholder(pb)) if pa == pb => Ok(()),
-            (ConstKind::Bound(da, ba), ConstKind::Bound(db, bb)) if da == db && ba == bb => {
-                Ok(())
-            }
+            (ConstKind::Bound(da, ba), ConstKind::Bound(db, bb)) if da == db && ba == bb => Ok(()),
             (ConstKind::Unevaluated(ua), ConstKind::Unevaluated(ub)) => {
                 if ua.def != ub.def {
-                    return Err(TypeError::ConstMismatch { expected: a, found: b });
+                    return Err(TypeError::ConstMismatch {
+                        expected: a,
+                        found: b,
+                    });
                 }
                 self.eq_generic_args(&ua.args, &ub.args)
             }
             (ConstKind::Error, _) | (_, ConstKind::Error) => Ok(()),
-            _ => Err(TypeError::ConstMismatch { expected: a, found: b }),
+            _ => Err(TypeError::ConstMismatch {
+                expected: a,
+                found: b,
+            }),
         }
     }
 
@@ -535,7 +553,7 @@ impl<'tcx> InferCtxt<'tcx> {
         Ok(())
     }
 
-    fn eq_trait_refs(
+    pub fn eq_trait_refs(
         &mut self,
         a: &yelang_ty::predicate::TraitRef<'tcx>,
         b: &yelang_ty::predicate::TraitRef<'tcx>,

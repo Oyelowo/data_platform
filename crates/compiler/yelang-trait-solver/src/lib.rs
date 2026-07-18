@@ -5,12 +5,13 @@
  *
  * ## Architecture
  *
+ * - `solver_ctx::SolverCtxt` — The solver's interface to the program.
  * - `eval_ctxt::EvalCtxt` — The solver engine. Evaluates goals recursively.
  * - `search_graph::SearchGraph` — Detects cycles and caches results.
  * - `candidate` — Assembles candidates from impls, param-env, built-ins.
  * - `response` — `CanonicalResponse`, `Certainty`.
  * - `builtin` — Built-in impls for `Sized`, `Copy`, `Clone`.
- * - `normalize` — Associated type normalization.
+ * - `normalize` — Associated type normalization (Phase 5).
  *
  * ## Solver Loop
  *
@@ -29,6 +30,7 @@ pub mod instantiate;
 pub mod normalize;
 pub mod response;
 pub mod search_graph;
+pub mod solver_ctx;
 
 pub use builtin::*;
 pub use candidate::*;
@@ -39,6 +41,7 @@ pub use instantiate::*;
 pub use normalize::*;
 pub use response::*;
 pub use search_graph::*;
+pub use solver_ctx::*;
 
 #[cfg(test)]
 mod tests;

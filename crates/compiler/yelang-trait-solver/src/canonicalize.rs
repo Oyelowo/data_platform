@@ -15,8 +15,7 @@ use yelang_ty::interner::Interner;
 
 use crate::goal::Goal;
 use yelang_ty::ty::{
-    Const, ConstKind, FloatVid, InferTy, IntVid, PlaceholderType, Ty, TyKind, TyVid,
-    UniverseIndex,
+    Const, ConstKind, FloatVid, InferTy, IntVid, PlaceholderType, Ty, TyKind, TyVid, UniverseIndex,
 };
 
 use crate::response::CanonicalGoal;

@@ -36,9 +36,9 @@ fn occurs_check_ty<'tcx>(tables: &mut VariableTables<'tcx>, vid: TyVid, ty: Ty<'
         | TyKind::TypeLit(_)
         | TyKind::Placeholder(_)
         | TyKind::Error => false,
-        TyKind::Adt(_, args)
-        | TyKind::Tuple(args)
-        | TyKind::Utility(_, args) => occurs_check_generic_args(tables, vid, args),
+        TyKind::Adt(_, args) | TyKind::Tuple(args) | TyKind::Utility(_, args) => {
+            occurs_check_generic_args(tables, vid, args)
+        }
         TyKind::FnPtr(sig) => {
             occurs_check_generic_args(tables, vid, &sig.sig.inputs)
                 || occurs_check_ty(tables, vid, sig.sig.output)
@@ -49,10 +49,11 @@ fn occurs_check_ty<'tcx>(tables: &mut VariableTables<'tcx>, vid: TyVid, ty: Ty<'
         }
         TyKind::Slice(ty) | TyKind::Ref(ty, _) => occurs_check_ty(tables, vid, *ty),
         TyKind::RawPtr(tam) => occurs_check_ty(tables, vid, tam.ty),
-        TyKind::AnonStruct(anon) => anon.fields.iter().any(|f| occurs_check_ty(tables, vid, f.ty)),
-        TyKind::Union(a, b) => {
-            occurs_check_ty(tables, vid, *a) || occurs_check_ty(tables, vid, *b)
-        }
+        TyKind::AnonStruct(anon) => anon
+            .fields
+            .iter()
+            .any(|f| occurs_check_ty(tables, vid, f.ty)),
+        TyKind::Union(a, b) => occurs_check_ty(tables, vid, *a) || occurs_check_ty(tables, vid, *b),
         TyKind::Alias(alias) => occurs_check_generic_args(tables, vid, &alias.args),
         TyKind::Projection(proj) => occurs_check_trait_ref(tables, vid, &proj.trait_ref),
         TyKind::Dynamic(binder) => binder.value.iter().any(|pred| match pred {
@@ -117,7 +118,9 @@ mod tests {
         let mut tables = VariableTables::new();
         let t_i32 = interner.mk_ty(TyKind::Int(IntTy::I32));
         let t_adt = interner.mk_ty(TyKind::Adt(
-            AdtDef { def_id: yelang_arena::DefId::new(1) },
+            AdtDef {
+                def_id: yelang_arena::DefId::new(1),
+            },
             interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(t_i32)]),
         ));
         assert!(!occurs_check(&mut tables, TyVid(0), t_adt));
@@ -127,7 +130,9 @@ mod tests {
     fn occurs_check_finds_var() {
         let interner = Interner::new();
         let mut tables = VariableTables::new();
-        let vid = tables.ty_vars.new_var(crate::type_variable::TypeVarValue::Unknown);
+        let vid = tables
+            .ty_vars
+            .new_var(crate::type_variable::TypeVarValue::Unknown);
         let var_ty = interner.mk_ty(TyKind::Infer(InferTy::TyVar(vid)));
         assert!(occurs_check(&mut tables, vid, var_ty));
         assert!(!occurs_check(&mut tables, TyVid(vid.0 + 100), var_ty));

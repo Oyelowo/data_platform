@@ -89,9 +89,7 @@ impl<'a, 'tcx> TypeFolder<'tcx> for InstantiationCtxt<'a, 'tcx> {
 
     fn fold_const(&mut self, ct: Const<'tcx>) -> Const<'tcx> {
         match ct.kind {
-            ConstKind::Bound(debruijn, bound_var)
-                if debruijn == DebruijnIndex::INNERMOST =>
-            {
+            ConstKind::Bound(debruijn, bound_var) if debruijn == DebruijnIndex::INNERMOST => {
                 let index = bound_var.0 as usize;
                 assert!(
                     index < self.variables.len(),

@@ -2,6 +2,11 @@
  *
  * Traits like `Sized`, `Copy`, `Clone` have built-in rules that the
  * solver knows about without requiring user-written impls.
+ *
+ * These rules are intentionally conservative: an ADT is never considered
+ * `Copy` or `Clone` by the built-in solver; it must have a user impl.
+ * `Sized` is treated as built-in for ADTs because an unsized ADT would be
+ * reported by well-formedness checks elsewhere.
  */
 
 use yelang_ty::ty::TyKind;
@@ -21,8 +26,8 @@ pub fn is_sized(ty_kind: &TyKind<'_>) -> bool {
         | TyKind::FnDef(_)
         | TyKind::RawPtr(_)
         | TyKind::Ref(_, _)
-        | TyKind::Never => true,
-        TyKind::Adt(_, _) => true, // Most ADTs are Sized
+        | TyKind::Never
+        | TyKind::Adt(_, _) => true,
         TyKind::Tuple(args) => args.iter().all(|arg| match arg {
             yelang_ty::generic::GenericArg::Type(t) => is_sized(t.kind()),
             _ => true,
@@ -31,8 +36,8 @@ pub fn is_sized(ty_kind: &TyKind<'_>) -> bool {
         TyKind::Slice(_) => false,   // Dynamically sized
         TyKind::Dynamic(_) => false, // Dynamically sized
         TyKind::Error => true,
-        TyKind::Alias(_) => true,       // TODO: check alias expansion
-        TyKind::Projection(_) => true,  // TODO: check projection normalization
+        TyKind::Alias(_) => true,      // TODO: check alias expansion
+        TyKind::Projection(_) => true, // TODO: check projection normalization
         TyKind::AnonStruct(anon) => anon.fields.iter().all(|f| is_sized(f.ty.kind())),
         TyKind::Union(a, b) => is_sized(a.kind()) && is_sized(b.kind()),
         TyKind::TypeLit(_) => true,
@@ -43,6 +48,9 @@ pub fn is_sized(ty_kind: &TyKind<'_>) -> bool {
 }
 
 /// Check if a type is `Copy` according to built-in rules.
+///
+/// This is conservative: ADTs are excluded even though many of them could be
+/// `Copy`. The solver must rely on user impls for ADTs.
 pub fn is_copy(ty_kind: &TyKind<'_>) -> bool {
     match ty_kind {
         TyKind::Bool
@@ -67,18 +75,20 @@ pub fn is_copy(ty_kind: &TyKind<'_>) -> bool {
 }
 
 /// Check if a type is `Clone` according to built-in rules.
+///
+/// For Phase 4 `Clone` has the same conservative rules as `Copy`. In the
+/// future this will be broader (e.g., `String` is `Clone` but not `Copy`).
 pub fn is_clone(ty_kind: &TyKind<'_>) -> bool {
-    // For now, Clone has the same built-in rules as Copy.
-    // In a full implementation, Clone would be broader (e.g., String is Clone but not Copy).
     is_copy(ty_kind)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use yelang_arena::DefId;
     use yelang_ty::interner::Interner;
     use yelang_ty::primitive::IntTy;
-    use yelang_ty::ty::TyKind;
+    use yelang_ty::ty::{AdtDef, TyKind};
 
     #[test]
     fn primitives_are_sized() {
@@ -116,5 +126,18 @@ mod tests {
         let interner = Interner::new();
         assert!(is_copy(interner.mk_ty(TyKind::Bool).kind()));
         assert!(is_copy(interner.mk_ty(TyKind::Int(IntTy::I32)).kind()));
+    }
+
+    #[test]
+    fn adt_is_not_builtin_copy() {
+        let interner = Interner::new();
+        let t_i32 = interner.mk_ty(TyKind::Int(IntTy::I32));
+        let adt = interner.mk_ty(TyKind::Adt(
+            AdtDef {
+                def_id: DefId::new(1),
+            },
+            interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(t_i32)]),
+        ));
+        assert!(!is_copy(adt.kind()));
     }
 }

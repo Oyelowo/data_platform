@@ -37,7 +37,10 @@ pub enum TypeError<'tcx> {
     /// Floating-point type mismatch (e.g. `f32` vs `f64`).
     FloatMismatch { expected: FloatTy, found: FloatTy },
     /// Constant value mismatch.
-    ConstMismatch { expected: Const<'tcx>, found: Const<'tcx> },
+    ConstMismatch {
+        expected: Const<'tcx>,
+        found: Const<'tcx>,
+    },
     /// Trait reference mismatch (e.g. different trait in a projection).
     TraitRefMismatch {
         expected: yelang_ty::predicate::TraitRef<'tcx>,
@@ -99,19 +102,39 @@ impl<'tcx> fmt::Display for TypeError<'tcx> {
                 write!(f, "generic argument kind mismatch at index {}", index)
             }
             TypeError::IntMismatch { expected, found } => {
-                write!(f, "integer type mismatch: expected `{:?}`, found `{:?}`", expected, found)
+                write!(
+                    f,
+                    "integer type mismatch: expected `{:?}`, found `{:?}`",
+                    expected, found
+                )
             }
             TypeError::FloatMismatch { expected, found } => {
-                write!(f, "float type mismatch: expected `{:?}`, found `{:?}`", expected, found)
+                write!(
+                    f,
+                    "float type mismatch: expected `{:?}`, found `{:?}`",
+                    expected, found
+                )
             }
             TypeError::ConstMismatch { expected, found } => {
-                write!(f, "const mismatch: expected `{:?}`, found `{:?}`", expected, found)
+                write!(
+                    f,
+                    "const mismatch: expected `{:?}`, found `{:?}`",
+                    expected, found
+                )
             }
             TypeError::TraitRefMismatch { expected, found } => {
-                write!(f, "trait ref mismatch: expected `{:?}`, found `{:?}`", expected, found)
+                write!(
+                    f,
+                    "trait ref mismatch: expected `{:?}`, found `{:?}`",
+                    expected, found
+                )
             }
             TypeError::ExistentialMismatch { expected, found } => {
-                write!(f, "existential mismatch: expected `{:?}`, found `{:?}`", expected, found)
+                write!(
+                    f,
+                    "existential mismatch: expected `{:?}`, found `{:?}`",
+                    expected, found
+                )
             }
             TypeError::Custom(msg) => write!(f, "{}", msg),
         }

@@ -3,6 +3,11 @@
  * The search graph tracks in-progress goals (to detect cycles) and
  * completed goals (for caching). It is the key to handling coinductive
  * cycles correctly.
+ *
+ * See:
+ * - <https://rustc-dev-guide.rust-lang.org/solve/caching.html>
+ * - <https://rustc-dev-guide.rust-lang.org/solve/coinduction.html>
+ * - <https://rust-lang.github.io/chalk/book/recursive/search_graph.html>
  */
 
 use yelang_arena::FxHashMap;
@@ -22,8 +27,12 @@ pub struct SearchGraph<'tcx> {
 #[derive(Clone, Debug)]
 pub struct StackEntry<'tcx> {
     pub goal: CanonicalGoal<'tcx>,
+    /// The remaining depth budget when this goal was pushed.
+    pub available_depth: usize,
     /// Whether this entry has been used to prove itself (coinductive cycle).
     pub coinductive: bool,
+    /// Whether this entry is part of any cycle.
+    pub has_cycle: bool,
     /// The provisional result (used during cycle resolution).
     pub provisional: Option<CanonicalResponse<'tcx>>,
 }
@@ -32,8 +41,10 @@ pub struct StackEntry<'tcx> {
 #[derive(Clone, Debug)]
 pub struct CacheEntry<'tcx> {
     pub result: CanonicalResponse<'tcx>,
-    /// The depth at which this was proven.
-    pub depth: usize,
+    /// The remaining depth budget the solver had when proving this result.
+    /// The cache entry is only reusable when the caller has at least this
+    /// much budget left.
+    pub available_depth: usize,
 }
 
 impl<'tcx> SearchGraph<'tcx> {
@@ -46,16 +57,28 @@ impl<'tcx> SearchGraph<'tcx> {
         self.stack.iter().position(|e| e.goal == *goal)
     }
 
-    /// Check the cache for a completed goal.
-    pub fn lookup_cache(&self, goal: &CanonicalGoal<'tcx>) -> Option<&CacheEntry<'tcx>> {
-        self.cache.get(goal)
+    /// Check the cache for a completed goal that is reusable with the given
+    /// remaining depth budget.
+    pub fn lookup_cache(
+        &self,
+        goal: &CanonicalGoal<'tcx>,
+        available_depth: usize,
+    ) -> Option<&CacheEntry<'tcx>> {
+        let entry = self.cache.get(goal)?;
+        if entry.available_depth <= available_depth {
+            Some(entry)
+        } else {
+            None
+        }
     }
 
     /// Push a goal onto the evaluation stack.
-    pub fn push(&mut self, goal: CanonicalGoal<'tcx>) {
+    pub fn push(&mut self, goal: CanonicalGoal<'tcx>, available_depth: usize) {
         self.stack.push(StackEntry {
             goal,
+            available_depth,
             coinductive: false,
+            has_cycle: false,
             provisional: None,
         });
     }
@@ -65,10 +88,19 @@ impl<'tcx> SearchGraph<'tcx> {
         self.stack.pop()
     }
 
-    /// Mark a stack entry as coinductive (used in its own proof).
+    /// Mark a stack entry and everything above it as participating in a
+    /// coinductive cycle.
     pub fn mark_coinductive(&mut self, stack_index: usize) {
-        if let Some(entry) = self.stack.get_mut(stack_index) {
+        for entry in self.stack.iter_mut().skip(stack_index) {
             entry.coinductive = true;
+            entry.has_cycle = true;
+        }
+    }
+
+    /// Mark a stack entry and everything above it as participating in a cycle.
+    pub fn mark_cycle(&mut self, stack_index: usize) {
+        for entry in self.stack.iter_mut().skip(stack_index) {
+            entry.has_cycle = true;
         }
     }
 
@@ -80,12 +112,17 @@ impl<'tcx> SearchGraph<'tcx> {
     }
 
     /// Insert a completed goal into the cache.
-    pub fn insert_cache(&mut self, goal: CanonicalGoal<'tcx>, result: CanonicalResponse<'tcx>) {
+    pub fn insert_cache(
+        &mut self,
+        goal: CanonicalGoal<'tcx>,
+        result: CanonicalResponse<'tcx>,
+        available_depth: usize,
+    ) {
         self.cache.insert(
             goal,
             CacheEntry {
                 result,
-                depth: self.stack.len(),
+                available_depth,
             },
         );
     }
@@ -93,5 +130,15 @@ impl<'tcx> SearchGraph<'tcx> {
     /// Current evaluation depth.
     pub fn depth(&self) -> usize {
         self.stack.len()
+    }
+
+    /// Access the stack entry at the given index.
+    pub fn stack_entry(&self, index: usize) -> Option<&StackEntry<'tcx>> {
+        self.stack.get(index)
+    }
+
+    /// Mutable access to the stack entry at the given index.
+    pub fn stack_entry_mut(&mut self, index: usize) -> Option<&mut StackEntry<'tcx>> {
+        self.stack.get_mut(index)
     }
 }

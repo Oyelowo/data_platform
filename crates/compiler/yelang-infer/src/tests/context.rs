@@ -6,9 +6,7 @@ use yelang_ty::interner::Interner;
 use yelang_ty::predicate::TraitRef;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::projection::ProjectionTy;
-use yelang_ty::ty::{
-    Const, ConstKind, ConstValue, PlaceholderType, TyKind, UniverseIndex,
-};
+use yelang_ty::ty::{Const, ConstKind, ConstValue, PlaceholderType, TyKind, UniverseIndex};
 
 use crate::context::InferCtxt;
 use crate::error::TypeError;
