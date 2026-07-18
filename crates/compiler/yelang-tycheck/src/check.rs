@@ -6,6 +6,8 @@
 
 use yelang_ast::{AssignOpKind, BinaryOp};
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
+use yelang_hir::hir::expr::ComprehensionKind;
+use yelang_hir::hir::query::QueryKind;
 use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
 use yelang_infer::error::TypeError;
@@ -172,22 +174,136 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
             fcx.new_ty_var()
         }
         Expr::Comprehension {
+            kind,
             element,
             variables,
             condition,
-            ..
-        } => {
-            for (_pat, source) in variables {
-                check_expr(fcx, *source);
-            }
-            check_expr(fcx, *element);
-            if let Some(cond) = condition {
-                check_expr(fcx, *cond);
-            }
-            fcx.new_ty_var()
-        }
+        } => check_comprehension(fcx, expr_span(fcx, _expr_id), *kind, *element, variables, condition.as_ref()),
+        Expr::Query(query) => check_query(fcx, expr_span(fcx, _expr_id), &query.kind),
         Expr::Err => fcx.mk_error(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Comprehension and query checking
+// ---------------------------------------------------------------------------
+
+fn check_comprehension(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    kind: ComprehensionKind,
+    element: ExprId,
+    variables: &[yelang_hir::hir::expr::ComprehensionVar],
+    condition: Option<&ExprId>,
+) -> TyId {
+    for var in variables {
+        let source_ty = check_expr(fcx, var.source);
+        let mut elem_ty = fcx.expect_array(span, source_ty);
+        for _ in 0..var.flatten {
+            elem_ty = fcx.expect_array(span, elem_ty);
+        }
+        check_pat(fcx, var.pat, elem_ty);
+    }
+
+    let element_ty = check_expr(fcx, element);
+
+    if let Some(cond) = condition {
+        let cond_ty = check_expr(fcx, *cond);
+        fcx.demand_eq(span, fcx.mk_bool(), cond_ty);
+    }
+
+    match kind {
+        ComprehensionKind::List => fcx.mk_array_ty(element_ty),
+        ComprehensionKind::Set | ComprehensionKind::Dict => {
+            // TODO: distinct set/dict result types once they exist.
+            let _ = kind;
+            fcx.new_ty_var()
+        }
+    }
+}
+
+fn check_query(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    kind: &QueryKind,
+) -> TyId {
+    match kind {
+        QueryKind::Select(select) => {
+            if select.from.len() != 1 {
+                fcx.report_type_error(
+                    span,
+                    TypeError::Custom(
+                        "multi-root `from` is not yet supported; use a single root".to_string(),
+                    ),
+                );
+                return fcx.mk_error();
+            }
+
+            fcx.push_scope();
+            let result = check_select_query(fcx, span, select);
+            fcx.pop_scope();
+            result
+        }
+    }
+}
+
+fn check_select_query(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    select: &yelang_hir::hir::query::SelectQuery,
+) -> TyId {
+    for from in &select.from {
+        let source_ty = check_expr(fcx, from.source);
+
+        let elem_ty = if let Some(elem_ty_id) = from.elem_ty {
+            let annotated = lower_hir_ty_id(fcx, elem_ty_id);
+            let expected_source = fcx.mk_array_ty(annotated);
+            fcx.demand_eq(span, expected_source, source_ty);
+            annotated
+        } else {
+            fcx.expect_array(span, source_ty)
+        };
+
+        check_pat(fcx, from.binder, elem_ty);
+
+        if let Some(filter) = from.filter {
+            let filter_ty = check_expr(fcx, filter);
+            fcx.demand_eq(span, fcx.mk_bool(), filter_ty);
+        }
+
+        for part in &from.order_by {
+            check_expr(fcx, part.expr);
+        }
+
+        if let Some(range) = &from.range {
+            if let Some(start) = range.start {
+                check_expr(fcx, start);
+            }
+            if let Some(end) = range.end {
+                check_expr(fcx, end);
+            }
+        }
+    }
+
+    if let Some(where_clause) = select.where_clause {
+        let where_ty = check_expr(fcx, where_clause);
+        fcx.demand_eq(span, fcx.mk_bool(), where_ty);
+    }
+
+    for part in &select.order_by {
+        check_expr(fcx, part.expr);
+    }
+
+    if let Some(range) = &select.range {
+        if let Some(start) = range.start {
+            check_expr(fcx, start);
+        }
+        if let Some(end) = range.end {
+            check_expr(fcx, end);
+        }
+    }
+
+    check_expr(fcx, select.projection)
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +468,10 @@ fn check_unary(fcx: &mut FnCtxt<'_>, op: yelang_ast::UnaryOp, expr: ExprId) -> T
 // ---------------------------------------------------------------------------
 
 fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
+    if let Some(ty) = crate::array_builtins::try_check_len_or_count_call(fcx, func, args) {
+        return ty;
+    }
+
     let func_span = expr_span(fcx, func);
     let func_ty = check_expr(fcx, func);
     let interner = fcx.tcx.interner();
@@ -489,6 +609,9 @@ fn check_method_call(
     method: &yelang_ast::Ident,
     args: &[ExprId],
 ) -> TyId {
+    if let Some(ty) = crate::array_builtins::try_check_array_method_call(fcx, receiver, method.symbol, args) {
+        return ty;
+    }
     crate::method::check_method_call(fcx, receiver, method.symbol, args)
 }
 
@@ -894,28 +1017,30 @@ fn check_tuple(fcx: &mut FnCtxt<'_>, exprs: &[ExprId]) -> TyId {
 // ---------------------------------------------------------------------------
 
 fn check_array(fcx: &mut FnCtxt<'_>, exprs: &[ExprId]) -> TyId {
-    let interner = fcx.tcx.interner();
-    if exprs.is_empty() {
-        let elem_ty = fcx.new_ty_var();
-        let len = interner.mk_const_from_parts(
-            yelang_ty::ty::Const::Value(yelang_ty::ty::ConstValue::Int(0)),
+    let elem_ty = if exprs.is_empty() {
+        fcx.new_ty_var()
+    } else {
+        let first_ty = check_expr(fcx, exprs[0]);
+        for expr in exprs.iter().skip(1) {
+            let span = expr_span(fcx, *expr);
+            let ty = check_expr(fcx, *expr);
+            fcx.demand_eq(span, first_ty, ty);
+        }
+        first_ty
+    };
+
+    // Dynamic arrays are represented by the prelude `Array<T>` lang item. If it
+    // is unavailable (e.g. in isolated unit tests), fall back to the fixed-size
+    // array type so that type checking still has a representation to work with.
+    if fcx.tcx.lang_item(yelang_resolve::lang_items::LangItem::Array).is_some() {
+        fcx.mk_array_ty(elem_ty)
+    } else {
+        let len = fcx.tcx.interner().mk_const_from_parts(
+            yelang_ty::ty::Const::Value(yelang_ty::ty::ConstValue::Int(exprs.len() as i128)),
             fcx.mk_int(IntTy::I32),
         );
-        return fcx.mk_array(elem_ty, len);
+        fcx.mk_array(elem_ty, len)
     }
-
-    let first_ty = check_expr(fcx, exprs[0]);
-    for expr in exprs.iter().skip(1) {
-        let span = expr_span(fcx, *expr);
-        let ty = check_expr(fcx, *expr);
-        fcx.demand_eq(span, first_ty, ty);
-    }
-
-    let len = interner.mk_const_from_parts(
-        yelang_ty::ty::Const::Value(yelang_ty::ty::ConstValue::Int(exprs.len() as i128)),
-        fcx.mk_int(IntTy::I32),
-    );
-    fcx.mk_array(first_ty, len)
 }
 
 // ---------------------------------------------------------------------------

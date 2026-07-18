@@ -10,6 +10,7 @@ pub mod core;
 pub mod expr;
 pub mod item;
 pub mod pat;
+pub mod query;
 pub mod ty;
 
 // Re-export the most commonly used HIR types at the `hir` level so callers
@@ -23,6 +24,7 @@ pub use core::{
     ImplPolarity, Item, ItemKind, Stmt, Trait, TraitBound, TraitItem, TraitItemKind, TraitRef,
     UseKind, UsePath, VariantDef, WhereClause, WherePredicate,
 };
-pub use expr::{ComprehensionKind, DocumentProjection, Expr, GeneratorKind};
+pub use expr::{ComprehensionKind, ComprehensionVar, DocumentProjection, Expr, GeneratorKind};
 pub use pat::{BindingMode, FieldPat, Pat};
+pub use query::{FromNode, OrderByPart, Query, QueryKind, QueryRange, SelectQuery};
 pub use ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};

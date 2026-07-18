@@ -4,6 +4,7 @@ use yelang_ast::{AssignOpKind, Ident, Label};
 
 use crate::hir::body::Param;
 use crate::hir::core::{Arm, Block, CaptureClause, FieldExpr, Lit};
+use crate::hir::query::Query;
 use crate::ids::{BodyId, ExprId, HirTyId, PatId};
 use crate::res::Res;
 
@@ -124,15 +125,26 @@ pub enum Expr {
         base: ExprId,
         projection: Vec<DocumentProjection>,
     },
-    /// List/set/dict comprehension.
+    /// List/set/dict comprehension or desugared array selector chain.
     Comprehension {
         kind: ComprehensionKind,
         element: ExprId,
-        variables: Vec<(PatId, ExprId)>,
+        variables: Vec<ComprehensionVar>,
         condition: Option<ExprId>,
     },
+    /// Query expression (`select ... from ...`).
+    Query(Box<Query>),
     /// Error recovery.
     Err,
+}
+
+/// A single generator in a comprehension. `flatten` is the number of extra
+/// array layers to flatten: `0` for `[*]`, `1` for `[**]`, etc.
+#[derive(Debug, Clone)]
+pub struct ComprehensionVar {
+    pub pat: PatId,
+    pub source: ExprId,
+    pub flatten: usize,
 }
 
 /// A single projection step in a document access (`doc.{ ... }`).

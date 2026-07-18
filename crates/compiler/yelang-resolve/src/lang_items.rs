@@ -94,6 +94,7 @@ pub enum LangItem {
     Box,         // `Box<T>` — owned heap allocation
     PhantomData, // variance / dropck marker
     Formatter,   // `fmt::Formatter` used by derived `Debug` impls
+    Array,       // `Array<T>` — dynamic query/runtime array
 
     // ------------------------------------------------------------------------
     // Panic / unwinding
@@ -106,6 +107,12 @@ pub enum LangItem {
     // Entry point / runtime
     // ------------------------------------------------------------------------
     Start,
+
+    // ------------------------------------------------------------------------
+    // Compiler-known free functions
+    // ------------------------------------------------------------------------
+    Len,
+    Count,
 }
 
 impl LangItem {
@@ -174,12 +181,17 @@ impl LangItem {
             "owned_box" => Box,
             "phantom_data" => PhantomData,
             "formatter" => Formatter,
+            "array" => Array,
 
             // Panic / runtime
             "panic" => Panic,
             "panic_bounds_check" => PanicBoundsCheck,
             "drop_in_place" => DropInPlace,
             "start" => Start,
+
+            // Compiler-known free functions
+            "len" => Len,
+            "count" => Count,
 
             _ => return None,
         })
@@ -241,10 +253,13 @@ impl LangItem {
             Box => "owned_box",
             PhantomData => "phantom_data",
             Formatter => "formatter",
+            Array => "array",
             Panic => "panic",
             PanicBoundsCheck => "panic_bounds_check",
             DropInPlace => "drop_in_place",
             Start => "start",
+            Len => "len",
+            Count => "count",
         }
     }
 
@@ -261,9 +276,10 @@ impl LangItem {
             }
             Drop | Clone | Default | Debug | Display | Iterator | IntoIterator => "standard trait",
             DerefTarget => "associated type",
-            Box | PhantomData | Formatter => "special type",
+            Box | PhantomData | Formatter | Array => "special type",
             Panic | PanicBoundsCheck | DropInPlace => "panic/unwinding item",
             Start => "runtime entry point",
+            Len | Count => "standard function",
         }
     }
 }

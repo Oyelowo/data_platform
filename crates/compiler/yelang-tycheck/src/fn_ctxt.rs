@@ -181,6 +181,67 @@ impl<'a> FnCtxt<'a> {
         self.mk_ty(Ty::Adt(AdtDef { def_id }, args))
     }
 
+    /// Create the prelude `Array<T>` type if the `Array` lang item is known.
+    pub fn mk_array_ty(&self, elem: TyId) -> TyId {
+        let Some(def_id) = self.tcx.lang_item(yelang_resolve::lang_items::LangItem::Array) else {
+            return self.mk_error();
+        };
+        let args = self
+            .tcx
+            .interner()
+            .mk_generic_args(&[GenericArg::Type(elem)]);
+        self.mk_adt(def_id, args)
+    }
+
+    /// If `ty` is an `Array<T>`, `Slice<T>`, or an unresolved inference variable
+    /// that can be unified with `Array<T>`, return the element type `T`.
+    pub fn expect_array(&mut self, span: Span, ty: TyId) -> TyId {
+        let interner = self.tcx.interner();
+        match interner.ty(ty) {
+            Ty::Adt(adt, args) => {
+                if self
+                    .tcx
+                    .lang_item(yelang_resolve::lang_items::LangItem::Array)
+                    == Some(adt.def_id)
+                {
+                    args.iter()
+                        .next()
+                        .map(|a| a.expect_type())
+                        .unwrap_or_else(|| self.mk_error())
+                } else {
+                    self.report_type_error(
+                        span,
+                        TypeError::Custom(format!(
+                            "expected an array type, found `{}`",
+                            format_ty(self.tcx, ty)
+                        )),
+                    );
+                    self.mk_error()
+                }
+            }
+            Ty::Slice(elem) => elem,
+            Ty::Infer(InferTy::TyVar(_)) => {
+                let elem = self.new_ty_var();
+                let array_ty = self.mk_array_ty(elem);
+                if let Err(e) = self.eq(ty, array_ty) {
+                    self.report_type_error(span, e);
+                }
+                elem
+            }
+            Ty::Error => self.mk_error(),
+            _ => {
+                self.report_type_error(
+                    span,
+                    TypeError::Custom(format!(
+                        "expected an array type, found `{}`",
+                        format_ty(self.tcx, ty)
+                    )),
+                );
+                self.mk_error()
+            }
+        }
+    }
+
     pub fn mk_fn_ptr(&self, inputs: List<GenericArg>, output: TyId) -> TyId {
         self.mk_ty(Ty::FnPtr(yelang_ty::ty::PolyFnSig {
             sig: yelang_ty::ty::FnSig {

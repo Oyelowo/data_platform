@@ -420,14 +420,54 @@ pub fn walk_expr_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr: &mut 
             ..
         } => {
             visit_expr_id_mut(v, crate_hir, *element);
-            for (pat, source) in variables {
-                visit_pat_id_mut(v, crate_hir, *pat);
-                visit_expr_id_mut(v, crate_hir, *source);
+            for var in variables {
+                visit_pat_id_mut(v, crate_hir, var.pat);
+                visit_expr_id_mut(v, crate_hir, var.source);
             }
             if let Some(cond) = condition {
                 visit_expr_id_mut(v, crate_hir, *cond);
             }
         }
+        Expr::Query(query) => match &mut query.kind {
+            crate::hir::query::QueryKind::Select(select) => {
+                visit_expr_id_mut(v, crate_hir, select.projection);
+                for from in &mut select.from {
+                    visit_expr_id_mut(v, crate_hir, from.source);
+                    visit_pat_id_mut(v, crate_hir, from.binder);
+                    if let Some(ty) = from.elem_ty {
+                        visit_ty_id_mut(v, crate_hir, ty);
+                    }
+                    if let Some(filter) = from.filter {
+                        visit_expr_id_mut(v, crate_hir, filter);
+                    }
+                    for part in &mut from.order_by {
+                        visit_expr_id_mut(v, crate_hir, part.expr);
+                    }
+                    if let Some(range) = &mut from.range {
+                        if let Some(start) = range.start {
+                            visit_expr_id_mut(v, crate_hir, start);
+                        }
+                        if let Some(end) = range.end {
+                            visit_expr_id_mut(v, crate_hir, end);
+                        }
+                    }
+                }
+                if let Some(where_clause) = select.where_clause {
+                    visit_expr_id_mut(v, crate_hir, where_clause);
+                }
+                for part in &mut select.order_by {
+                    visit_expr_id_mut(v, crate_hir, part.expr);
+                }
+                if let Some(range) = &mut select.range {
+                    if let Some(start) = range.start {
+                        visit_expr_id_mut(v, crate_hir, start);
+                    }
+                    if let Some(end) = range.end {
+                        visit_expr_id_mut(v, crate_hir, end);
+                    }
+                }
+            }
+        },
         Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
     }
 }

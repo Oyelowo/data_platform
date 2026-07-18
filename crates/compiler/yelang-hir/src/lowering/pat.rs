@@ -6,6 +6,19 @@ use crate::hir::pat::{BindingMode, FieldPat, Pat};
 use crate::ids::PatId;
 use crate::lowering::LoweringContext;
 
+/// Allocate a simple binding pattern for an identifier (e.g. a query binder
+/// like `@u`) and register it as a local in the lowering context.
+pub fn alloc_binding_pat(ctx: &mut LoweringContext, ident: yelang_ast::Ident) -> PatId {
+    let kind = Pat::Binding {
+        mode: BindingMode::ByValue,
+        name: ident.symbol,
+        subpat: None,
+    };
+    let pat_id = ctx.crate_hir.alloc_pat(kind, ident.span);
+    ctx.push_local(ident.symbol, pat_id);
+    pat_id
+}
+
 /// Lower an AST pattern to a HIR pattern, allocate it in the crate arena, and
 /// return its `PatId`. Any variable bindings introduced by the pattern are
 /// registered in the lowering context's local map.

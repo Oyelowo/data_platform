@@ -1,8 +1,9 @@
 use yelang_arena::DefId;
 use yelang_ast::item::{Enum, Struct, Trait, TypeAlias};
 use yelang_ast::{
-    BlockExpr, BreakExpr, ContinueExpr, Expr, ExprKind, FnDef, Item, ItemKind, ModKind, Param,
-    Path, Pattern, PatternKind, Program, Stmt, StmtKind, Type, TypeKind,
+    BlockExpr, BreakExpr, CallExpr, ContinueExpr, Expr, ExprKind, FnDef, Item, ItemKind,
+    MemberAccess, MethodCallExpr, ModKind, Param, Path, Pattern, PatternKind, Program, Stmt,
+    StmtKind, Type, TypeKind,
 };
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
@@ -251,6 +252,10 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     }
 
     fn resolve_expr(&mut self, expr: &Expr) {
+        if split_outermost_selector(expr).is_some() {
+            self.resolve_selector_chain_expr(expr);
+            return;
+        }
         match &expr.kind {
             ExprKind::Literal(_) => {}
             ExprKind::InterpolatedString(parts) => {
@@ -805,6 +810,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     fn resolve_query(&mut self, query: &yelang_ast::Query) {
         match &query.kind {
             yelang_ast::QueryKind::Select(select) => {
+                // Introduce the root collection label (e.g. `users`) and the
+                // element binder (e.g. `u`) into the value scope, then resolve
+                // all type annotations and sub-expressions in that scope.
                 for node in &select.from {
                     if let Some(var) = &node.var {
                         self.add_value_binding(var.symbol, query.span);
@@ -812,10 +820,67 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                     if let Some(bind) = &node.bind {
                         self.add_value_binding(bind.symbol, query.span);
                     }
+                    if let Some(ty) = &node.ty {
+                        self.resolve_type(ty);
+                    }
+                    if let Some(filter) = &node.modifiers.filter {
+                        self.resolve_expr(filter);
+                    }
+                    if let Some(order) = &node.modifiers.order {
+                        for part in order {
+                            self.resolve_expr(&part.field);
+                        }
+                    }
+                    if let Some(range) = &node.modifiers.range {
+                        if let Some(start) = &range.start {
+                            self.resolve_expr(start);
+                        }
+                        if let Some(end) = &range.end {
+                            self.resolve_expr(end);
+                        }
+                    }
                 }
+
+                if let Some(where_clause) = &select.where_clause {
+                    self.resolve_expr(where_clause);
+                }
+                if let Some(order) = &select.order_by {
+                    for part in order {
+                        self.resolve_expr(&part.field);
+                    }
+                }
+                if let Some(range) = &select.range {
+                    if let Some(start) = &range.start {
+                        self.resolve_expr(start);
+                    }
+                    if let Some(end) = &range.end {
+                        self.resolve_expr(end);
+                    }
+                }
+
+                self.resolve_expr(&select.projection);
             }
             _ => {}
         }
+    }
+
+    /// Resolve an expression that begins with a binder-bearing selector chain.
+    /// Pushes a rib for the binder, resolves the source and selector
+    /// expressions, then resolves the suffix in the binder's scope.
+    fn resolve_selector_chain_expr(&mut self, expr: &Expr) {
+        let Some((source, binder, selector, suffix)) = split_outermost_selector(expr) else {
+            return;
+        };
+
+        self.push_rib(RibKind::Block);
+        self.add_value_binding(binder.symbol, binder.span);
+
+        self.resolve_expr(source);
+        resolve_selector_index(self, selector);
+
+        self.resolve_expr(&suffix);
+
+        self.pop_rib();
     }
 
     fn push_rib(&mut self, kind: RibKind) {
@@ -920,5 +985,102 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             }
         }
         false
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Selector-chain resolution helpers
+// -----------------------------------------------------------------------------
+
+/// If `expr` is a postfix expression whose outermost operation is applied to a
+/// binder-bearing selector (`base@binder[*]` or `base@binder[where ...]`),
+/// return the selector's source expression, binder identifier, selector index,
+/// and the suffix expression with the selector replaced by a reference to the
+/// binder.
+fn split_outermost_selector(expr: &Expr) -> Option<(&Expr, yelang_ast::Ident, &yelang_ast::ArrayIndex, Expr)> {
+    match &expr.kind {
+        ExprKind::ArrayAccess(access) => {
+            if let ExprKind::BindAt(bind) = &access.base().kind {
+                match access.index() {
+                    yelang_ast::ArrayIndex::Stars { .. }
+                    | yelang_ast::ArrayIndex::Filter(_) => {
+                        let suffix = path_expr(bind.at);
+                        return Some((bind.base.as_ref(), bind.at, access.index(), suffix));
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
+        ExprKind::MemberAccess(access) => {
+            let (source, binder, selector, base_suffix) = split_outermost_selector(access.base())?;
+            let suffix = Expr {
+                kind: ExprKind::MemberAccess(MemberAccess {
+                    base: Box::new(base_suffix),
+                    member: access.member().clone(),
+                }),
+                span: expr.span,
+            };
+            Some((source, binder, selector, suffix))
+        }
+        ExprKind::MethodCall(call) => {
+            let (source, binder, selector, callee_suffix) = split_outermost_selector(&call.receiver)?;
+            let suffix = Expr {
+                kind: ExprKind::MethodCall(MethodCallExpr {
+                    receiver: Box::new(callee_suffix),
+                    segment: call.segment.clone(),
+                    arguments: call.arguments.clone(),
+                }),
+                span: expr.span,
+            };
+            Some((source, binder, selector, suffix))
+        }
+        ExprKind::Call(call) => {
+            let (source, binder, selector, callee_suffix) = split_outermost_selector(&call.callee)?;
+            let suffix = Expr {
+                kind: ExprKind::Call(CallExpr {
+                    callee: Box::new(callee_suffix),
+                    args: call.args.clone(),
+                }),
+                span: expr.span,
+            };
+            Some((source, binder, selector, suffix))
+        }
+        _ => None,
+    }
+}
+
+/// Resolve any expressions that appear inside a selector index (filter
+/// condition, range bounds, order-by keys) in the current scope.
+fn resolve_selector_index(resolver: &mut LateResolver<'_, '_>, selector: &yelang_ast::ArrayIndex) {
+    match selector {
+        yelang_ast::ArrayIndex::Filter(cond) => resolver.resolve_expr(cond),
+        yelang_ast::ArrayIndex::Range(r) => {
+            if let Some(start) = &r.start {
+                resolver.resolve_expr(start);
+            }
+            if let Some(end) = &r.end {
+                resolver.resolve_expr(end);
+            }
+        }
+        yelang_ast::ArrayIndex::OrderBy(clause) => {
+            for part in &clause.orders {
+                resolver.resolve_expr(&part.field);
+            }
+        }
+        yelang_ast::ArrayIndex::GroupBy(selector) => {
+            for key in selector.keys() {
+                resolver.resolve_expr(key.expr());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Construct a single-identifier path expression.
+fn path_expr(ident: yelang_ast::Ident) -> Expr {
+    Expr {
+        kind: ExprKind::Path(Path::new_single_ident(ident)),
+        span: ident.span,
     }
 }

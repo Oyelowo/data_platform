@@ -529,15 +529,62 @@ pub fn walk_expr(f: &mut impl Folder, crate_hir: &mut Crate, expr: Expr) -> Expr
             element: fold_expr_id(f, crate_hir, element),
             variables: variables
                 .into_iter()
-                .map(|(pat, source)| {
-                    (
-                        fold_pat_id(f, crate_hir, pat),
-                        fold_expr_id(f, crate_hir, source),
-                    )
+                .map(|var| crate::hir::expr::ComprehensionVar {
+                    pat: fold_pat_id(f, crate_hir, var.pat),
+                    source: fold_expr_id(f, crate_hir, var.source),
+                    flatten: var.flatten,
                 })
                 .collect(),
             condition: condition.map(|e| fold_expr_id(f, crate_hir, e)),
         },
+        Expr::Query(query) => Expr::Query(Box::new(crate::hir::query::Query {
+            kind: match query.kind {
+                crate::hir::query::QueryKind::Select(select) => {
+                    crate::hir::query::QueryKind::Select(crate::hir::query::SelectQuery {
+                        projection: fold_expr_id(f, crate_hir, select.projection),
+                        from: select
+                            .from
+                            .into_iter()
+                            .map(|from| crate::hir::query::FromNode {
+                                source: fold_expr_id(f, crate_hir, from.source),
+                                binder: fold_pat_id(f, crate_hir, from.binder),
+                                elem_ty: from.elem_ty.map(|t| fold_ty_id(f, crate_hir, t)),
+                                filter: from.filter.map(|e| fold_expr_id(f, crate_hir, e)),
+                                order_by: from
+                                    .order_by
+                                    .into_iter()
+                                    .map(|part| crate::hir::query::OrderByPart {
+                                        expr: fold_expr_id(f, crate_hir, part.expr),
+                                        direction: part.direction,
+                                    })
+                                    .collect(),
+                                range: from.range.map(|range| crate::hir::query::QueryRange {
+                                    start: range.start.map(|e| fold_expr_id(f, crate_hir, e)),
+                                    end: range.end.map(|e| fold_expr_id(f, crate_hir, e)),
+                                    inclusive: range.inclusive,
+                                }),
+                            })
+                            .collect(),
+                        where_clause: select
+                            .where_clause
+                            .map(|e| fold_expr_id(f, crate_hir, e)),
+                        order_by: select
+                            .order_by
+                            .into_iter()
+                            .map(|part| crate::hir::query::OrderByPart {
+                                expr: fold_expr_id(f, crate_hir, part.expr),
+                                direction: part.direction,
+                            })
+                            .collect(),
+                        range: select.range.map(|range| crate::hir::query::QueryRange {
+                            start: range.start.map(|e| fold_expr_id(f, crate_hir, e)),
+                            end: range.end.map(|e| fold_expr_id(f, crate_hir, e)),
+                            inclusive: range.inclusive,
+                        }),
+                    })
+                }
+            },
+        })),
         Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => expr,
     }
 }

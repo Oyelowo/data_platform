@@ -311,3 +311,290 @@ fn main() -> i32 {
     let (_tcx, diagnostics) = type_check_src(src);
     assert_no_errors_named(&diagnostics, "method via deref");
 }
+
+// -----------------------------------------------------------------------------
+// Query expressions and array selectors
+// -----------------------------------------------------------------------------
+
+#[test]
+fn query_select_scalar_projection() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> i32 {
+    select 1 from users@u:User
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "query scalar projection");
+}
+
+#[test]
+fn query_select_array_projection() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> Array<i32> {
+    select users@u[*].id from users@u:User
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "query array projection");
+}
+
+#[test]
+fn query_select_with_where() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> Array<i32> {
+    select users@u[*].id from users@u:User where u.age > 18
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "query where clause");
+}
+
+#[test]
+fn query_where_must_be_bool() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> Array<i32> {
+    select users@u[*].id from users@u:User where u.id
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "type mismatch");
+}
+
+#[test]
+fn array_builtin_len() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> usize {
+    let users: Array<User> = get_users();
+    len(users)
+}
+fn get_users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array builtin len");
+}
+
+#[test]
+fn array_builtin_is_empty() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> bool {
+    let users: Array<User> = get_users();
+    users.is_empty()
+}
+fn get_users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array builtin is_empty");
+}
+
+#[test]
+fn array_selector_map() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> Array<i32> {
+    users@u[*].id
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array selector map");
+}
+
+#[test]
+fn array_selector_filter() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> Array<User> {
+    users@u[where u.age > 18]
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array selector filter");
+}
+
+#[test]
+fn array_literal_produces_dynamic_array() {
+    let src = r#"
+fn main() -> Array<i32> {
+    [1, 2, 3]
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array literal dynamic");
+}
+
+#[test]
+fn query_from_modifiers_filter_order_range() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> Array<i32> {
+    select users@u[*].id from (users@u:User where u.age > 18 order by u.id asc range ..10)
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "query from modifiers");
+}
+
+#[test]
+fn query_top_level_where_order_range() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> Array<i32> {
+    select users@u[*].id from users@u:User where u.age > 18 order by u.id desc range 1..10
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "query top level tails");
+}
+
+#[test]
+fn query_projection_object() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, age: u.age } from users@u:User
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "query object projection");
+}
+
+#[test]
+fn nested_selector_field_access() {
+    let src = r#"
+struct Address { city: i32 }
+struct User { id: i32, address: Address }
+fn main() -> Array<i32> {
+    users@u[*].address.city
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "nested selector field access");
+}
+
+#[test]
+fn nested_selector_with_filter() {
+    let src = r#"
+struct Address { city: i32 }
+struct User { id: i32, age: i32, address: Address }
+fn main() -> Array<i32> {
+    users@u[where u.age > 18].address.city
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "nested selector filter");
+}
+
+#[test]
+fn array_selector_chained_map_and_filter() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> Array<i32> {
+    users@u[*].id@x[where x > 0]
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array selector chained map filter");
+}
+
+#[test]
+fn array_selector_flatten_nested_arrays() {
+    let src = r#"
+struct Matrix { rows: Array<Array<i32>> }
+fn main() -> _ {
+    matrix@u[*].rows@r[**]
+}
+fn matrix() -> Array<Matrix> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array selector flatten");
+}
+
+#[test]
+fn array_builtin_count() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> usize {
+    let users: Array<User> = get_users();
+    count(users)
+}
+fn get_users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array builtin count");
+}
+
+#[test]
+fn array_builtin_any_all() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> bool {
+    let users: Array<User> = get_users();
+    users.any(|u| u.id > 0) && users.all(|u| u.id > 0)
+}
+fn get_users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "array builtin any all");
+}
+
+#[test]
+fn len_requires_array() {
+    let src = r#"
+fn main() -> usize {
+    len(1)
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "expected an array type");
+}
+
+#[test]
+fn is_empty_requires_array() {
+    let src = r#"
+fn main() -> bool {
+    1.is_empty()
+}
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "expected an array type");
+}
+
+#[test]
+fn field_access_on_array_requires_mapping() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> i32 {
+    let users: Array<User> = get_users();
+    users.id
+}
+fn get_users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "no field");
+}
+
+#[test]
+fn selector_filter_must_be_bool() {
+    let src = r#"
+struct User { id: i32 }
+fn main() -> Array<User> {
+    users@u[where u.id]
+}
+fn users() -> Array<User> { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "type mismatch");
+}

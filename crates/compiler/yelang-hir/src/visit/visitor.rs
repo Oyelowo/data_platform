@@ -446,14 +446,54 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &'hir Expr) {
             ..
         } => {
             visitor.visit_expr_by_id(*element);
-            for (pat, source) in variables {
-                visitor.visit_pat_by_id(*pat);
-                visitor.visit_expr_by_id(*source);
+            for var in variables {
+                visitor.visit_pat_by_id(var.pat);
+                visitor.visit_expr_by_id(var.source);
             }
             if let Some(cond) = condition {
                 visitor.visit_expr_by_id(*cond);
             }
         }
+        Expr::Query(query) => match &query.kind {
+            crate::hir::query::QueryKind::Select(select) => {
+                visitor.visit_expr_by_id(select.projection);
+                for from in &select.from {
+                    visitor.visit_expr_by_id(from.source);
+                    visitor.visit_pat_by_id(from.binder);
+                    if let Some(ty) = from.elem_ty {
+                        visitor.visit_ty_by_id(ty);
+                    }
+                    if let Some(filter) = from.filter {
+                        visitor.visit_expr_by_id(filter);
+                    }
+                    for part in &from.order_by {
+                        visitor.visit_expr_by_id(part.expr);
+                    }
+                    if let Some(range) = &from.range {
+                        if let Some(start) = range.start {
+                            visitor.visit_expr_by_id(start);
+                        }
+                        if let Some(end) = range.end {
+                            visitor.visit_expr_by_id(end);
+                        }
+                    }
+                }
+                if let Some(where_clause) = select.where_clause {
+                    visitor.visit_expr_by_id(where_clause);
+                }
+                for part in &select.order_by {
+                    visitor.visit_expr_by_id(part.expr);
+                }
+                if let Some(range) = &select.range {
+                    if let Some(start) = range.start {
+                        visitor.visit_expr_by_id(start);
+                    }
+                    if let Some(end) = range.end {
+                        visitor.visit_expr_by_id(end);
+                    }
+                }
+            }
+        },
         Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
     }
 }

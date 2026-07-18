@@ -198,6 +198,11 @@ impl TyCtxt {
         self.builtin_traits.insert(def_id, kind);
     }
 
+    /// Look up a language item by its canonical identifier.
+    pub fn lang_item(&self, item: yelang_resolve::lang_items::LangItem) -> Option<DefId> {
+        self.crate_hir.lang_items.get(item)
+    }
+
     /// Register the `Deref` trait and its `Target` associated type as lang items.
     ///
     /// Method/field autoderef needs these IDs to build projection normalization

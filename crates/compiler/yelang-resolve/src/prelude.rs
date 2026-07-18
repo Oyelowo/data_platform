@@ -82,6 +82,9 @@ impl Prelude {
         add("Vec", DefKind::Struct, Namespace::Type, None);
         add("Vec", DefKind::Struct, Namespace::Value, None);
 
+        add("Array", DefKind::Struct, Namespace::Type, Some(LangItem::Array));
+        add("Array", DefKind::Struct, Namespace::Value, Some(LangItem::Array));
+
         add("String", DefKind::TypeAlias, Namespace::Type, None);
         add("String", DefKind::TypeAlias, Namespace::Value, None);
 
@@ -190,6 +193,8 @@ impl Prelude {
 
         // Common functions (value namespace)
         add("drop", DefKind::Fn, Namespace::Value, Some(LangItem::Drop));
+        add("len", DefKind::Fn, Namespace::Value, Some(LangItem::Len));
+        add("count", DefKind::Fn, Namespace::Value, Some(LangItem::Count));
         let some_sym = interner.get_or_intern("Some");
         let none_sym = interner.get_or_intern("None");
         let ok_sym = interner.get_or_intern("Ok");

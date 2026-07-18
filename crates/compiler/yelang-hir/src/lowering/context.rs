@@ -3,11 +3,15 @@
 use yelang_arena::DefId;
 use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
+use yelang_lexer::Span;
+use yelang_resolve::lang_items::LangItem;
 
 use crate::crate_data::Crate;
+use crate::hir::core::{FieldDef, GenericParam, Generics, Item, ItemKind, VariantData, Visibility};
+use crate::hir::ty::Ty;
 use crate::ids::PatId;
 use crate::lowering::err::LoweringError;
-use crate::res::ResolvedCrate;
+use crate::res::{Res, ResolvedCrate};
 
 /// Context that drives AST -> HIR lowering.
 pub struct LoweringContext<'a> {
@@ -93,11 +97,82 @@ pub fn lower_crate(program: &Program, resolved: &ResolvedCrate, interner: &Inter
     let mut ctx = LoweringContext::new(interner, resolved);
     ctx.crate_hir.lang_items = resolved.lang_items.clone();
 
+    // Synthesize HIR items for lang-item types that have no user-written source
+    // definition. This gives downstream passes (type collection, trait solving)
+    // real generics and ADT metadata to work with.
+    synthesize_array_item(&mut ctx);
+
     for item in &program.items {
         let _ = crate::lowering::item::lower_item(&mut ctx, item);
     }
 
     ctx.crate_hir
+}
+
+/// Synthesize a HIR struct definition for the prelude `Array<T>` lang item.
+///
+/// `Array<T>` is the canonical dynamic collection type used by query
+/// expressions and array literals. Because it lives in the prelude, there is no
+/// user-written AST item for it; we inject a minimal generic struct so that
+/// `collect_crate_types` can build an `AdtDefData` and `GenericsData` for it.
+fn synthesize_array_item(ctx: &mut LoweringContext) {
+    let Some(def_id) = ctx.resolved.lang_items.get(LangItem::Array) else {
+        return;
+    };
+
+    // If the crate already defines `Array` (e.g. the prelude source was
+    // explicitly imported), don't overwrite it.
+    if ctx.crate_hir.items.get(def_id).is_some_and(|i| i.is_some()) {
+        return;
+    }
+
+    let t_param_id = ctx.next_synthetic_def_id();
+    let t_name = ctx.interner.get_or_intern("T");
+    let t_ident = yelang_ast::Ident::new(t_name, Span::default());
+    let t_ty = ctx.crate_hir.alloc_ty(
+        Ty::Path {
+            res: Res::Def { def_id: t_param_id },
+            args: vec![],
+        },
+        Span::default(),
+    );
+
+    let field_def_id = ctx.next_synthetic_def_id();
+    let phantom_ident = yelang_ast::Ident::new(ctx.interner.get_or_intern("_phantom"), Span::default());
+    let array_ident = yelang_ast::Ident::new(ctx.interner.get_or_intern("Array"), Span::default());
+
+    let item = Item {
+        def_id,
+        ident: array_ident,
+        kind: ItemKind::Struct {
+            data: VariantData::Struct {
+                fields: vec![FieldDef {
+                    def_id: field_def_id,
+                    ident: phantom_ident,
+                    ty: t_ty,
+                    span: Span::default(),
+                    vis: Visibility::Private,
+                    attrs: vec![],
+                }],
+            },
+            generics: Generics {
+                params: vec![GenericParam::Type {
+                    def_id: t_param_id,
+                    name: t_ident,
+                    bounds: vec![],
+                    default: None,
+                    span: Span::default(),
+                }],
+                where_clause: None,
+                span: Span::default(),
+            },
+        },
+        vis: Visibility::Public(Span::default()),
+        attrs: vec![],
+        span: Span::default(),
+    };
+
+    ctx.crate_hir.items.insert(def_id, Some(item));
 }
 
 /// Look up the `DefId` for an AST item within the current module.
