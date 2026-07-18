@@ -12,7 +12,7 @@ new_key_type! {
     pub struct ExprId;
     pub struct PatId;
     pub struct StmtId;
-    pub struct SyntaxTyId;
+    pub struct HirTyId;
     pub struct BodyId;
 }
 

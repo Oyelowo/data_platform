@@ -5,13 +5,13 @@ use yelang_lexer::Span;
 
 use crate::hir::core::FnSig;
 use crate::hir::core::Lit;
-use crate::ids::{BodyId, ExprId, SyntaxTyId};
+use crate::ids::{BodyId, ExprId, HirTyId};
 use crate::res::Res;
 use yelang_ast::Ident;
 
-/// Kinds of types.
+/// Kinds of HIR types.
 #[derive(Debug, Clone)]
-pub enum Ty {
+pub enum HirTy {
     /// Resolved path type, optionally with generic arguments.
     ///
     /// Examples:
@@ -19,11 +19,11 @@ pub enum Ty {
     /// - `Vec<T>` -> `Path { res: Def(Vec), args: [Type(T)] }`
     Path { res: Res, args: Vec<GenericArg> },
     /// Tuple type: `(i32, bool)`
-    Tuple { tys: Vec<SyntaxTyId> },
+    Tuple { tys: Vec<HirTyId> },
     /// Array type: `[T; N]`
-    Array { ty: SyntaxTyId, len: Const },
+    Array { ty: HirTyId, len: Const },
     /// Slice type: `[T]`
-    Slice { ty: SyntaxTyId },
+    Slice { ty: HirTyId },
     /// Function pointer type.
     FnPtr { sig: Box<FnSig> },
     /// Anonymous struct type: `{ x: i32, y: i32 }`
@@ -31,26 +31,26 @@ pub enum Ty {
     /// Type literal: `"pending" | "active"`
     TypeLit { variants: Vec<Lit> },
     /// Utility type: `Omit<T, K>`
-    Utility { kind: UtilityKind, args: Vec<SyntaxTyId> },
+    Utility { kind: UtilityKind, args: Vec<HirTyId> },
     /// `typeof expr` type.
     TypeOf { expr: ExprId },
     /// Reference: `&T` or `&mut T`
     Ref {
         mutability: yelang_ast::Mutability,
-        ty: SyntaxTyId,
+        ty: HirTyId,
     },
     /// Raw pointer: `*mut T` or `*const T`
     RawPtr {
         mutability: yelang_ast::Mutability,
-        ty: SyntaxTyId,
+        ty: HirTyId,
     },
     /// Higher-ranked type: `for<T> fn(T) -> T`
     ForAll {
         params: Vec<crate::hir::core::BinderParam>,
-        ty: SyntaxTyId,
+        ty: HirTyId,
     },
     /// Union type: `i32 | string | bool`
-    Union { tys: Vec<SyntaxTyId> },
+    Union { tys: Vec<HirTyId> },
     /// `impl Trait` opaque type.
     ImplTrait { path: Res },
     /// `dyn Trait` trait object type.
@@ -69,18 +69,18 @@ pub enum Ty {
 #[derive(Debug, Clone)]
 pub enum GenericArg {
     /// Type argument: `T` in `Vec<T>`.
-    Type(SyntaxTyId),
+    Type(HirTyId),
     /// Const argument: `N` in `[T; N]` or `Foo<N>`.
     Const(Const),
     /// Associated type binding: `Item = i32`.
-    AssocBinding { name: Ident, ty: SyntaxTyId },
+    AssocBinding { name: Ident, ty: HirTyId },
 }
 
 /// A field in an anonymous struct type.
 #[derive(Debug, Clone)]
 pub struct AnonField {
     pub name: Symbol,
-    pub ty: SyntaxTyId,
+    pub ty: HirTyId,
 }
 
 /// Utility type kinds.

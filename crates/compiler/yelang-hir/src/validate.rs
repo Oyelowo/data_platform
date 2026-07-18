@@ -10,10 +10,10 @@ use yelang_lexer::Span;
 
 use crate::hir::core::{
     Expr, ImplItem, ImplItemKind, Item, ItemKind, Pat, TraitBound, TraitItem, TraitItemKind,
-    TraitRef, Ty, UsePath,
+    TraitRef, HirTy, UsePath,
 };
 use crate::crate_data::Crate;
-use crate::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;
 use crate::hir::ty::Const;
 use crate::visit::visitor::{Visitor, walk_crate, walk_expr, walk_item, walk_pat, walk_ty};
@@ -253,12 +253,12 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
         }
     }
 
-    fn visit_ty_by_id(&mut self, id: SyntaxTyId) {
+    fn visit_ty_by_id(&mut self, id: HirTyId) {
         if let Some(ty) = self.crate_hir.tys.get(id).and_then(|o| o.as_ref()) {
             self.visit_ty(ty);
         } else {
             self.error(
-                "SyntaxTyId is not allocated",
+                "HirTyId is not allocated",
                 self.crate_hir.ty_spans.get(id).copied(),
             );
         }
@@ -318,10 +318,10 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
         walk_pat(self, pat);
     }
 
-    fn visit_ty(&mut self, ty: &'hir Ty) {
+    fn visit_ty(&mut self, ty: &'hir HirTy) {
         match ty {
-            Ty::Path { res, .. } => self.check_res(res, None),
-            Ty::Array { len, .. } => self.check_const(len, Some(len.span)),
+            HirTy::Path { res, .. } => self.check_res(res, None),
+            HirTy::Array { len, .. } => self.check_const(len, Some(len.span)),
             _ => {}
         }
         walk_ty(self, ty);

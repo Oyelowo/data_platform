@@ -8,13 +8,13 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
-    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, HirTy, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;
 
 /// In-place mutating visitor over the HIR.
@@ -32,7 +32,7 @@ pub trait MutVisitor: Sized {
 
     fn visit_stmt(&mut self, _stmt: &mut Stmt) {}
 
-    fn visit_ty(&mut self, _ty: &mut Ty) {}
+    fn visit_ty(&mut self, _ty: &mut HirTy) {}
 
     fn visit_pat(&mut self, _pat: &mut Pat) {}
 
@@ -139,7 +139,7 @@ pub fn visit_stmt_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, stmt_id
 }
 
 /// Visit the type at `ty_id` in place.
-pub fn visit_ty_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty_id: SyntaxTyId) {
+pub fn visit_ty_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty_id: HirTyId) {
     let Some(mut ty) = crate_hir.tys.get_mut(ty_id).and_then(|slot| std::mem::take(slot)) else {
         return;
     };
@@ -454,58 +454,58 @@ pub fn walk_body_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, body: &mut 
     visit_expr_id_mut(v, crate_hir, body.value);
 }
 
-pub fn walk_ty_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty: &mut Ty) {
+pub fn walk_ty_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty: &mut HirTy) {
     match ty {
-        Ty::Path { args, .. } => {
+        HirTy::Path { args, .. } => {
             for arg in args {
                 walk_generic_arg_mut(v, crate_hir, arg);
             }
         }
-        Ty::Tuple { tys } => {
+        HirTy::Tuple { tys } => {
             for t in tys {
                 visit_ty_id_mut(v, crate_hir, *t);
             }
         }
-        Ty::Array { ty: inner, len } => {
+        HirTy::Array { ty: inner, len } => {
             visit_ty_id_mut(v, crate_hir, *inner);
             walk_const_mut(v, crate_hir, len);
         }
-        Ty::Slice { ty: inner } => {
+        HirTy::Slice { ty: inner } => {
             visit_ty_id_mut(v, crate_hir, *inner);
         }
-        Ty::FnPtr { sig } => {
+        HirTy::FnPtr { sig } => {
             walk_fn_sig_mut(v, crate_hir, sig);
         }
-        Ty::AnonStruct { fields } => {
+        HirTy::AnonStruct { fields } => {
             for field in fields {
                 visit_ty_id_mut(v, crate_hir, field.ty);
             }
         }
-        Ty::TypeLit { .. } => {}
-        Ty::Utility { args, .. } => {
+        HirTy::TypeLit { .. } => {}
+        HirTy::Utility { args, .. } => {
             for arg in args {
                 visit_ty_id_mut(v, crate_hir, *arg);
             }
         }
-        Ty::Ref { ty: inner, .. } | Ty::RawPtr { ty: inner, .. } => {
+        HirTy::Ref { ty: inner, .. } | HirTy::RawPtr { ty: inner, .. } => {
             visit_ty_id_mut(v, crate_hir, *inner);
         }
-        Ty::ForAll { params, ty: inner } => {
+        HirTy::ForAll { params, ty: inner } => {
             for param in params {
                 walk_binder_param_mut(v, crate_hir, param);
             }
             visit_ty_id_mut(v, crate_hir, *inner);
         }
-        Ty::Union { tys } => {
+        HirTy::Union { tys } => {
             for t in tys {
                 visit_ty_id_mut(v, crate_hir, *t);
             }
         }
-        Ty::TypeOf { expr } => {
+        HirTy::TypeOf { expr } => {
             visit_expr_id_mut(v, crate_hir, *expr);
         }
-        Ty::ImplTrait { .. } | Ty::DynTrait { .. } => {}
-        Ty::Never | Ty::Infer | Ty::Missing | Ty::Err => {}
+        HirTy::ImplTrait { .. } | HirTy::DynTrait { .. } => {}
+        HirTy::Never | HirTy::Infer | HirTy::Missing | HirTy::Err => {}
     }
 }
 

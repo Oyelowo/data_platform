@@ -6,7 +6,7 @@
 
 use yelang_ast::{AssignOpKind, BinaryOp};
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
-use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId as HirTyId};
+use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
 use yelang_ty::generic::GenericArg;
 use yelang_ty::primitive::IntTy;

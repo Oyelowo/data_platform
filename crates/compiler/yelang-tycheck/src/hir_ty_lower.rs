@@ -1,14 +1,14 @@
 /*! Lower HIR types to canonical `yelang_ty::TyId`.
  *
- * HIR types (`hir::Ty`) are syntactic and already have resolved paths.
+ * HIR types (`hir::HirTy`) are syntactic and already have resolved paths.
  * This module converts them to the interned type representation.
  *
  * The lowering is parameterized over a [`TyLowerCtxt`] so that both the
  * signature collector and the body type checker can reuse the same logic.
  */
 
-use yelang_hir::hir::ty::{GenericArg as HirGenericArg, Ty as HirTy, UtilityKind as HirUtilityKind};
-use yelang_hir::ids::SyntaxTyId as HirTyId;
+use yelang_hir::hir::ty::{GenericArg as HirGenericArg, HirTy, UtilityKind as HirUtilityKind};
+use yelang_hir::ids::HirTyId;
 use yelang_hir::res::{FloatTy as HirFloatTy, IntTy as HirIntTy, PrimTy, Res};
 use yelang_ty::generic::GenericArg;
 
@@ -29,7 +29,7 @@ pub fn lower_hir_ty_id<Cx: TyLowerCtxt>(ty_id: HirTyId, cx: &mut Cx) -> TyId {
     let hir_ty = cx
         .crate_hir()
         .ty(ty_id)
-        .expect("SyntaxTyId should be valid")
+        .expect("HirTyId should be valid")
         .clone();
     lower_hir_ty(&hir_ty, cx)
 }

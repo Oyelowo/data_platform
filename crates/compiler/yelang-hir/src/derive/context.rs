@@ -6,7 +6,7 @@ use yelang_lexer::Span;
 
 use crate::hir::core::{EnumDef, Generics, ItemKind, VariantData};
 use crate::hir::item::Item as HirItem;
-use crate::ids::SyntaxTyId;
+use crate::ids::HirTyId;
 use crate::lowering::LoweringContext;
 use crate::res::Res;
 
@@ -39,7 +39,7 @@ impl<'a> AdtInfo<'a> {
     ///
     /// For a generic ADT such as `struct Point<T>`, this produces `Point<T>`
     /// using the ADT's own type parameters as arguments.
-    pub fn self_ty(&self, ctx: &mut DeriveContext<'_, '_>) -> SyntaxTyId {
+    pub fn self_ty(&self, ctx: &mut DeriveContext<'_, '_>) -> HirTyId {
         let span = self.ident.span();
         let args = self
             .generics
@@ -48,7 +48,7 @@ impl<'a> AdtInfo<'a> {
             .filter_map(|p| match p {
                 crate::hir::core::GenericParam::Type { def_id, .. } => {
                     Some(crate::hir::ty::GenericArg::Type(ctx.ctx.crate_hir.alloc_ty(
-                        crate::hir::ty::Ty::Path {
+                        crate::hir::ty::HirTy::Path {
                             res: Res::Def { def_id: *def_id },
                             args: vec![],
                         },
@@ -64,7 +64,7 @@ impl<'a> AdtInfo<'a> {
             })
             .collect();
         ctx.ctx.crate_hir.alloc_ty(
-            crate::hir::ty::Ty::Path {
+            crate::hir::ty::HirTy::Path {
                 res: Res::Def {
                     def_id: self.def_id,
                 },

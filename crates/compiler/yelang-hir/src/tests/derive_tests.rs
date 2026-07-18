@@ -3,7 +3,7 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{GenericParam, ItemKind};
 use crate::hir::item::Item;
-use crate::hir::ty::{GenericArg, Ty};
+use crate::hir::ty::{GenericArg, HirTy};
 use crate::lowering::{LoweringContext, lower_crate};
 use crate::lowering::err::LoweringError;
 use crate::res::ResolvedCrate;
@@ -50,7 +50,7 @@ fn find_impls_for_type<'a>(
             {
                 let ty = crate_hir.ty(*self_ty).expect("impl self type");
                 let name = match ty {
-                    Ty::Path { res, .. } => match res {
+                    HirTy::Path { res, .. } => match res {
                         crate::res::Res::Def { def_id } => resolved
                             .definitions
                             .get(*def_id)
@@ -416,7 +416,7 @@ fn assert_generic_self_ty(
         panic!("expected impl item");
     };
     let ty = crate_hir.ty(*self_ty).expect("self type");
-    let Ty::Path { args, .. } = ty else {
+    let HirTy::Path { args, .. } = ty else {
         panic!("expected path self type, got {:?}", ty);
     };
     assert_eq!(

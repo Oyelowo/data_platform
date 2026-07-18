@@ -10,7 +10,7 @@ use crate::derive::helpers::{
     self_param, struct_literal, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
 use crate::hir::core::{Arm, Expr, ImplItem, Item};
-use crate::ids::{ExprId, PatId, SyntaxTyId};
+use crate::ids::{ExprId, PatId, HirTyId};
 use crate::hir::adt::VariantData;
 
 /// Expand `#[derive(Clone)]` for a struct or enum.
@@ -33,7 +33,7 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
 
     let self_ty = adt.self_ty(ctx);
     let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir::ty::Ty::Ref {
+        crate::hir::ty::HirTy::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: self_ty,
         },
@@ -50,8 +50,8 @@ fn clone_method(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
-    ref_self_ty: SyntaxTyId,
-    receiver_ty: SyntaxTyId,
+    ref_self_ty: HirTyId,
+    receiver_ty: HirTyId,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let sig = fn_sig(vec![self_param.ty], receiver_ty);

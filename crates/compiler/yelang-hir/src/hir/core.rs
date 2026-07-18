@@ -11,9 +11,9 @@ pub use crate::hir::expr::Expr;
 pub use crate::hir::item::{Item, ItemKind};
 pub use crate::hir::pat::Pat;
 pub use crate::hir::adt::{FieldDef, StructField, VariantData};
-pub use crate::hir::ty::Ty;
+pub use crate::hir::ty::HirTy;
 
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;
 
 /// Re-export commonly-used AST types that contain no unresolved names.
@@ -41,7 +41,7 @@ pub enum Stmt {
     /// `let` binding.
     Let {
         pat: PatId,
-        ty: Option<SyntaxTyId>,
+        ty: Option<HirTyId>,
         init: Option<ExprId>,
     },
     /// Nested item declaration.
@@ -83,8 +83,8 @@ pub enum CaptureClause {
 /// Function signature (shared by `fn` items and `fn` pointer types).
 #[derive(Debug, Clone)]
 pub struct FnSig {
-    pub inputs: Vec<SyntaxTyId>,
-    pub output: SyntaxTyId,
+    pub inputs: Vec<HirTyId>,
+    pub output: HirTyId,
     pub is_async: bool,
     pub is_const: bool,
     pub is_variadic: bool,
@@ -114,13 +114,13 @@ pub enum GenericParam {
         def_id: yelang_arena::DefId,
         name: Ident,
         bounds: Vec<TraitBound>,
-        default: Option<SyntaxTyId>,
+        default: Option<HirTyId>,
         span: Span,
     },
     Const {
         def_id: yelang_arena::DefId,
         name: Ident,
-        ty: SyntaxTyId,
+        ty: HirTyId,
         default: Option<ExprId>,
         span: Span,
     },
@@ -138,7 +138,7 @@ pub enum BinderParam {
     },
     Const {
         name: Ident,
-        ty: SyntaxTyId,
+        ty: HirTyId,
         span: Span,
     },
 }
@@ -162,8 +162,8 @@ pub struct WhereClause {
 /// A single predicate in a `where` clause.
 #[derive(Debug, Clone)]
 pub enum WherePredicate {
-    TraitBound { ty: SyntaxTyId, bounds: Vec<TraitBound> },
-    TypeEq { lhs: SyntaxTyId, rhs: SyntaxTyId },
+    TraitBound { ty: HirTyId, bounds: Vec<TraitBound> },
+    TypeEq { lhs: HirTyId, rhs: HirTyId },
 }
 
 // ---------------------------------------------------------------------------
@@ -216,12 +216,12 @@ pub enum TraitItemKind {
         default: Option<BodyId>,
     },
     Const {
-        ty: SyntaxTyId,
+        ty: HirTyId,
         body: Option<BodyId>,
     },
     Type {
         bounds: Vec<TraitBound>,
-        default: Option<SyntaxTyId>,
+        default: Option<HirTyId>,
     },
 }
 
@@ -230,7 +230,7 @@ pub enum TraitItemKind {
 pub struct Impl {
     pub def_id: DefId,
     pub generics: Generics,
-    pub self_ty: SyntaxTyId,
+    pub self_ty: HirTyId,
     pub of_trait: Option<TraitRef>,
     pub items: Vec<ImplItem>,
     pub polarity: ImplPolarity,
@@ -261,8 +261,8 @@ pub struct ImplItem {
 #[derive(Debug, Clone)]
 pub enum ImplItemKind {
     Fn { sig: FnSig, body: BodyId },
-    Const { ty: SyntaxTyId, body: BodyId },
-    Type { ty: SyntaxTyId },
+    Const { ty: HirTyId, body: BodyId },
+    Type { ty: HirTyId },
 }
 
 /// Reference to a trait in an `impl Trait for Type`.
@@ -301,7 +301,7 @@ pub struct ForeignItem {
 #[derive(Debug, Clone)]
 pub enum ForeignItemKind {
     Fn { sig: FnSig },
-    Static { ty: SyntaxTyId, mutability: Mutability },
+    Static { ty: HirTyId, mutability: Mutability },
     Type,
 }
 

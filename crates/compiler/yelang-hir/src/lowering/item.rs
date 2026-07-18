@@ -9,7 +9,7 @@ use crate::hir::core::{
     EnumDef, FieldDef, FnSig, GenericParam, Generics, ImplPolarity, Item, ItemKind, StructField,
     UseKind, UsePath, VariantData, VariantDef, Visibility, WhereClause, WherePredicate,
 };
-use crate::ids::{DefId, SyntaxTyId};
+use crate::ids::{DefId, HirTyId};
 use crate::lowering::LoweringContext;
 
 /// Lower a single AST item into HIR.
@@ -79,7 +79,7 @@ fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> Ite
 }
 
 fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bool) -> FnSig {
-    let inputs: Vec<SyntaxTyId> = sig
+    let inputs: Vec<HirTyId> = sig
         .params
         .iter()
         .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
@@ -88,7 +88,7 @@ fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bo
     let output = match &sig.return_type {
         FnRefType::Type(ty) => crate::lowering::ty::lower_ty(ctx, ty),
         FnRefType::Default(span) => {
-            ctx.crate_hir.alloc_ty(crate::hir::ty::Ty::Tuple { tys: vec![] }, *span)
+            ctx.crate_hir.alloc_ty(crate::hir::ty::HirTy::Tuple { tys: vec![] }, *span)
         }
     };
 
@@ -333,7 +333,7 @@ fn lower_impl_item(
         .crate_hir
         .ty(self_ty)
         .and_then(|ty| match ty {
-            crate::hir::ty::Ty::Path {
+            crate::hir::ty::HirTy::Path {
                 res: crate::res::Res::Def { def_id },
                 ..
             } => Some(*def_id),
@@ -694,7 +694,7 @@ fn lower_where_predicate(
             match lower_where_predicate(ctx, predicate) {
                 WherePredicate::TraitBound { ty, bounds } => {
                     let forall_ty = ctx.crate_hir.alloc_ty(
-                        crate::hir::ty::Ty::ForAll {
+                        crate::hir::ty::HirTy::ForAll {
                             params: bound_vars,
                             ty,
                         },

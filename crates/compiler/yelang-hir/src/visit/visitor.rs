@@ -3,13 +3,13 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
-    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, HirTy, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;
 
 /// Visitor over the HIR.
@@ -43,7 +43,7 @@ pub trait Visitor<'hir>: Sized {
         walk_stmt(self, stmt)
     }
 
-    fn visit_ty(&mut self, ty: &'hir Ty) {
+    fn visit_ty(&mut self, ty: &'hir HirTy) {
         walk_ty(self, ty)
     }
 
@@ -155,7 +155,7 @@ pub trait Visitor<'hir>: Sized {
     }
 
     /// Visit a type by its arena ID.
-    fn visit_ty_by_id(&mut self, id: SyntaxTyId) {
+    fn visit_ty_by_id(&mut self, id: HirTyId) {
         if let Some(crate_hir) = self.crate_hir() {
             if let Some(ty) = crate_hir.tys.get(id).and_then(|o| o.as_ref()) {
                 self.visit_ty(ty);
@@ -498,58 +498,58 @@ pub fn walk_body<'hir, V: Visitor<'hir>>(visitor: &mut V, body: &'hir Body) {
     visitor.visit_expr_by_id(body.value);
 }
 
-pub fn walk_ty<'hir, V: Visitor<'hir>>(visitor: &mut V, ty: &'hir Ty) {
+pub fn walk_ty<'hir, V: Visitor<'hir>>(visitor: &mut V, ty: &'hir HirTy) {
     match ty {
-        Ty::Path { args, .. } => {
+        HirTy::Path { args, .. } => {
             for arg in args {
                 walk_generic_arg(visitor, arg);
             }
         }
-        Ty::Tuple { tys } => {
+        HirTy::Tuple { tys } => {
             for t in tys {
                 visitor.visit_ty_by_id(*t);
             }
         }
-        Ty::Array { ty: inner, len } => {
+        HirTy::Array { ty: inner, len } => {
             visitor.visit_ty_by_id(*inner);
             walk_const(visitor, len);
         }
-        Ty::Slice { ty: inner } => {
+        HirTy::Slice { ty: inner } => {
             visitor.visit_ty_by_id(*inner);
         }
-        Ty::FnPtr { sig } => {
+        HirTy::FnPtr { sig } => {
             walk_fn_sig(visitor, sig);
         }
-        Ty::AnonStruct { fields } => {
+        HirTy::AnonStruct { fields } => {
             for field in fields {
                 visitor.visit_ty_by_id(field.ty);
             }
         }
-        Ty::TypeLit { .. } => {}
-        Ty::Utility { args, .. } => {
+        HirTy::TypeLit { .. } => {}
+        HirTy::Utility { args, .. } => {
             for arg in args {
                 visitor.visit_ty_by_id(*arg);
             }
         }
-        Ty::Ref { ty: inner, .. } | Ty::RawPtr { ty: inner, .. } => {
+        HirTy::Ref { ty: inner, .. } | HirTy::RawPtr { ty: inner, .. } => {
             visitor.visit_ty_by_id(*inner);
         }
-        Ty::ForAll { params, ty: inner } => {
+        HirTy::ForAll { params, ty: inner } => {
             for param in params {
                 visitor.visit_binder_param(param);
             }
             visitor.visit_ty_by_id(*inner);
         }
-        Ty::Union { tys } => {
+        HirTy::Union { tys } => {
             for t in tys {
                 visitor.visit_ty_by_id(*t);
             }
         }
-        Ty::ImplTrait { .. } | Ty::DynTrait { .. } => {}
-        Ty::TypeOf { expr } => {
+        HirTy::ImplTrait { .. } | HirTy::DynTrait { .. } => {}
+        HirTy::TypeOf { expr } => {
             visitor.visit_expr_by_id(*expr);
         }
-        Ty::Never | Ty::Infer | Ty::Missing | Ty::Err => {}
+        HirTy::Never | HirTy::Infer | HirTy::Missing | HirTy::Err => {}
     }
 }
 

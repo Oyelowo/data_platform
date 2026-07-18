@@ -7,7 +7,7 @@ use crate::hir::core::{
     EnumDef, FnSig, Generics, Mutability, UseKind, UsePath, VariantData,
     Visibility,
 };
-use crate::ids::{BodyId, DefId, SyntaxTyId};
+use crate::ids::{BodyId, DefId, HirTyId};
 
 /// An item in the HIR.
 #[derive(Debug, Clone)]
@@ -46,17 +46,17 @@ pub enum ItemKind {
     Impl {
         items: Vec<crate::hir::core::ImplItem>,
         generics: Generics,
-        self_ty: SyntaxTyId,
+        self_ty: HirTyId,
         of_trait: Option<crate::hir::core::TraitRef>,
         polarity: crate::hir::core::ImplPolarity,
     },
     /// Type alias.
-    TyAlias { ty: SyntaxTyId, generics: Generics },
+    TyAlias { ty: HirTyId, generics: Generics },
     /// Constant item.
-    Const { ty: SyntaxTyId, body: BodyId },
+    Const { ty: HirTyId, body: BodyId },
     /// Static item.
     Static {
-        ty: SyntaxTyId,
+        ty: HirTyId,
         mutability: Mutability,
         body: BodyId,
     },

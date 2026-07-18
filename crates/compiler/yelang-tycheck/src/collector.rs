@@ -314,7 +314,7 @@ fn collect_enum(
     }
 }
 
-fn variant_fields(data: &VariantData) -> Vec<(DefId, yelang_ast::Ident, yelang_hir::ids::SyntaxTyId)> {
+fn variant_fields(data: &VariantData) -> Vec<(DefId, yelang_ast::Ident, yelang_hir::ids::HirTyId)> {
     match data {
         VariantData::Struct { fields } => fields
             .iter()
@@ -572,7 +572,7 @@ mod tests {
     use super::*;
     use yelang_hir::hir::core::{FnSig, Generics, Item, ItemKind, Visibility};
     use yelang_hir::hir::body::Body;
-    use yelang_hir::hir::ty::Ty as HirTy;
+    use yelang_hir::hir::ty::HirTy;
     use yelang_hir::ids::BodyId;
     use yelang_hir::res::{PrimTy, IntTy as HirIntTy, Res};
     use yelang_interner::Symbol;
@@ -584,7 +584,7 @@ mod tests {
         Span::new(Position::default(), Position::default())
     }
 
-    fn hir_i32(hir: &mut HirCrate) -> yelang_hir::ids::SyntaxTyId {
+    fn hir_i32(hir: &mut HirCrate) -> yelang_hir::ids::HirTyId {
         hir.alloc_ty(
             HirTy::Path {
                 res: Res::PrimTy {

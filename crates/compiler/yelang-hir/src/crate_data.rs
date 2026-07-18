@@ -8,7 +8,7 @@ use yelang_arena::{Arena, ArenaMap, IndexVec};
 use yelang_lexer::Span;
 
 use crate::hir::core::{ForeignItem, Impl};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
 
 /// The root of the HIR for a single compilation unit.
 #[derive(Debug, Clone)]
@@ -30,16 +30,16 @@ pub struct Crate {
     pub pats: Arena<PatId, Option<Pat>>,
     /// All statement nodes keyed by `StmtId`.
     pub stmts: Arena<StmtId, Option<Stmt>>,
-    /// All type syntax nodes keyed by `SyntaxTyId`.
-    pub tys: Arena<SyntaxTyId, Option<Ty>>,
+    /// All HIR type syntax nodes keyed by `HirTyId`.
+    pub tys: Arena<HirTyId, Option<HirTy>>,
     /// Secondary map from `ExprId` to the source span of the expression.
     pub expr_spans: ArenaMap<ExprId, Span>,
     /// Secondary map from `PatId` to the source span of the pattern.
     pub pat_spans: ArenaMap<PatId, Span>,
     /// Secondary map from `StmtId` to the source span of the statement.
     pub stmt_spans: ArenaMap<StmtId, Span>,
-    /// Secondary map from `SyntaxTyId` to the source span of the type.
-    pub ty_spans: ArenaMap<SyntaxTyId, Span>,
+    /// Secondary map from `HirTyId` to the source span of the type.
+    pub ty_spans: ArenaMap<HirTyId, Span>,
     /// Secondary map from `BodyId` to the source span of the body.
     pub body_spans: ArenaMap<BodyId, Span>,
 }
@@ -86,8 +86,8 @@ impl Crate {
         id
     }
 
-    /// Allocate a type syntax node and its span, returning the `SyntaxTyId`.
-    pub fn alloc_ty(&mut self, ty: Ty, span: Span) -> SyntaxTyId {
+    /// Allocate a HIR type syntax node and its span, returning the `HirTyId`.
+    pub fn alloc_ty(&mut self, ty: HirTy, span: Span) -> HirTyId {
         let id = self.tys.insert(Some(ty));
         self.ty_spans.insert(id, span);
         id
@@ -130,13 +130,13 @@ impl Crate {
         self.stmts.get_mut(id).and_then(|o| o.as_mut())
     }
 
-    /// Look up a type syntax node by `SyntaxTyId`.
-    pub fn ty(&self, id: SyntaxTyId) -> Option<&Ty> {
+    /// Look up a HIR type syntax node by `HirTyId`.
+    pub fn ty(&self, id: HirTyId) -> Option<&HirTy> {
         self.tys.get(id).and_then(|o| o.as_ref())
     }
 
-    /// Look up a mutable type syntax node by `SyntaxTyId`.
-    pub fn ty_mut(&mut self, id: SyntaxTyId) -> Option<&mut Ty> {
+    /// Look up a mutable HIR type syntax node by `HirTyId`.
+    pub fn ty_mut(&mut self, id: HirTyId) -> Option<&mut HirTy> {
         self.tys.get_mut(id).and_then(|o| o.as_mut())
     }
 
@@ -175,11 +175,11 @@ impl Crate {
     }
 
     /// Look up the source span of a type.
-    pub fn ty_span(&self, id: SyntaxTyId) -> Span {
+    pub fn ty_span(&self, id: HirTyId) -> Span {
         *self
             .ty_spans
             .get(id)
-            .expect("SyntaxTyId should have an associated span")
+            .expect("HirTyId should have an associated span")
     }
 
     /// Look up the source span of a body.
@@ -196,7 +196,7 @@ impl Crate {
 pub use crate::hir::body::Body;
 pub use crate::hir::expr::Expr;
 pub use crate::hir::pat::Pat;
-pub use crate::hir::ty::Ty;
+pub use crate::hir::ty::HirTy;
 pub use crate::hir::core::Stmt;
 pub use crate::hir::core::Trait;
 pub use crate::hir::item::Item;

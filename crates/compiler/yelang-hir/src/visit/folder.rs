@@ -12,13 +12,13 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
-    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, HirTy, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;
 
 /// Functional HIR -> HIR rewrite.
@@ -44,7 +44,7 @@ pub trait Folder: Sized {
         stmt
     }
 
-    fn fold_ty(&mut self, ty: Ty) -> Ty {
+    fn fold_ty(&mut self, ty: HirTy) -> HirTy {
         ty
     }
 
@@ -190,7 +190,7 @@ pub fn fold_stmt_id(f: &mut impl Folder, crate_hir: &mut Crate, stmt_id: StmtId)
 }
 
 /// Fold the type at `ty_id`, allocating the result in the arena.
-pub fn fold_ty_id(f: &mut impl Folder, crate_hir: &mut Crate, ty_id: SyntaxTyId) -> SyntaxTyId {
+pub fn fold_ty_id(f: &mut impl Folder, crate_hir: &mut Crate, ty_id: HirTyId) -> HirTyId {
     let ty = match crate_hir.tys.get(ty_id) {
         Some(slot) => slot.clone(),
         None => return ty_id,
@@ -586,32 +586,32 @@ pub fn walk_body(f: &mut impl Folder, crate_hir: &mut Crate, body: Body) -> Body
     }
 }
 
-pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: Ty) -> Ty {
+pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: HirTy) -> HirTy {
     match ty {
-        Ty::Path { res, args } => Ty::Path {
+        HirTy::Path { res, args } => HirTy::Path {
             res,
             args: args
                 .into_iter()
                 .map(|arg| walk_generic_arg(f, crate_hir, arg))
                 .collect(),
         },
-        Ty::Tuple { tys } => Ty::Tuple {
+        HirTy::Tuple { tys } => HirTy::Tuple {
             tys: tys
                 .into_iter()
                 .map(|t| fold_ty_id(f, crate_hir, t))
                 .collect(),
         },
-        Ty::Array { ty: inner, len } => Ty::Array {
+        HirTy::Array { ty: inner, len } => HirTy::Array {
             ty: fold_ty_id(f, crate_hir, inner),
             len: walk_const(f, crate_hir, len),
         },
-        Ty::Slice { ty: inner } => Ty::Slice {
+        HirTy::Slice { ty: inner } => HirTy::Slice {
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        Ty::FnPtr { sig } => Ty::FnPtr {
+        HirTy::FnPtr { sig } => HirTy::FnPtr {
             sig: Box::new(walk_fn_sig(f, crate_hir, *sig)),
         },
-        Ty::AnonStruct { fields } => Ty::AnonStruct {
+        HirTy::AnonStruct { fields } => HirTy::AnonStruct {
             fields: fields
                 .into_iter()
                 .map(|field| crate::hir::ty::AnonField {
@@ -620,41 +620,41 @@ pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: Ty) -> Ty {
                 })
                 .collect(),
         },
-        Ty::TypeLit { variants } => Ty::TypeLit { variants },
-        Ty::Utility { kind, args } => Ty::Utility {
+        HirTy::TypeLit { variants } => HirTy::TypeLit { variants },
+        HirTy::Utility { kind, args } => HirTy::Utility {
             kind,
             args: args
                 .into_iter()
                 .map(|arg| fold_ty_id(f, crate_hir, arg))
                 .collect(),
         },
-        Ty::TypeOf { expr } => Ty::TypeOf {
+        HirTy::TypeOf { expr } => HirTy::TypeOf {
             expr: fold_expr_id(f, crate_hir, expr),
         },
-        Ty::Ref { mutability, ty: inner } => Ty::Ref {
+        HirTy::Ref { mutability, ty: inner } => HirTy::Ref {
             mutability,
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        Ty::RawPtr { mutability, ty: inner } => Ty::RawPtr {
+        HirTy::RawPtr { mutability, ty: inner } => HirTy::RawPtr {
             mutability,
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        Ty::ForAll { params, ty: inner } => Ty::ForAll {
+        HirTy::ForAll { params, ty: inner } => HirTy::ForAll {
             params: params
                 .into_iter()
                 .map(|param| walk_binder_param(f, crate_hir, param))
                 .collect(),
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        Ty::Union { tys } => Ty::Union {
+        HirTy::Union { tys } => HirTy::Union {
             tys: tys
                 .into_iter()
                 .map(|t| fold_ty_id(f, crate_hir, t))
                 .collect(),
         },
-        Ty::ImplTrait { path } => Ty::ImplTrait { path },
-        Ty::DynTrait { path } => Ty::DynTrait { path },
-        Ty::Never | Ty::Infer | Ty::Missing | Ty::Err => ty,
+        HirTy::ImplTrait { path } => HirTy::ImplTrait { path },
+        HirTy::DynTrait { path } => HirTy::DynTrait { path },
+        HirTy::Never | HirTy::Infer | HirTy::Missing | HirTy::Err => ty,
     }
 }
 

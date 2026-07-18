@@ -15,8 +15,8 @@ use crate::hir::core::{
 use crate::hir::body::Body;
 use crate::hir::pat::{BindingMode, FieldPat, Pat};
 use crate::hir::adt::VariantData;
-use crate::hir::ty::Ty;
-use crate::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId};
+use crate::hir::ty::HirTy;
+use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;
 
 /// An identifier constructed from a string, using the derive span as its span.
@@ -30,8 +30,8 @@ pub fn sym(ctx: &DeriveContext<'_, '_>, name: &str) -> Symbol {
 }
 
 /// Build a path type referring to a definition with no generic arguments.
-pub fn path_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> SyntaxTyId {
-    let ty = Ty::Path {
+pub fn path_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> HirTyId {
+    let ty = HirTy::Path {
         res: Res::Def { def_id },
         args: vec![],
     };
@@ -39,8 +39,8 @@ pub fn path_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> SyntaxTyId {
 }
 
 /// Build a type reference to a type parameter by its `DefId`.
-pub fn type_param_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> SyntaxTyId {
-    let ty = Ty::Path {
+pub fn type_param_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> HirTyId {
+    let ty = HirTy::Path {
         res: Res::Def { def_id },
         args: vec![],
     };
@@ -108,8 +108,8 @@ pub fn derive_generics(
 }
 
 /// Build a `Self` type.
-pub fn self_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> SyntaxTyId {
-    let ty = Ty::Path {
+pub fn self_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> HirTyId {
+    let ty = HirTy::Path {
         res: Res::SelfTy { def_id },
         args: vec![],
     };
@@ -117,8 +117,8 @@ pub fn self_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> SyntaxTyId {
 }
 
 /// Build a reference type `&T`.
-pub fn ref_ty(ty: SyntaxTyId, mutable: bool) -> Ty {
-    Ty::Ref {
+pub fn ref_ty(ty: HirTyId, mutable: bool) -> HirTy {
+    HirTy::Ref {
         mutability: if mutable {
             yelang_ast::Mutability::Mutable
         } else {
@@ -129,8 +129,8 @@ pub fn ref_ty(ty: SyntaxTyId, mutable: bool) -> Ty {
 }
 
 /// Build the unit type `()`.
-pub fn unit_ty(_span: Span) -> Ty {
-    Ty::Tuple { tys: vec![] }
+pub fn unit_ty(_span: Span) -> HirTy {
+    HirTy::Tuple { tys: vec![] }
 }
 
 /// Build a HIR expression with the given kind and span, allocate it in the
@@ -312,7 +312,7 @@ pub fn block_expr(
 pub fn let_stmt(
     ctx: &mut DeriveContext<'_, '_>,
     pat: PatId,
-    ty: Option<SyntaxTyId>,
+    ty: Option<HirTyId>,
     init: Option<ExprId>,
 ) -> StmtId {
     let stmt = Stmt::Let { pat, ty, init };
@@ -330,7 +330,7 @@ pub fn make_body(ctx: &mut DeriveContext<'_, '_>, params: Vec<Param>, value: Exp
 }
 
 /// Build a function parameter from a pattern and type.
-pub fn param(ctx: &mut DeriveContext<'_, '_>, pat: PatId, ty: SyntaxTyId) -> Param {
+pub fn param(ctx: &mut DeriveContext<'_, '_>, pat: PatId, ty: HirTyId) -> Param {
     Param {
         pat,
         ty,
@@ -339,7 +339,7 @@ pub fn param(ctx: &mut DeriveContext<'_, '_>, pat: PatId, ty: SyntaxTyId) -> Par
 }
 
 /// Build a `self` parameter with the given type (usually `&Self`).
-pub fn self_param(ctx: &mut DeriveContext<'_, '_>, ty: SyntaxTyId) -> Param {
+pub fn self_param(ctx: &mut DeriveContext<'_, '_>, ty: HirTyId) -> Param {
     let name = ctx.intern("self");
     let pat = ctx.ctx.crate_hir.alloc_pat(
         Pat::Binding {
@@ -394,7 +394,7 @@ pub fn formatter_param(ctx: &mut DeriveContext<'_, '_>, formatter_def_id: DefId)
 }
 
 /// Build a function signature.
-pub fn fn_sig(inputs: Vec<SyntaxTyId>, output: SyntaxTyId) -> FnSig {
+pub fn fn_sig(inputs: Vec<HirTyId>, output: HirTyId) -> FnSig {
     FnSig {
         inputs,
         output,
@@ -431,7 +431,7 @@ pub fn method_impl_item(
 pub fn impl_item(
     ctx: &mut DeriveContext<'_, '_>,
     trait_def_id: DefId,
-    self_ty: SyntaxTyId,
+    self_ty: HirTyId,
     generics: crate::hir::core::Generics,
     items: Vec<ImplItem>,
 ) -> Item {
@@ -524,7 +524,7 @@ pub fn path_pat(ctx: &mut DeriveContext<'_, '_>, res: Res) -> PatId {
 pub struct FieldView {
     pub ident: Option<yelang_ast::Ident>,
     pub index: usize,
-    pub ty: SyntaxTyId,
+    pub ty: HirTyId,
 }
 
 /// Iterate over the fields of a `VariantData`.
