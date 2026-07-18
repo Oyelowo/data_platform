@@ -44,7 +44,7 @@ pub fn derive_partial_eq(
     );
 
     let eq_method = eq_method(ctx, adt.def_id, &adt, ref_self_ty);
-    let generics = derive_generics(ctx, adt.generics, partial_eq_trait);
+    let generics = derive_generics(ctx, &adt.generics, partial_eq_trait);
 
     Some(impl_item(ctx, partial_eq_trait, self_ty, generics, vec![eq_method]))
 }

@@ -14,7 +14,7 @@ use yelang_hir::hir::adt::VariantData;
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::{Predicate, TraitPredicate};
 use yelang_ty::primitive::IntTy;
-use yelang_ty::ty::{AdtDef, Const, ConstKind, ParamTy, PolyFnSig, Ty, TyKind};
+use yelang_ty::ty::{AdtDef, Const, ConstId, ParamTy, PolyFnSig, Ty, TyId};
 
 use crate::hir_ty_lower::lower_hir_ty_id;
 use crate::lower_ctx::TyLowerCtxt;
@@ -24,46 +24,61 @@ use crate::tcx::{
 };
 
 /// Collect item signatures from the HIR crate into `tcx`.
-pub fn collect_crate_types<'tcx>(tcx: &mut TyCtxt<'tcx>) {
-    let hir = tcx.crate_hir();
+pub fn collect_crate_types(tcx: &mut TyCtxt) {
+    // Pre-collect HIR nodes so we can mutate `tcx` while iterating.
+    let items: Vec<_> = tcx
+        .crate_hir()
+        .items
+        .iter_enumerated()
+        .filter_map(|(def_id, item)| item.as_ref().map(|i| (def_id, i.clone())))
+        .collect();
+    let traits: Vec<_> = tcx
+        .crate_hir()
+        .traits
+        .iter_enumerated()
+        .filter_map(|(def_id, tr)| tr.as_ref().map(|t| (def_id, t.clone())))
+        .collect();
+    let impls: Vec<_> = tcx.crate_hir().impls.iter().cloned().collect();
 
     // Collect items indexed by DefId.
-    for (def_id, item) in hir.items.iter_enumerated() {
-        let Some(item) = item else { continue };
-        collect_item(tcx, def_id, item);
+    for (def_id, item) in items {
+        collect_item(tcx, def_id, &item);
     }
 
     // Trait definitions are stored separately.
-    for (def_id, tr) in hir.traits.iter_enumerated() {
-        let Some(tr) = tr else { continue };
-        collect_trait(tcx, def_id, tr);
+    for (def_id, tr) in traits {
+        collect_trait(tcx, def_id, &tr);
     }
 
     // Impl blocks are stored separately.
-    let impls: Vec<_> = hir.impls.iter().cloned().collect();
     for imp in impls {
         collect_impl(tcx, &imp);
     }
+
+    tcx.populate_solver_caches();
 }
 
-fn collect_item<'tcx>(tcx: &mut TyCtxt<'tcx>, def_id: DefId, item: &Item) {
-    match &item.kind {
+fn collect_item(tcx: &mut TyCtxt, def_id: DefId, item: &Item) {
+    let kind = item.kind(tcx.crate_hir()).clone();
+    match &kind {
         ItemKind::Fn { sig, body: _, generics } => {
             let generics_data = lower_generics(tcx, generics);
             let mut cx = CollectorCx::new(tcx, &generics_data.params);
             let poly_sig = lower_fn_sig(&mut cx, sig);
-            let fn_ty = cx.tcx.interner().mk_ty(TyKind::FnDef(yelang_ty::ty::FnDef {
+            let fn_ty = cx.tcx.interner().mk_ty(Ty::FnDef(yelang_ty::ty::FnDef {
                 def_id,
                 args: identity_args(&cx, &generics_data.params),
             }));
             cx.tcx.fn_sigs.insert(def_id, poly_sig);
+            cx.tcx.generics.insert(def_id, generics_data);
             cx.tcx.item_types.insert(def_id, fn_ty);
         }
         ItemKind::Struct { data, generics } => {
             let generics_data = lower_generics(tcx, generics);
             let mut cx = CollectorCx::new(tcx, &generics_data.params);
             let adt = collect_struct(&mut cx, def_id, item.ident, data, generics_data);
-            let ty = cx.tcx.interner().mk_ty(TyKind::Adt(
+            cx.tcx.generics.insert(def_id, adt.generics.clone());
+            let ty = cx.tcx.interner().mk_ty(Ty::Adt(
                 AdtDef { def_id },
                 identity_args(&cx, &adt.generics.params),
             ));
@@ -74,18 +89,18 @@ fn collect_item<'tcx>(tcx: &mut TyCtxt<'tcx>, def_id: DefId, item: &Item) {
             let generics_data = lower_generics(tcx, generics);
             let mut cx = CollectorCx::new(tcx, &generics_data.params);
             let adt = collect_enum(&mut cx, def_id, item.ident, def, generics_data);
-            let ty = cx.tcx.interner().mk_ty(TyKind::Adt(
+            cx.tcx.generics.insert(def_id, adt.generics.clone());
+            let ty = cx.tcx.interner().mk_ty(Ty::Adt(
                 AdtDef { def_id },
                 identity_args(&cx, &adt.generics.params),
             ));
             cx.tcx.adt_defs.insert(def_id, adt);
             cx.tcx.item_types.insert(def_id, ty);
         }
-        ItemKind::Trait { items, generics, super_traits } => {
-            // Trait definitions are collected from `hir.traits`, but if an Item
-            // also exists we still need an item_type placeholder.
-            let _ = (items, generics, super_traits);
-            tcx.item_types.insert(def_id, tcx.interner().mk_ty(TyKind::Error));
+        ItemKind::Trait { items: _, generics: _, super_traits: _ } => {
+            // Trait definitions are collected from `hir.traits`. The generics
+            // and items are stored in `trait_defs`.
+            tcx.item_types.insert(def_id, tcx.interner().mk_ty(Ty::Error));
         }
         ItemKind::Impl { .. } => {
             // Impl blocks are not items with a type.
@@ -94,6 +109,7 @@ fn collect_item<'tcx>(tcx: &mut TyCtxt<'tcx>, def_id: DefId, item: &Item) {
             let generics_data = lower_generics(tcx, generics);
             let mut cx = CollectorCx::new(tcx, &generics_data.params);
             let alias_ty = lower_hir_ty_id(*ty, &mut cx);
+            cx.tcx.generics.insert(def_id, generics_data);
             cx.tcx.item_types.insert(def_id, alias_ty);
         }
         ItemKind::Const { ty, body: _ } => {
@@ -112,36 +128,51 @@ fn collect_item<'tcx>(tcx: &mut TyCtxt<'tcx>, def_id: DefId, item: &Item) {
     }
 }
 
-fn collect_trait<'tcx>(tcx: &mut TyCtxt<'tcx>, def_id: DefId, tr: &hir::Trait) {
+fn collect_trait(tcx: &mut TyCtxt, def_id: DefId, tr: &hir::Trait) {
     let generics_data = lower_generics(tcx, &tr.generics);
     let mut cx = CollectorCx::new(tcx, &generics_data.params);
+
+    // In a trait definition `Self` is an implicit type parameter. We model it
+    // as a placeholder parameter for supertrait and associated-type bound
+    // lowering.
+    let self_ty = cx.tcx.interner().mk_ty(Ty::Param(ParamTy {
+        index: 0,
+        name: yelang_interner::Symbol::from(0),
+    }));
 
     let supertraits: Vec<_> = tr
         .super_traits
         .iter()
-        .filter_map(|t| lower_trait_ref(&mut cx, t))
+        .filter_map(|t| lower_trait_ref(&mut cx, self_ty, t))
         .collect();
 
     let items: Vec<_> = tr
         .items
         .iter()
-        .map(|item| match &item.kind {
+        .map(|item| {
+            let kind = item.kind(cx.crate_hir()).clone();
+            match &kind {
             hir::TraitItemKind::Fn { sig, default: _ } => TraitItemDefData::Fn {
-                def_id, // TODO: trait items need their own DefIds
+                def_id: item.def_id,
                 sig: lower_fn_sig(&mut cx, sig),
             },
             hir::TraitItemKind::Const { ty, body: _ } => TraitItemDefData::Const {
-                def_id, // TODO: trait items need their own DefIDs
+                def_id: item.def_id,
                 ty: lower_hir_ty_id(*ty, &mut cx),
             },
             hir::TraitItemKind::Type { bounds, default } => TraitItemDefData::Type {
-                def_id, // TODO: trait items need their own DefIds
-                bounds: bounds.iter().filter_map(|b| lower_trait_bound(&mut cx, b)).collect(),
+                def_id: item.def_id,
+                bounds: bounds
+                    .iter()
+                    .filter_map(|b| lower_trait_bound(&mut cx, self_ty, b))
+                    .collect(),
                 default: default.map(|t| lower_hir_ty_id(t, &mut cx)),
             },
+            }
         })
         .collect();
 
+    cx.tcx.generics.insert(def_id, generics_data.clone());
     cx.tcx.trait_defs.insert(
         def_id,
         TraitDefData {
@@ -152,65 +183,71 @@ fn collect_trait<'tcx>(tcx: &mut TyCtxt<'tcx>, def_id: DefId, tr: &hir::Trait) {
             items,
         },
     );
-    cx.tcx.item_types.insert(def_id, cx.tcx.interner().mk_ty(TyKind::Error));
+    cx.tcx.item_types.insert(def_id, cx.tcx.interner().mk_ty(Ty::Error));
 }
 
-fn collect_impl<'tcx>(tcx: &mut TyCtxt<'tcx>, imp: &hir::Impl) {
-    // TODO: impl blocks need their own DefIds. For now use a placeholder.
-    let def_id = DefId::new(0);
+fn collect_impl(tcx: &mut TyCtxt, imp: &hir::Impl) {
+    let def_id = imp.def_id;
     let generics_data = lower_generics(tcx, &imp.generics);
     let mut cx = CollectorCx::new(tcx, &generics_data.params);
 
     let self_ty = lower_hir_ty_id(imp.self_ty, &mut cx);
     cx.self_ty = Some(self_ty);
 
-    let trait_ref = imp.of_trait.as_ref().and_then(|t| lower_trait_ref(&mut cx, t));
+    let trait_ref = imp
+        .of_trait
+        .as_ref()
+        .and_then(|t| lower_trait_ref(&mut cx, self_ty, t));
 
     let items: Vec<_> = imp
         .items
         .iter()
-        .map(|item| match &item.kind {
+        .map(|item| {
+            let kind = item.kind(cx.crate_hir()).clone();
+            match &kind {
             hir::ImplItemKind::Fn { sig, body: _ } => ImplItemDefData::Fn {
-                def_id, // TODO: impl items need their own DefIds
+                def_id: item.def_id,
                 sig: lower_fn_sig(&mut cx, sig),
             },
             hir::ImplItemKind::Const { ty, body: _ } => ImplItemDefData::Const {
-                def_id, // TODO: impl items need their own DefIds
+                def_id: item.def_id,
                 ty: lower_hir_ty_id(*ty, &mut cx),
             },
             hir::ImplItemKind::Type { ty } => ImplItemDefData::Type {
-                def_id, // TODO: impl items need their own DefIds
+                def_id: item.def_id,
                 ty: lower_hir_ty_id(*ty, &mut cx),
             },
+            }
         })
         .collect();
 
+    cx.tcx.generics.insert(def_id, generics_data.clone());
     let impl_id = cx.tcx.impl_defs.push(ImplDefData {
-        id: crate::tcx::ImplDefId::new(1), // placeholder
+        id: crate::tcx::ImplDefId::new(0), // patched below
         def_id,
         trait_ref,
         self_ty,
         generics: generics_data,
         items,
     });
+    cx.tcx.impl_defs[impl_id].id = impl_id;
 
     if let Some(tr) = trait_ref {
         cx.tcx.trait_impl_index.entry(tr.def_id).or_default().push(impl_id);
     }
 }
 
-fn collect_struct<'tcx>(
-    cx: &mut CollectorCx<'_, 'tcx>,
+fn collect_struct(
+    cx: &mut CollectorCx<'_>,
     def_id: DefId,
     ident: yelang_ast::Ident,
     data: &VariantData,
-    generics: GenericsData<'tcx>,
-) -> AdtDefData<'tcx> {
+    generics: GenericsData,
+) -> AdtDefData {
     let fields: Vec<_> = variant_fields(data)
         .iter()
-        .enumerate()
-        .map(|(idx, &(field_ident, ty_id))| FieldData {
-            def_id: DefId::new((idx + 1) as u32), // TODO: field DefIds
+        .map(|&(field_def_id, field_ident, ty_id)| FieldData {
+            def_id: field_def_id,
             ident: field_ident,
             ty: lower_hir_ty_id(ty_id, cx),
         })
@@ -230,29 +267,27 @@ fn collect_struct<'tcx>(
     }
 }
 
-fn collect_enum<'tcx>(
-    cx: &mut CollectorCx<'_, 'tcx>,
+fn collect_enum(
+    cx: &mut CollectorCx<'_>,
     def_id: DefId,
     ident: yelang_ast::Ident,
     enum_def: &hir::EnumDef,
-    generics: GenericsData<'tcx>,
-) -> AdtDefData<'tcx> {
+    generics: GenericsData,
+) -> AdtDefData {
     let variants: Vec<_> = enum_def
         .variants
         .iter()
-        .enumerate()
-        .map(|(idx, v)| {
+        .map(|v| {
             let fields: Vec<_> = variant_fields(&v.data)
                 .iter()
-                .enumerate()
-                .map(|(fidx, &(field_ident, ty_id))| FieldData {
-                    def_id: DefId::new((fidx + 1) as u32), // TODO: field DefIds
+                .map(|&(field_def_id, field_ident, ty_id)| FieldData {
+                    def_id: field_def_id,
                     ident: field_ident,
                     ty: lower_hir_ty_id(ty_id, cx),
                 })
                 .collect();
             crate::tcx::VariantData {
-                def_id: DefId::new((idx + 1) as u32), // TODO: variant DefIds
+                def_id: v.def_id,
                 ident: v.ident,
                 fields,
                 discriminant: v.discriminant.as_ref().map(|c| lower_hir_const(cx.tcx, c)),
@@ -269,11 +304,11 @@ fn collect_enum<'tcx>(
     }
 }
 
-fn variant_fields(data: &VariantData) -> Vec<(yelang_ast::Ident, yelang_hir::ids::TyId)> {
+fn variant_fields(data: &VariantData) -> Vec<(DefId, yelang_ast::Ident, yelang_hir::ids::TyId)> {
     match data {
         VariantData::Struct { fields } => fields
             .iter()
-            .map(|f| (f.ident, f.ty))
+            .map(|f| (f.def_id, f.ident, f.ty))
             .collect(),
         VariantData::Tuple { fields } => fields
             .iter()
@@ -283,7 +318,7 @@ fn variant_fields(data: &VariantData) -> Vec<(yelang_ast::Ident, yelang_hir::ids
                     yelang_interner::Symbol::from(idx as u32),
                     yelang_lexer::Span::default(),
                 );
-                (ident, f.ty)
+                (f.def_id, ident, f.ty)
             })
             .collect(),
         VariantData::Unit => Vec::new(),
@@ -294,7 +329,7 @@ fn variant_fields(data: &VariantData) -> Vec<(yelang_ast::Ident, yelang_hir::ids
 // Lowering helpers
 // ---------------------------------------------------------------------------
 
-fn lower_fn_sig<'a, 'tcx>(cx: &mut CollectorCx<'a, 'tcx>, sig: &hir::FnSig) -> PolyFnSig<'tcx> {
+fn lower_fn_sig(cx: &mut CollectorCx<'_>, sig: &hir::FnSig) -> PolyFnSig {
     let inputs: Vec<_> = sig
         .inputs
         .iter()
@@ -309,23 +344,30 @@ fn lower_fn_sig<'a, 'tcx>(cx: &mut CollectorCx<'a, 'tcx>, sig: &hir::FnSig) -> P
     }
 }
 
-fn lower_trait_ref<'a, 'tcx>(cx: &mut CollectorCx<'a, 'tcx>, tr: &hir::TraitRef) -> Option<yelang_ty::predicate::TraitRef<'tcx>> {
-    lower_trait_bound(cx, &hir::TraitBound { path: tr.path.clone(), span: tr.span })
+fn lower_trait_ref(
+    cx: &mut CollectorCx<'_>,
+    self_ty: TyId,
+    tr: &hir::TraitRef,
+) -> Option<yelang_ty::predicate::TraitRef> {
+    lower_trait_bound(cx, self_ty, &hir::TraitBound { path: tr.path.clone(), span: tr.span })
 }
 
-fn lower_trait_bound<'a, 'tcx>(cx: &mut CollectorCx<'a, 'tcx>, bound: &hir::TraitBound) -> Option<yelang_ty::predicate::TraitRef<'tcx>> {
+fn lower_trait_bound(
+    cx: &mut CollectorCx<'_>,
+    self_ty: TyId,
+    bound: &hir::TraitBound,
+) -> Option<yelang_ty::predicate::TraitRef> {
     if let yelang_hir::res::Res::Def { def_id } = bound.path {
-        // TODO: lower generic arguments of the trait bound.
-        Some(yelang_ty::predicate::TraitRef {
-            def_id,
-            args: cx.tcx.interner().mk_generic_args(&[]),
-        })
+        // TODO: lower generic arguments of the trait bound (e.g. Foo<U> in
+        // `T: Foo<U>`). For now the only argument we model is `Self`.
+        let args = cx.tcx.interner().mk_generic_args(&[GenericArg::Type(self_ty)]);
+        Some(yelang_ty::predicate::TraitRef { def_id, args })
     } else {
         None
     }
 }
 
-fn lower_generics<'tcx>(tcx: &mut TyCtxt<'tcx>, generics: &hir::Generics) -> GenericsData<'tcx> {
+fn lower_generics(tcx: &mut TyCtxt, generics: &hir::Generics) -> GenericsData {
     let params: Vec<_> = generics
         .params
         .iter()
@@ -343,27 +385,48 @@ fn lower_generics<'tcx>(tcx: &mut TyCtxt<'tcx>, generics: &hir::Generics) -> Gen
         })
         .collect();
 
-    let predicates = generics
+    let mut predicates: Vec<Predicate> = generics
         .where_clause
         .as_ref()
         .map(|wc| wc.predicates.iter().filter_map(|p| lower_where_predicate(tcx, p)).collect())
         .unwrap_or_default();
 
+    // Add predicates from inline bounds on generic parameters, e.g.
+    // `fn foo<T: Clone>()`. The `Self` type of each bound is the parameter
+    // itself, looked up by its DefId.
+    let mut cx = CollectorCx::new(tcx, &params);
+    for param in &generics.params {
+        if let hir::GenericParam::Type { def_id, bounds, .. } = param {
+            let self_ty = cx.param_ty(*def_id).unwrap_or_else(|| cx.tcx.interner().mk_ty(Ty::Error));
+            for bound in bounds {
+                if let Some(tr) = lower_trait_bound(&mut cx, self_ty, bound) {
+                    predicates.push(Predicate::Trait(TraitPredicate {
+                        trait_ref: tr,
+                        polarity: yelang_ty::ty::ImplPolarity::Positive,
+                    }));
+                }
+            }
+        }
+    }
+
     GenericsData { params, predicates }
 }
 
-fn lower_where_predicate<'tcx>(tcx: &mut TyCtxt<'tcx>, pred: &hir::WherePredicate) -> Option<Predicate<'tcx>> {
+fn lower_where_predicate(tcx: &mut TyCtxt, pred: &hir::WherePredicate) -> Option<Predicate> {
     match pred {
         hir::WherePredicate::TraitBound { ty, bounds } => {
             let mut cx = CollectorCx::new(tcx, &[]);
-            let _self_ty = lower_hir_ty_id(*ty, &mut cx);
+            let self_ty = lower_hir_ty_id(*ty, &mut cx);
             // For now only support a single bound.
-            bounds.first().and_then(|b| lower_trait_bound(&mut cx, b)).map(|trait_ref| {
-                Predicate::Trait(TraitPredicate {
-                    trait_ref,
-                    polarity: yelang_ty::ty::ImplPolarity::Positive,
+            bounds
+                .first()
+                .and_then(|b| lower_trait_bound(&mut cx, self_ty, b))
+                .map(|trait_ref| {
+                    Predicate::Trait(TraitPredicate {
+                        trait_ref,
+                        polarity: yelang_ty::ty::ImplPolarity::Positive,
+                    })
                 })
-            })
         }
         hir::WherePredicate::TypeEq { .. } => {
             // TODO: associated type equality constraints.
@@ -372,31 +435,32 @@ fn lower_where_predicate<'tcx>(tcx: &mut TyCtxt<'tcx>, pred: &hir::WherePredicat
     }
 }
 
-fn identity_args<'a, 'tcx>(cx: &CollectorCx<'a, 'tcx>, params: &[GenericParamData]) -> yelang_ty::list::List<GenericArg<'tcx>> {
+fn identity_args(cx: &CollectorCx<'_>, params: &[GenericParamData]) -> yelang_ty::list::List<GenericArg> {
     let args: Vec<_> = params
         .iter()
-        .map(|p| match p.kind {
+        .enumerate()
+        .map(|(idx, p)| match p.kind {
             GenericParamKind::Type => {
-                GenericArg::Type(cx.tcx.interner().mk_ty(TyKind::Param(ParamTy {
-                    index: 0, // TODO: proper param indices
+                GenericArg::Type(cx.tcx.interner().mk_ty(Ty::Param(ParamTy {
+                    index: idx as u32,
                     name: p.ident.symbol,
                 })))
             }
             GenericParamKind::Const => {
                 // TODO: identity const args.
-                GenericArg::Const(Const {
-                    kind: ConstKind::Error,
-                    ty: cx.tcx.interner().mk_ty(TyKind::Error),
-                })
+                GenericArg::Const(cx.tcx.interner().mk_const_from_parts(
+                    Const::Error,
+                    cx.tcx.interner().mk_ty(Ty::Error),
+                ))
             }
         })
         .collect();
     cx.tcx.interner().mk_generic_args(&args)
 }
 
-fn lower_hir_const<'tcx>(tcx: &TyCtxt<'tcx>, c: &yelang_hir::hir::ty::Const) -> Const<'tcx> {
+fn lower_hir_const(tcx: &TyCtxt, c: &yelang_hir::hir::ty::Const) -> ConstId {
     use yelang_ty::ty::ConstValue;
-    let ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let ty = tcx.interner().mk_ty(Ty::Int(IntTy::I32));
     let kind = match &c.kind {
         yelang_hir::hir::ty::ConstKind::Lit { lit } => match lit {
             yelang_lexer::Literal::Int(il) => {
@@ -406,12 +470,12 @@ fn lower_hir_const<'tcx>(tcx: &TyCtxt<'tcx>, c: &yelang_hir::hir::ty::Const) -> 
             yelang_lexer::Literal::Bool(b) => Some(ConstValue::Bool(*b)),
             _ => None,
         }
-        .map_or(ConstKind::Error, ConstKind::Value),
+        .map_or(Const::Error, Const::Value),
         yelang_hir::hir::ty::ConstKind::Expr { .. } | yelang_hir::hir::ty::ConstKind::Err => {
-            ConstKind::Error
+            Const::Error
         }
     };
-    Const { kind, ty }
+    tcx.interner().mk_const_from_parts(kind, ty)
 }
 
 // ---------------------------------------------------------------------------
@@ -419,18 +483,18 @@ fn lower_hir_const<'tcx>(tcx: &TyCtxt<'tcx>, c: &yelang_hir::hir::ty::Const) -> 
 // ---------------------------------------------------------------------------
 
 /// Lowering context used by the collector.
-struct CollectorCx<'a, 'tcx> {
-    tcx: &'a mut TyCtxt<'tcx>,
-    param_map: FxHashMap<DefId, Ty<'tcx>>,
-    self_ty: Option<Ty<'tcx>>,
+struct CollectorCx<'a> {
+    tcx: &'a mut TyCtxt,
+    param_map: FxHashMap<DefId, TyId>,
+    self_ty: Option<TyId>,
 }
 
-impl<'a, 'tcx> CollectorCx<'a, 'tcx> {
-    fn new(tcx: &'a mut TyCtxt<'tcx>, params: &[GenericParamData]) -> Self {
+impl<'a> CollectorCx<'a> {
+    fn new(tcx: &'a mut TyCtxt, params: &[GenericParamData]) -> Self {
         let mut param_map = FxHashMap::default();
         for (idx, p) in params.iter().enumerate() {
             if let GenericParamKind::Type = p.kind {
-                let ty = tcx.interner().mk_ty(TyKind::Param(ParamTy {
+                let ty = tcx.interner().mk_ty(Ty::Param(ParamTy {
                     index: idx as u32,
                     name: p.ident.symbol,
                 }));
@@ -445,8 +509,8 @@ impl<'a, 'tcx> CollectorCx<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx> TyLowerCtxt<'tcx> for CollectorCx<'a, 'tcx> {
-    fn interner(&self) -> &Interner<'tcx> {
+impl<'a> TyLowerCtxt for CollectorCx<'a> {
+    fn interner(&self) -> &Interner {
         self.tcx.interner()
     }
 
@@ -454,24 +518,24 @@ impl<'a, 'tcx> TyLowerCtxt<'tcx> for CollectorCx<'a, 'tcx> {
         self.tcx.crate_hir()
     }
 
-    fn item_ty(&self, def_id: DefId) -> Option<Ty<'tcx>> {
+    fn item_ty(&self, def_id: DefId) -> Option<TyId> {
         self.tcx.item_ty(def_id)
     }
 
-    fn param_ty(&self, def_id: DefId) -> Option<Ty<'tcx>> {
+    fn param_ty(&self, def_id: DefId) -> Option<TyId> {
         self.param_map.get(&def_id).copied()
     }
 
-    fn self_ty(&self) -> Option<Ty<'tcx>> {
+    fn self_ty(&self) -> Option<TyId> {
         self.self_ty
     }
 
-    fn lower_infer(&mut self) -> Ty<'tcx> {
-        self.tcx.interner().mk_ty(TyKind::Error)
+    fn lower_infer(&mut self) -> TyId {
+        self.tcx.interner().mk_ty(Ty::Error)
     }
 
-    fn lower_missing(&mut self) -> Ty<'tcx> {
-        self.tcx.interner().mk_ty(TyKind::Error)
+    fn lower_missing(&mut self) -> TyId {
+        self.tcx.interner().mk_ty(Ty::Error)
     }
 }
 
@@ -479,14 +543,14 @@ impl<'a, 'tcx> TyLowerCtxt<'tcx> for CollectorCx<'a, 'tcx> {
 mod tests {
     use super::*;
     use yelang_hir::hir::core::{FnSig, Generics, Item, ItemKind, Visibility};
-    use yelang_hir::hir::body::{Body, Param};
+    use yelang_hir::hir::body::Body;
     use yelang_hir::hir::ty::Ty as HirTy;
     use yelang_hir::ids::BodyId;
     use yelang_hir::res::{PrimTy, IntTy as HirIntTy, Res};
     use yelang_interner::Symbol;
     use yelang_lexer::{Position, Span};
     use yelang_ty::primitive::IntTy;
-    use yelang_ty::ty::TyKind;
+    use yelang_ty::ty::Ty;
 
     fn dummy_span() -> Span {
         Span::new(Position::default(), Position::default())
@@ -529,33 +593,36 @@ mod tests {
             abi: None,
             bound_vars: vec![],
         };
+        let body = body_id(&mut hir);
+        let kind = hir.alloc_item_kind(ItemKind::Fn {
+            sig,
+            body,
+            generics: Generics {
+                params: vec![],
+                where_clause: None,
+                span: dummy_span(),
+            },
+        });
         let item = Item {
             def_id: DefId::new(2),
             ident: yelang_ast::Ident::new(Symbol::from(1), dummy_span()),
-            kind: ItemKind::Fn {
-                sig,
-                body: body_id(&mut hir),
-                generics: Generics {
-                    params: vec![],
-                    where_clause: None,
-                    span: dummy_span(),
-                },
-            },
+            kind,
             vis: Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
         };
         hir.items.insert(DefId::new(2), Some(item));
 
-        let mut tcx = TyCtxt::new(&hir);
+        let mut tcx = TyCtxt::new(hir);
         collect_crate_types(&mut tcx);
 
         let fn_sig = tcx.fn_sig(DefId::new(2)).expect("fn sig should be collected");
         assert_eq!(fn_sig.sig.inputs.len(), 1);
-        assert!(matches!(fn_sig.sig.output.kind(), TyKind::Int(IntTy::I32)));
+        let interner = tcx.interner();
+        assert!(matches!(interner.ty(fn_sig.sig.output), Ty::Int(IntTy::I32)));
 
         let item_ty = tcx.item_ty(DefId::new(2)).expect("item type should be collected");
-        assert!(matches!(item_ty.kind(), TyKind::FnDef(_)));
+        assert!(matches!(interner.ty(item_ty), Ty::FnDef(_)));
     }
 
     #[test]
@@ -563,38 +630,41 @@ mod tests {
         let mut hir = HirCrate::new(DefId::new(1));
         let i32_ty = hir_i32(&mut hir);
         let field = yelang_hir::hir::adt::FieldDef {
+            def_id: DefId::new(10),
             ident: yelang_ast::Ident::new(Symbol::from(2), dummy_span()),
             ty: i32_ty,
             span: dummy_span(),
             vis: Visibility::Public(dummy_span()),
             attrs: vec![],
         };
+        let kind = hir.alloc_item_kind(ItemKind::Struct {
+            data: VariantData::Struct { fields: vec![field] },
+            generics: Generics {
+                params: vec![],
+                where_clause: None,
+                span: dummy_span(),
+            },
+        });
         let item = Item {
             def_id: DefId::new(2),
             ident: yelang_ast::Ident::new(Symbol::from(1), dummy_span()),
-            kind: ItemKind::Struct {
-                data: VariantData::Struct { fields: vec![field] },
-                generics: Generics {
-                    params: vec![],
-                    where_clause: None,
-                    span: dummy_span(),
-                },
-            },
+            kind,
             vis: Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
         };
         hir.items.insert(DefId::new(2), Some(item));
 
-        let mut tcx = TyCtxt::new(&hir);
+        let mut tcx = TyCtxt::new(hir);
         collect_crate_types(&mut tcx);
 
         let adt = tcx.adt_def(DefId::new(2)).expect("adt should be collected");
         assert_eq!(adt.variants.len(), 1);
         assert_eq!(adt.variants[0].fields.len(), 1);
-        assert!(matches!(adt.variants[0].fields[0].ty.kind(), TyKind::Int(IntTy::I32)));
+        let interner = tcx.interner();
+        assert!(matches!(interner.ty(adt.variants[0].fields[0].ty), Ty::Int(IntTy::I32)));
 
         let item_ty = tcx.item_ty(DefId::new(2)).expect("item type should be collected");
-        assert!(matches!(item_ty.kind(), TyKind::Adt(_, _)));
+        assert!(matches!(interner.ty(item_ty), Ty::Adt(_, _)));
     }
 }

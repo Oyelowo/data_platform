@@ -46,7 +46,7 @@ fn find_impls_for_type<'a>(
         .filter(|item| {
             if let ItemKind::Impl {
                 self_ty, of_trait, ..
-            } = &item.kind
+            } = item.kind(&crate_hir)
             {
                 let ty = crate_hir.tys.get(*self_ty).expect("impl self type");
                 let name = match ty {
@@ -79,7 +79,7 @@ fn derive_copy_generates_empty_impl() {
     assert_eq!(impls.len(), 1, "expected one derived impl for Point");
     let ItemKind::Impl {
         items, of_trait, ..
-    } = &impls[0].kind
+    } = impls[0].kind(&crate_hir)
     else {
         panic!("expected impl item");
     };
@@ -96,7 +96,7 @@ fn derive_clone_generates_clone_method() {
     let (crate_hir, interner, resolved, _errors) = lower_with_derives(src);
     let impls = find_impls_for_type(&crate_hir, "Point", &interner, &resolved);
     assert_eq!(impls.len(), 1);
-    let ItemKind::Impl { items, .. } = &impls[0].kind else {
+    let ItemKind::Impl { items, .. } = impls[0].kind(&crate_hir) else {
         panic!("expected impl item");
     };
     assert_eq!(items.len(), 1);
@@ -112,7 +112,7 @@ fn derive_partial_eq_generates_eq_method() {
     let (crate_hir, interner, resolved, _errors) = lower_with_derives(src);
     let impls = find_impls_for_type(&crate_hir, "Point", &interner, &resolved);
     assert_eq!(impls.len(), 1);
-    let ItemKind::Impl { items, .. } = &impls[0].kind else {
+    let ItemKind::Impl { items, .. } = impls[0].kind(&crate_hir) else {
         panic!("expected impl item");
     };
     assert_eq!(items.len(), 1);
@@ -131,7 +131,7 @@ fn derive_eq_requires_partial_eq() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .filter(|item| matches!(item.kind, ItemKind::Impl { .. }))
+        .filter(|item| matches!(item.kind(&crate_hir), ItemKind::Impl { .. }))
         .collect();
     assert!(
         point_impls.is_empty(),
@@ -163,7 +163,7 @@ fn derive_clone_on_tuple_struct() {
     let (crate_hir, interner, resolved, _errors) = lower_with_derives(src);
     let impls = find_impls_for_type(&crate_hir, "Pair", &interner, &resolved);
     assert_eq!(impls.len(), 1);
-    let ItemKind::Impl { items, .. } = &impls[0].kind else {
+    let ItemKind::Impl { items, .. } = impls[0].kind(&crate_hir) else {
         panic!("expected impl");
     };
     assert_eq!(items.len(), 1);
@@ -189,7 +189,7 @@ fn derive_clone_on_enum() {
     let (crate_hir, interner, resolved, _errors) = lower_with_derives(src);
     let impls = find_impls_for_type(&crate_hir, "E", &interner, &resolved);
     assert_eq!(impls.len(), 1);
-    let ItemKind::Impl { items, .. } = &impls[0].kind else {
+    let ItemKind::Impl { items, .. } = impls[0].kind(&crate_hir) else {
         panic!("expected impl");
     };
     assert_eq!(items.len(), 1);
@@ -204,7 +204,7 @@ fn derive_partial_eq_on_enum() {
     let (crate_hir, interner, resolved, _errors) = lower_with_derives(src);
     let impls = find_impls_for_type(&crate_hir, "E", &interner, &resolved);
     assert_eq!(impls.len(), 1);
-    let ItemKind::Impl { items, .. } = &impls[0].kind else {
+    let ItemKind::Impl { items, .. } = impls[0].kind(&crate_hir) else {
         panic!("expected impl");
     };
     assert_eq!(items.len(), 1);
@@ -219,7 +219,7 @@ fn derive_debug_generates_fmt_method() {
     let (crate_hir, interner, resolved, _errors) = lower_with_derives(src);
     let impls = find_impls_for_type(&crate_hir, "Point", &interner, &resolved);
     assert_eq!(impls.len(), 1);
-    let ItemKind::Impl { items, .. } = &impls[0].kind else {
+    let ItemKind::Impl { items, .. } = impls[0].kind(&crate_hir) else {
         panic!("expected impl");
     };
     assert_eq!(items.len(), 1);
@@ -259,7 +259,7 @@ fn derive_copy_rejects_non_copy_field() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .filter(|item| matches!(item.kind, ItemKind::Impl { .. }))
+        .filter(|item| matches!(item.kind(&crate_hir), ItemKind::Impl { .. }))
         .collect();
     assert!(
         impls.is_empty(),
@@ -283,7 +283,7 @@ fn derive_eq_rejects_float_field() {
         .values()
         .filter_map(|opt| opt.as_ref())
         .filter(|item| {
-            if let ItemKind::Impl { of_trait, .. } = &item.kind {
+            if let ItemKind::Impl { of_trait, .. } = item.kind(&crate_hir) {
                 of_trait.is_some()
             } else {
                 false
@@ -412,7 +412,7 @@ fn assert_generic_self_ty(
     item: &Item,
     expected_param_count: usize,
 ) {
-    let ItemKind::Impl { self_ty, .. } = &item.kind else {
+    let ItemKind::Impl { self_ty, .. } = item.kind(&crate_hir) else {
         panic!("expected impl item");
     };
     let ty = crate_hir.tys.get(*self_ty).expect("self type");
@@ -434,12 +434,13 @@ fn assert_generic_self_ty(
 }
 
 fn assert_impl_has_bound(
+    crate_hir: &Crate,
     item: &Item,
     resolved: &ResolvedCrate,
     interner: &Interner,
     expected_trait: &str,
 ) {
-    let ItemKind::Impl { generics, .. } = &item.kind else {
+    let ItemKind::Impl { generics, .. } = item.kind(crate_hir) else {
         panic!("expected impl item");
     };
     let mut found = false;
@@ -473,7 +474,7 @@ fn derive_clone_generic_struct() {
     assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
     assert_generic_self_ty(&crate_hir, impl_item, 1);
-    assert_impl_has_bound(impl_item, &resolved, &interner, "Clone");
+    assert_impl_has_bound(&crate_hir, impl_item, &resolved, &interner, "Clone");
 }
 
 #[test]
@@ -486,7 +487,7 @@ fn derive_copy_generic_struct() {
     assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
     assert_generic_self_ty(&crate_hir, impl_item, 1);
-    assert_impl_has_bound(impl_item, &resolved, &interner, "Copy");
+    assert_impl_has_bound(&crate_hir, impl_item, &resolved, &interner, "Copy");
 }
 
 #[test]
@@ -499,7 +500,7 @@ fn derive_partial_eq_generic_struct() {
     assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
     assert_generic_self_ty(&crate_hir, impl_item, 1);
-    assert_impl_has_bound(impl_item, &resolved, &interner, "PartialEq");
+    assert_impl_has_bound(&crate_hir, impl_item, &resolved, &interner, "PartialEq");
 }
 
 #[test]
@@ -517,7 +518,7 @@ fn derive_eq_generic_struct_requires_partial_eq() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .filter(|item| matches!(item.kind, ItemKind::Impl { .. }))
+        .filter(|item| matches!(item.kind(&crate_hir), ItemKind::Impl { .. }))
         .collect();
     assert!(impls.is_empty(), "Eq derive without PartialEq should not generate impls");
 }
@@ -544,7 +545,7 @@ fn derive_debug_generic_struct() {
     assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
     assert_generic_self_ty(&crate_hir, impl_item, 1);
-    assert_impl_has_bound(impl_item, &resolved, &interner, "Debug");
+    assert_impl_has_bound(&crate_hir, impl_item, &resolved, &interner, "Debug");
 }
 
 #[test]
@@ -557,7 +558,7 @@ fn derive_clone_generic_enum() {
     assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     let impl_item = first_impl_for_type(&crate_hir, "E", &interner, &resolved);
     assert_generic_self_ty(&crate_hir, impl_item, 1);
-    assert_impl_has_bound(impl_item, &resolved, &interner, "Clone");
+    assert_impl_has_bound(&crate_hir, impl_item, &resolved, &interner, "Clone");
 }
 
 #[test]

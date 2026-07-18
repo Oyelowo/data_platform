@@ -21,7 +21,7 @@ use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate, TraitRef};
 use yelang_ty::subst::substitute;
-use yelang_ty::ty::{InferTy, ProjectionTy, Ty, TyKind, UniverseIndex};
+use yelang_ty::ty::{InferTy, ProjectionTy, Ty, TyId, UniverseIndex};
 
 use crate::builtin::{is_clone, is_copy, is_sized};
 use crate::candidate::{Candidate, CandidateSource};
@@ -35,17 +35,17 @@ use crate::solver_ctx::{BuiltinTraitKind, ImplInfo, SolverCtxt};
 const DEFAULT_MAX_DEPTH: usize = 64;
 
 /// The evaluation context for the trait solver.
-pub struct EvalCtxt<'tcx, C: SolverCtxt<'tcx>> {
+pub struct EvalCtxt<'a, C: SolverCtxt> {
     /// The interner for constructing and interning types.
-    interner: &'tcx Interner<'tcx>,
+    interner: &'a Interner,
     /// The solver context: trait definitions, impls, built-ins.
-    tcx: &'tcx C,
+    tcx: &'a C,
     /// The inference context for speculative unification.
-    infcx: InferCtxt<'tcx>,
+    infcx: InferCtxt,
     /// The search graph for cycle detection and caching.
-    search_graph: SearchGraph<'tcx>,
+    search_graph: SearchGraph,
     /// Currently accumulated nested goals.
-    nested_goals: Vec<NestedGoal<'tcx>>,
+    nested_goals: Vec<NestedGoal>,
     /// The highest universe index visible.
     max_universe: UniverseIndex,
     /// Remaining recursion depth budget.
@@ -54,12 +54,12 @@ pub struct EvalCtxt<'tcx, C: SolverCtxt<'tcx>> {
     tainted: Result<(), NoSolution>,
 }
 
-impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
-    pub fn new(interner: &'tcx Interner<'tcx>, tcx: &'tcx C) -> Self {
+impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
+    pub fn new(interner: &'a Interner, tcx: &'a C) -> Self {
         Self::with_max_depth(interner, tcx, DEFAULT_MAX_DEPTH)
     }
 
-    pub fn with_max_depth(interner: &'tcx Interner<'tcx>, tcx: &'tcx C, max_depth: usize) -> Self {
+    pub fn with_max_depth(interner: &'a Interner, tcx: &'a C, max_depth: usize) -> Self {
         Self {
             interner,
             tcx,
@@ -73,7 +73,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     }
 
     /// Entry point: evaluate a root goal.
-    pub fn evaluate_root_goal(&mut self, goal: Goal<'tcx>) -> SolverResult<'tcx> {
+    pub fn evaluate_root_goal(&mut self, goal: Goal) -> SolverResult {
         let canonical_goal =
             canonicalize_goal(goal, self.interner, &mut self.infcx, self.max_universe);
         self.evaluate_canonical_goal(canonical_goal)
@@ -81,13 +81,13 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 
     /// Borrow the inference context, e.g. to inspect resolved type variables
     /// after a successful root evaluation.
-    pub fn infcx(&self) -> &InferCtxt<'tcx> {
+    pub fn infcx(&self) -> &InferCtxt {
         &self.infcx
     }
 
     /// Mutable borrow of the inference context, useful for creating fresh
     /// inference variables before passing a goal into the solver.
-    pub fn infcx_mut(&mut self) -> &mut InferCtxt<'tcx> {
+    pub fn infcx_mut(&mut self) -> &mut InferCtxt {
         &mut self.infcx
     }
 
@@ -98,8 +98,8 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// Evaluate a canonical goal.
     fn evaluate_canonical_goal(
         &mut self,
-        canonical_goal: CanonicalGoal<'tcx>,
-    ) -> SolverResult<'tcx> {
+        canonical_goal: CanonicalGoal,
+    ) -> SolverResult {
         // 1. Check the cache, respecting the remaining depth budget.
         if let Some(entry) = self
             .search_graph
@@ -165,8 +165,8 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     fn handle_cycle(
         &mut self,
         stack_index: usize,
-        canonical_goal: CanonicalGoal<'tcx>,
-    ) -> SolverResult<'tcx> {
+        canonical_goal: CanonicalGoal,
+    ) -> SolverResult {
         let is_coinductive = self.is_coinductive_goal(&canonical_goal.value);
 
         self.search_graph.mark_cycle(stack_index);
@@ -188,7 +188,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     }
 
     /// True if the given goal may be solved coinductively.
-    fn is_coinductive_goal(&self, goal: &Goal<'tcx>) -> bool {
+    fn is_coinductive_goal(&self, goal: &Goal) -> bool {
         match goal.predicate {
             Predicate::Trait(trait_pred) => {
                 if let Some(kind) = self.tcx.builtin_kind(trait_pred.trait_ref.def_id) {
@@ -205,7 +205,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     }
 
     /// The main solver logic: dispatch on predicate kind.
-    fn compute_goal(&mut self, goal: CanonicalGoal<'tcx>) -> SolverResult<'tcx> {
+    fn compute_goal(&mut self, goal: CanonicalGoal) -> SolverResult {
         let instantiated = self.instantiate_canonical_goal(goal);
 
         match instantiated.predicate {
@@ -218,7 +218,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
             }
             Predicate::WellFormed(wf_pred) => {
                 // TODO(Phase 5): structural well-formedness.
-                if matches!(wf_pred.ty.kind(), TyKind::Error) {
+                if matches!(self.interner.ty(wf_pred.ty), Ty::Error) {
                     Err(NoSolution)
                 } else {
                     Ok(self.make_response(Certainty::Yes))
@@ -237,7 +237,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 
     /// Instantiate a canonical goal, replacing bound variables with fresh
     /// inference variables.
-    fn instantiate_canonical_goal(&mut self, goal: CanonicalGoal<'tcx>) -> Goal<'tcx> {
+    fn instantiate_canonical_goal(&mut self, goal: CanonicalGoal) -> Goal {
         crate::instantiate::instantiate(goal, self.interner, &mut self.infcx)
     }
 
@@ -248,9 +248,9 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// Compute a trait goal.
     fn compute_trait_goal(
         &mut self,
-        goal: Goal<'tcx>,
-        trait_pred: TraitPredicate<'tcx>,
-    ) -> SolverResult<'tcx> {
+        goal: Goal,
+        trait_pred: TraitPredicate,
+    ) -> SolverResult {
         let candidates = self.assemble_candidates(goal, trait_pred);
 
         if candidates.is_empty() {
@@ -260,15 +260,15 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
             let self_ty = self
                 .trait_self_ty(&trait_pred.trait_ref)
                 .map(|ty| self.resolve_ty(ty))
-                .unwrap_or(self.interner.mk_ty(TyKind::Error));
-            if matches!(self_ty.kind(), TyKind::Infer(InferTy::TyVar(_))) {
+                .unwrap_or(self.interner.mk_ty(Ty::Error));
+            if matches!(self.interner.ty(self_ty), Ty::Infer(InferTy::TyVar(_))) {
                 return Ok(self.make_response(Certainty::Maybe));
             }
             return Err(NoSolution);
         }
 
         // Evaluate all candidates in isolation and collect their results.
-        let mut yes_candidates: Vec<Candidate<'tcx>> = Vec::new();
+        let mut yes_candidates: Vec<Candidate> = Vec::new();
         let mut maybe_count = 0;
 
         for candidate in &candidates {
@@ -330,9 +330,9 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// Assemble candidates for a trait goal.
     fn assemble_candidates(
         &mut self,
-        goal: Goal<'tcx>,
-        trait_pred: TraitPredicate<'tcx>,
-    ) -> Vec<Candidate<'tcx>> {
+        goal: Goal,
+        trait_pred: TraitPredicate,
+    ) -> Vec<Candidate> {
         let mut candidates = Vec::new();
         let is_positive = trait_pred.polarity == yelang_ty::ty::ImplPolarity::Positive;
 
@@ -395,8 +395,8 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// `T: Bar` and `T: Baz` with the same polarity as the original goal.
     fn elaborate_supertraits(
         &mut self,
-        goal: Goal<'tcx>,
-        trait_pred: TraitPredicate<'tcx>,
+        goal: Goal,
+        trait_pred: TraitPredicate,
         base_certainty: Certainty,
     ) -> Result<Certainty, NoSolution> {
         let trait_info = match self.tcx.trait_info(trait_pred.trait_ref.def_id) {
@@ -426,9 +426,9 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// and nested-goal proofs performed by the candidate.
     fn try_candidate(
         &mut self,
-        goal: Goal<'tcx>,
-        candidate: &Candidate<'tcx>,
-    ) -> SolverResult<'tcx> {
+        goal: Goal,
+        candidate: &Candidate,
+    ) -> SolverResult {
         match &candidate.source {
             CandidateSource::ParamEnv(assumption) => {
                 self.try_param_env_candidate(goal, *assumption)
@@ -442,9 +442,9 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 
     fn try_param_env_candidate(
         &mut self,
-        goal: Goal<'tcx>,
-        assumption: Predicate<'tcx>,
-    ) -> SolverResult<'tcx> {
+        goal: Goal,
+        assumption: Predicate,
+    ) -> SolverResult {
         let Predicate::Trait(assumption) = assumption else {
             return Err(NoSolution);
         };
@@ -461,7 +461,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
         }
 
         self.infcx
-            .eq_generic_args(&assumption.trait_ref.args, &goal_pred.trait_ref.args)
+            .eq_generic_args(self.interner, &assumption.trait_ref.args, &goal_pred.trait_ref.args)
             .map_err(|_| NoSolution)?;
 
         Ok(self.make_response(Certainty::Yes))
@@ -469,18 +469,18 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 
     fn try_builtin_candidate(
         &mut self,
-        goal: Goal<'tcx>,
+        goal: Goal,
         kind: BuiltinTraitKind,
-    ) -> SolverResult<'tcx> {
+    ) -> SolverResult {
         let Predicate::Trait(trait_pred) = goal.predicate else {
             return Err(NoSolution);
         };
         let self_ty = self.trait_self_ty(&trait_pred.trait_ref)?;
 
         let satisfied = match kind {
-            BuiltinTraitKind::Sized => is_sized(self_ty.kind()),
-            BuiltinTraitKind::Copy => is_copy(self_ty.kind()),
-            BuiltinTraitKind::Clone => is_clone(self_ty.kind()),
+            BuiltinTraitKind::Sized => is_sized(self_ty, self.interner),
+            BuiltinTraitKind::Copy => is_copy(self_ty, self.interner),
+            BuiltinTraitKind::Clone => is_clone(self_ty, self.interner),
         };
 
         if satisfied {
@@ -492,9 +492,9 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 
     fn try_user_impl_candidate(
         &mut self,
-        goal: Goal<'tcx>,
-        impl_info: &ImplInfo<'tcx>,
-    ) -> SolverResult<'tcx> {
+        goal: Goal,
+        impl_info: &ImplInfo,
+    ) -> SolverResult {
         let goal_pred = match goal.predicate {
             Predicate::Trait(tp) => tp,
             _ => return Err(NoSolution),
@@ -516,11 +516,11 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// if it is merely ambiguous (`Maybe`).
     fn try_impl_substitution(
         &mut self,
-        param_env: ParamEnv<'tcx>,
-        goal_trait_ref: TraitRef<'tcx>,
+        param_env: ParamEnv,
+        goal_trait_ref: TraitRef,
         goal_polarity: yelang_ty::ty::ImplPolarity,
-        impl_info: &ImplInfo<'tcx>,
-    ) -> Result<Option<Substitution<'tcx>>, NoSolution> {
+        impl_info: &ImplInfo,
+    ) -> Result<Option<Substitution>, NoSolution> {
         if impl_info.trait_ref.def_id != goal_trait_ref.def_id {
             return Err(NoSolution);
         }
@@ -539,7 +539,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
             .collect();
 
         self.infcx
-            .eq_trait_refs(&impl_trait_ref, &goal_trait_ref)
+            .eq_trait_refs(self.interner, &impl_trait_ref, &goal_trait_ref)
             .map_err(|_| NoSolution)?;
 
         let mut certainty = Certainty::Yes;
@@ -558,7 +558,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     }
 
     /// Create a fresh substitution for an impl's generic parameters.
-    fn fresh_impl_substitution(&mut self, generic_param_count: usize) -> Substitution<'tcx> {
+    fn fresh_impl_substitution(&mut self, generic_param_count: usize) -> Substitution {
         let mut subst_args = Vec::with_capacity(generic_param_count);
         for _ in 0..generic_param_count {
             subst_args.push(GenericArg::Type(self.infcx.new_ty_var(self.interner)));
@@ -566,7 +566,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
         Substitution::from_args(subst_args)
     }
 
-    fn try_auto_trait_candidate(&mut self, goal: Goal<'tcx>) -> SolverResult<'tcx> {
+    fn try_auto_trait_candidate(&mut self, goal: Goal) -> SolverResult {
         let trait_pred = match goal.predicate {
             Predicate::Trait(tp) => tp,
             _ => return Err(NoSolution),
@@ -576,27 +576,27 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
         let self_ty = self.resolve_ty(self_ty);
 
         // Collect all component types that must satisfy the auto trait.
-        let mut component_tys: Vec<Ty<'tcx>> = Vec::new();
+        let mut component_tys: Vec<TyId> = Vec::new();
 
-        match self_ty.kind() {
+        match self.interner.ty(self_ty) {
             // Primitives, functions, and never are always auto-trait-safe.
-            TyKind::Bool
-            | TyKind::Char
-            | TyKind::Int(_)
-            | TyKind::Uint(_)
-            | TyKind::Float(_)
-            | TyKind::Str
-            | TyKind::Never
-            | TyKind::FnPtr(_)
-            | TyKind::FnDef(_)
-            | TyKind::TypeLit(_)
-            | TyKind::Utility(_, _)
-            | TyKind::Error => {}
+            Ty::Bool
+            | Ty::Char
+            | Ty::Int(_)
+            | Ty::Uint(_)
+            | Ty::Float(_)
+            | Ty::Str
+            | Ty::Never
+            | Ty::FnPtr(_)
+            | Ty::FnDef(_)
+            | Ty::TypeLit(_)
+            | Ty::Utility(_, _)
+            | Ty::Error => {}
 
             // ADTs: require the trait for every field (with the ADT's generic
             // arguments substituted) and every type argument.
-            TyKind::Adt(adt, args) => {
-                let subst = self.adt_substitution(args);
+            Ty::Adt(adt, args) => {
+                let subst = self.adt_substitution(&args);
                 for field_ty in self.tcx.adt_field_tys(adt.def_id) {
                     component_tys.push(substitute(self.interner, *field_ty, &subst));
                 }
@@ -608,7 +608,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
             }
 
             // Tuples: require the trait for every element.
-            TyKind::Tuple(args) => {
+            Ty::Tuple(args) => {
                 for arg in args.iter() {
                     if let GenericArg::Type(ty) = arg {
                         component_tys.push(*ty);
@@ -617,31 +617,31 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
             }
 
             // Arrays and slices: require the trait for the element type.
-            TyKind::Array(ty, _) | TyKind::Slice(ty) => {
-                component_tys.push(*ty);
+            Ty::Array(ty, _) | Ty::Slice(ty) => {
+                component_tys.push(ty);
             }
 
             // References and raw pointers: require the trait for the pointee.
-            TyKind::Ref(ty, _) | TyKind::RawPtr(yelang_ty::ty::TypeAndMut { ty, .. }) => {
-                component_tys.push(*ty);
+            Ty::Ref(ty, _) | Ty::RawPtr(yelang_ty::ty::TypeAndMut { ty, .. }) => {
+                component_tys.push(ty);
             }
 
             // Anonymous structs: require the trait for every field.
-            TyKind::AnonStruct(anon) => {
+            Ty::AnonStruct(anon) => {
                 for field in anon.fields.iter() {
                     component_tys.push(field.ty);
                 }
             }
 
             // Unions: require the trait for both alternatives.
-            TyKind::Union(a, b) => {
-                component_tys.push(*a);
-                component_tys.push(*b);
+            Ty::Union(a, b) => {
+                component_tys.push(a);
+                component_tys.push(b);
             }
 
             // Projections: try to normalize and derive on the normalized type.
-            TyKind::Projection(projection_ty) => {
-                if let Some(ty) = self.normalize_projection_ty(goal.param_env, *projection_ty) {
+            Ty::Projection(projection_ty) => {
+                if let Some(ty) = self.normalize_projection_ty(goal.param_env, projection_ty) {
                     component_tys.push(ty);
                 } else {
                     return Ok(self.make_response(Certainty::Maybe));
@@ -649,17 +649,17 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
             }
 
             // Aliases: conservatively ambiguous until alias expansion is implemented.
-            TyKind::Alias(_) => {
+            Ty::Alias(_) => {
                 return Ok(self.make_response(Certainty::Maybe));
             }
 
             // Types that cannot be resolved yet.
-            TyKind::Infer(_) | TyKind::Param(_) | TyKind::Placeholder(_) | TyKind::Bound(_, _) => {
+            Ty::Infer(_) | Ty::Param(_) | Ty::Placeholder(_) | Ty::Bound(_, _) => {
                 return Ok(self.make_response(Certainty::Maybe));
             }
 
             // Trait objects are conservatively ambiguous.
-            TyKind::Dynamic(_) => {
+            Ty::Dynamic(_) => {
                 return Ok(self.make_response(Certainty::Maybe));
             }
         }
@@ -687,8 +687,8 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// In Yelang the first generic argument of a `TraitRef` is always `Self`.
     fn trait_self_ty(
         &self,
-        trait_ref: &TraitRef<'tcx>,
-    ) -> Result<Ty<'tcx>, NoSolution> {
+        trait_ref: &TraitRef,
+    ) -> Result<TyId, NoSolution> {
         trait_ref
             .args
             .iter()
@@ -708,23 +708,23 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// the expected type (if any).
     fn compute_projection_like_goal(
         &mut self,
-        param_env: ParamEnv<'tcx>,
-        projection_ty: ProjectionTy<'tcx>,
-        expected: Option<Ty<'tcx>>,
-    ) -> SolverResult<'tcx> {
+        param_env: ParamEnv,
+        projection_ty: ProjectionTy,
+        expected: Option<TyId>,
+    ) -> SolverResult {
         let candidates = self.assemble_projection_candidates(param_env, projection_ty);
 
-        let mut yes_results: Vec<(Candidate<'tcx>, Ty<'tcx>)> = Vec::new();
+        let mut yes_results: Vec<(Candidate, TyId)> = Vec::new();
         let mut maybe = false;
 
         for candidate in candidates {
-            let probe_result: Result<Option<Ty<'tcx>>, NoSolution> = self.probe(|this| {
+            let probe_result: Result<Option<TyId>, NoSolution> = self.probe(|this| {
                 let ty = match this.try_projection_candidate(param_env, projection_ty, &candidate)? {
                     Some(ty) => ty,
                     None => return Ok(None),
                 };
                 if let Some(expected) = expected {
-                    this.infcx.eq(ty, expected).map_err(|_| NoSolution)?;
+                    this.infcx.eq(this.interner, ty, expected).map_err(|_| NoSolution)?;
                 }
                 Ok(Some(ty))
             });
@@ -763,7 +763,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
         let selected = &yes_results[0].0;
         if let Some(ty) = self.try_projection_candidate(param_env, projection_ty, selected)? {
             if let Some(expected) = expected {
-                self.infcx.eq(ty, expected).map_err(|_| NoSolution)?;
+                self.infcx.eq(self.interner, ty, expected).map_err(|_| NoSolution)?;
             }
             Ok(self.make_response(Certainty::Yes))
         } else {
@@ -776,9 +776,9 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// Assemble candidates that could potentially normalize a projection type.
     fn assemble_projection_candidates(
         &mut self,
-        param_env: ParamEnv<'tcx>,
-        projection_ty: ProjectionTy<'tcx>,
-    ) -> Vec<Candidate<'tcx>> {
+        param_env: ParamEnv,
+        projection_ty: ProjectionTy,
+    ) -> Vec<Candidate> {
         let trait_pred = TraitPredicate {
             trait_ref: projection_ty.trait_ref,
             polarity: yelang_ty::ty::ImplPolarity::Positive,
@@ -794,10 +794,10 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// type on `Yes`, `None` on ambiguity (`Maybe`), and `NoSolution` on failure.
     fn try_projection_candidate(
         &mut self,
-        param_env: ParamEnv<'tcx>,
-        projection_ty: ProjectionTy<'tcx>,
-        candidate: &Candidate<'tcx>,
-    ) -> Result<Option<Ty<'tcx>>, NoSolution> {
+        param_env: ParamEnv,
+        projection_ty: ProjectionTy,
+        candidate: &Candidate,
+    ) -> Result<Option<TyId>, NoSolution> {
         match &candidate.source {
             CandidateSource::UserImpl(impl_info) => {
                 match self.try_impl_substitution(
@@ -832,11 +832,11 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     /// when a unique, non-ambiguous impl is available.
     fn normalize_projection_ty(
         &mut self,
-        param_env: ParamEnv<'tcx>,
-        projection_ty: ProjectionTy<'tcx>,
-    ) -> Option<Ty<'tcx>> {
+        param_env: ParamEnv,
+        projection_ty: ProjectionTy,
+    ) -> Option<TyId> {
         let candidates = self.assemble_projection_candidates(param_env, projection_ty);
-        let mut yes_results: Vec<Ty<'tcx>> = Vec::new();
+        let mut yes_results: Vec<TyId> = Vec::new();
         let mut maybe = false;
 
         for candidate in candidates {
@@ -865,12 +865,12 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 
     /// Build a substitution that maps an ADT's type parameters to the concrete
     /// arguments used in a particular `Adt` type.
-    fn adt_substitution(&self, args: &yelang_ty::list::List<GenericArg<'tcx>>) -> Substitution<'tcx> {
+    fn adt_substitution(&self, args: &yelang_ty::list::List<GenericArg>) -> Substitution {
         Substitution::from_args(args.iter().cloned().collect())
     }
 
     /// Resolve inference variables inside a substitution as far as possible.
-    fn resolve_substitution(&mut self, subst: &Substitution<'tcx>) -> Substitution<'tcx> {
+    fn resolve_substitution(&mut self, subst: &Substitution) -> Substitution {
         let args: Vec<_> = subst
             .args
             .iter()
@@ -883,12 +883,12 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     }
 
     /// Recursively resolve general type variables.
-    fn resolve_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
+    fn resolve_ty(&mut self, ty: TyId) -> TyId {
         let mut current = ty;
         loop {
-            match current.kind() {
-                TyKind::Infer(InferTy::TyVar(vid)) => {
-                    let value = self.infcx.probe_ty_var(*vid).clone();
+            match self.interner.ty(current) {
+                Ty::Infer(InferTy::TyVar(vid)) => {
+                    let value = self.infcx.probe_ty_var(vid).clone();
                     match value {
                         TypeVarValue::Known(known) => current = known,
                         TypeVarValue::Unknown => return current,
@@ -904,7 +904,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     // -----------------------------------------------------------------------
 
     /// Add a nested goal, consuming one level of recursion depth.
-    fn add_goal(&mut self, goal: Goal<'tcx>) -> SolverResult<'tcx> {
+    fn add_goal(&mut self, goal: Goal) -> SolverResult {
         if self.available_depth == 0 {
             return Ok(self.make_response(Certainty::Maybe));
         }
@@ -942,7 +942,7 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
     // -----------------------------------------------------------------------
 
     /// Create a response with the given certainty.
-    fn make_response(&self, certainty: Certainty) -> CanonicalResponse<'tcx> {
+    fn make_response(&self, certainty: Certainty) -> CanonicalResponse {
         Canonical::new(
             Response {
                 certainty,
@@ -958,12 +958,12 @@ impl<'tcx, C: SolverCtxt<'tcx>> EvalCtxt<'tcx, C> {
 // Helper extension
 // -----------------------------------------------------------------------------
 
-trait ExpectTypeExt<'tcx> {
-    fn expect_type_checked(self) -> Option<Ty<'tcx>>;
+trait ExpectTypeExt {
+    fn expect_type_checked(self) -> Option<TyId>;
 }
 
-impl<'tcx> ExpectTypeExt<'tcx> for GenericArg<'tcx> {
-    fn expect_type_checked(self) -> Option<Ty<'tcx>> {
+impl ExpectTypeExt for GenericArg {
+    fn expect_type_checked(self) -> Option<TyId> {
         match self {
             GenericArg::Type(ty) => Some(ty),
             GenericArg::Const(_) => None,

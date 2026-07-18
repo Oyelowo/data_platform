@@ -1,49 +1,43 @@
-/*! Arena-based interner for types and lists.
+/*! Arena-based interner for types, constants, and lists.
  *
  * The `Interner` provides hash-consing: structurally equal types (and lists)
- * share the same allocation, so equality is a single pointer comparison.
+ * share the same ID, so equality is a single integer comparison.
  */
 
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
 
-use bumpalo::Bump;
 use rustc_hash::FxHashMap;
+use yelang_arena::{ConstId, IndexVec, TyId};
 
+use crate::generic::GenericArg;
 use crate::list::List;
-use crate::ty::{Ty, TyKind};
+use crate::ty::{Const, ConstData, Ty};
 
 /// An interning arena for the type system.
 ///
-/// All `Ty` and `List` values are allocated inside `Bump` and tracked in
-/// hash maps so that duplicate structures are deduplicated.
-pub struct Interner<'tcx> {
-    arena: Bump,
-    types: RefCell<FxHashMap<TyKind<'tcx>, Ty<'tcx>>>,
-    ty_lists: RefCell<FxHashMap<SliceKey<Ty<'tcx>>, List<Ty<'tcx>>>>,
-    generic_args: RefCell<
-        FxHashMap<
-            SliceKey<crate::generic::GenericArg<'tcx>>,
-            List<crate::generic::GenericArg<'tcx>>,
-        >,
-    >,
-    bound_var_lists: RefCell<
-        FxHashMap<
-            SliceKey<crate::binder::BoundVariableKind>,
-            List<crate::binder::BoundVariableKind>,
-        >,
-    >,
-    existential_predicates: RefCell<
-        FxHashMap<
-            SliceKey<crate::ty::ExistentialPredicate<'tcx>>,
-            List<crate::ty::ExistentialPredicate<'tcx>>,
-        >,
-    >,
-    anon_struct_fields: RefCell<FxHashMap<SliceKey<crate::ty::AnonField<'tcx>>, List<crate::ty::AnonField<'tcx>>>>,
-    predicates: RefCell<FxHashMap<SliceKey<crate::predicate::Predicate<'tcx>>, List<crate::predicate::Predicate<'tcx>>>>,
+/// All `TyId`/`ConstId` IDs are backed by dense `IndexVec` tables, and all
+/// `List` values are allocated inside a `bumpalo::Bump` arena.
+pub struct Interner {
+    /// Dense storage for interned type constructors.
+    types: RefCell<IndexVec<TyId, Ty>>,
+    /// Hash-consing map from `Ty` to its `TyId`.
+    type_map: RefCell<FxHashMap<Ty, TyId>>,
+    /// Dense storage for interned constants.
+    consts: RefCell<IndexVec<ConstId, ConstData>>,
+    /// Hash-consing map from `ConstData` to its `ConstId`.
+    const_map: RefCell<FxHashMap<ConstData, ConstId>>,
+
+    // List interning. Lists are immutable, hash-consed slices allocated in the
+    // bump arena so pointer equality implies structural equality.
+    arena: bumpalo::Bump,
+    ty_lists: RefCell<FxHashMap<SliceKey<TyId>, List<TyId>>>,
+    generic_args: RefCell<FxHashMap<SliceKey<GenericArg>, List<GenericArg>>>,
+    bound_var_lists: RefCell<FxHashMap<SliceKey<crate::binder::BoundVariableKind>, List<crate::binder::BoundVariableKind>>>,
+    existential_predicates: RefCell<FxHashMap<SliceKey<crate::ty::ExistentialPredicate>, List<crate::ty::ExistentialPredicate>>>,
+    anon_struct_fields: RefCell<FxHashMap<SliceKey<crate::ty::AnonField>, List<crate::ty::AnonField>>>,
+    predicates: RefCell<FxHashMap<SliceKey<crate::predicate::Predicate>, List<crate::predicate::Predicate>>>,
     canonical_var_kinds: RefCell<FxHashMap<SliceKey<crate::canonical::CanonicalVarKind>, List<crate::canonical::CanonicalVarKind>>>,
-    _marker: PhantomData<&'tcx ()>,
 }
 
 /// A hash key that compares slices by their **contents**, not by pointer.
@@ -63,7 +57,7 @@ impl<T: Copy + PartialEq> PartialEq for SliceKey<T> {
         // SAFETY: Both pointers are valid for `len` elements (they come from slices).
         unsafe {
             std::slice::from_raw_parts(self.ptr, self.len)
-                == std::slice::from_raw_parts(other.ptr, other.len)
+                == std::slice::from_raw_parts(other.ptr, self.len)
         }
     }
 }
@@ -79,11 +73,14 @@ impl<T: Copy + Hash> Hash for SliceKey<T> {
     }
 }
 
-impl<'tcx> Interner<'tcx> {
+impl Interner {
     pub fn new() -> Self {
         Self {
-            arena: Bump::new(),
-            types: RefCell::new(FxHashMap::default()),
+            types: RefCell::new(IndexVec::new()),
+            type_map: RefCell::new(FxHashMap::default()),
+            consts: RefCell::new(IndexVec::new()),
+            const_map: RefCell::new(FxHashMap::default()),
+            arena: bumpalo::Bump::new(),
             ty_lists: RefCell::new(FxHashMap::default()),
             generic_args: RefCell::new(FxHashMap::default()),
             bound_var_lists: RefCell::new(FxHashMap::default()),
@@ -91,25 +88,51 @@ impl<'tcx> Interner<'tcx> {
             anon_struct_fields: RefCell::new(FxHashMap::default()),
             predicates: RefCell::new(FxHashMap::default()),
             canonical_var_kinds: RefCell::new(FxHashMap::default()),
-            _marker: PhantomData,
         }
     }
 
-    /// Intern a `TyKind` and return the canonical `Ty`.
-    pub fn mk_ty(&self, kind: TyKind<'tcx>) -> Ty<'tcx> {
-        if let Some(&existing) = self.types.borrow().get(&kind) {
+    /// Look up a `Ty` by ID.
+    pub fn ty(&self, id: TyId) -> Ty {
+        self.types.borrow()[id]
+    }
+
+    /// Look up a `ConstData` kind by ID.
+    pub fn const_kind(&self, id: ConstId) -> Const {
+        self.consts.borrow()[id].kind
+    }
+
+    /// Look up a `ConstData` type by ID.
+    pub fn const_ty(&self, id: ConstId) -> TyId {
+        self.consts.borrow()[id].ty
+    }
+
+    /// Intern a `Ty` and return the canonical `TyId`.
+    pub fn mk_ty(&self, ty: Ty) -> TyId {
+        if let Some(&existing) = self.type_map.borrow().get(&ty) {
             return existing;
         }
-        let ptr = self.arena.alloc(kind);
-        // SAFETY: The arena is owned by `Interner<'tcx>` and lives for `'tcx`.
-        let ptr: &'tcx TyKind<'tcx> = unsafe { std::mem::transmute(ptr) };
-        let ty = Ty::from_ptr(ptr);
-        self.types.borrow_mut().insert(kind, ty);
-        ty
+        let id = self.types.borrow_mut().push(ty);
+        self.type_map.borrow_mut().insert(ty, id);
+        id
+    }
+
+    /// Intern a `ConstData` and return the canonical `ConstId`.
+    pub fn mk_const(&self, data: ConstData) -> ConstId {
+        if let Some(&existing) = self.const_map.borrow().get(&data) {
+            return existing;
+        }
+        let id = self.consts.borrow_mut().push(data);
+        self.const_map.borrow_mut().insert(data, id);
+        id
+    }
+
+    /// Convenience: intern a constant from its kind and type.
+    pub fn mk_const_from_parts(&self, kind: Const, ty: TyId) -> ConstId {
+        self.mk_const(ConstData { kind, ty })
     }
 
     /// Intern a list of types.
-    pub fn mk_ty_list(&self, elems: &[Ty<'tcx>]) -> List<Ty<'tcx>> {
+    pub fn mk_ty_list(&self, elems: &[TyId]) -> List<TyId> {
         if elems.is_empty() {
             return List::empty();
         }
@@ -121,8 +144,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        // SAFETY: The arena lives for `'tcx`.
-        let slice: &'tcx [Ty<'tcx>] = unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -135,8 +156,8 @@ impl<'tcx> Interner<'tcx> {
     /// Intern a list of generic arguments.
     pub fn mk_generic_args(
         &self,
-        elems: &[crate::generic::GenericArg<'tcx>],
-    ) -> List<crate::generic::GenericArg<'tcx>> {
+        elems: &[GenericArg],
+    ) -> List<GenericArg> {
         if elems.is_empty() {
             return List::empty();
         }
@@ -148,7 +169,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [crate::generic::GenericArg<'tcx>] = unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -174,7 +194,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [crate::binder::BoundVariableKind] = unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -185,17 +204,15 @@ impl<'tcx> Interner<'tcx> {
     }
 
     /// Allocate a value in the arena.
-    pub fn alloc<T>(&self, value: T) -> &'tcx T {
-        let ptr = self.arena.alloc(value);
-        // SAFETY: The arena lives for `'tcx`.
-        unsafe { std::mem::transmute(ptr) }
+    pub fn alloc<T>(&self, value: T) -> &T {
+        self.arena.alloc(value)
     }
 
     /// Intern a list of existential predicates.
     pub fn mk_existential_predicates(
         &self,
-        elems: &[crate::ty::ExistentialPredicate<'tcx>],
-    ) -> List<crate::ty::ExistentialPredicate<'tcx>> {
+        elems: &[crate::ty::ExistentialPredicate],
+    ) -> List<crate::ty::ExistentialPredicate> {
         if elems.is_empty() {
             return List::empty();
         }
@@ -207,8 +224,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [crate::ty::ExistentialPredicate<'tcx>] =
-            unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -221,8 +236,8 @@ impl<'tcx> Interner<'tcx> {
     /// Intern a list of anonymous struct fields.
     pub fn mk_anon_struct_fields(
         &self,
-        elems: &[crate::ty::AnonField<'tcx>],
-    ) -> List<crate::ty::AnonField<'tcx>> {
+        elems: &[crate::ty::AnonField],
+    ) -> List<crate::ty::AnonField> {
         if elems.is_empty() {
             return List::empty();
         }
@@ -234,7 +249,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [crate::ty::AnonField<'tcx>] = unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -247,8 +261,8 @@ impl<'tcx> Interner<'tcx> {
     /// Intern a list of predicates.
     pub fn mk_predicates(
         &self,
-        elems: &[crate::predicate::Predicate<'tcx>],
-    ) -> List<crate::predicate::Predicate<'tcx>> {
+        elems: &[crate::predicate::Predicate],
+    ) -> List<crate::predicate::Predicate> {
         if elems.is_empty() {
             return List::empty();
         }
@@ -260,8 +274,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [crate::predicate::Predicate<'tcx>] =
-            unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -287,8 +299,6 @@ impl<'tcx> Interner<'tcx> {
             return existing;
         }
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [crate::canonical::CanonicalVarKind] =
-            unsafe { std::mem::transmute(slice) };
         let list = List::from_slice(slice);
         let key = SliceKey {
             ptr: slice.as_ptr(),
@@ -301,27 +311,24 @@ impl<'tcx> Interner<'tcx> {
     /// Generic list interning for types that do not have a dedicated table.
     ///
     /// Prefer the dedicated `mk_*` methods for known list kinds; this is a
-    /// fallback for one-off lists (e.g., `List<Ty>` used in tests).
-    pub fn mk_list<T: Copy + 'tcx>(&self, elems: &[T]) -> List<T> {
+    /// fallback for one-off lists (e.g., `List<TyId>` used in tests).
+    pub fn mk_list<T: Copy>(&self, elems: &[T]) -> List<T> {
         if elems.is_empty() {
             return List::empty();
         }
         // Fallback: allocate without deduplication. Callers that need
         // deduplication should use a dedicated interner method.
         let slice = self.arena.alloc_slice_copy(elems);
-        let slice: &'tcx [T] = unsafe { std::mem::transmute(slice) };
         List::from_slice(slice)
     }
 
     /// Allocate a slice copy in the arena.
-    pub fn alloc_slice<T: Copy>(&self, slice: &[T]) -> &'tcx [T] {
-        let ptr = self.arena.alloc_slice_copy(slice);
-        // SAFETY: The arena lives for `'tcx`.
-        unsafe { std::mem::transmute(ptr) }
+    pub fn alloc_slice<T: Copy>(&self, slice: &[T]) -> &[T] {
+        self.arena.alloc_slice_copy(slice)
     }
 }
 
-impl<'tcx> Default for Interner<'tcx> {
+impl Default for Interner {
     fn default() -> Self {
         Self::new()
     }
@@ -331,24 +338,22 @@ impl<'tcx> Default for Interner<'tcx> {
 mod tests {
     use super::*;
     use crate::primitive::{IntTy, UintTy};
-    use crate::ty::TyKind;
+    use crate::ty::Ty;
 
     #[test]
     fn intern_ty_deduplicates() {
         let interner = Interner::new();
-        let ty1 = interner.mk_ty(TyKind::Bool);
-        let ty2 = interner.mk_ty(TyKind::Bool);
+        let ty1 = interner.mk_ty(Ty::Bool);
+        let ty2 = interner.mk_ty(Ty::Bool);
         assert_eq!(ty1, ty2);
-        // Pointer equality
-        assert_eq!(ty1.as_ptr(), ty2.as_ptr());
     }
 
     #[test]
     fn intern_different_types_distinct() {
         let interner = Interner::new();
-        let t_bool = interner.mk_ty(TyKind::Bool);
-        let t_i32 = interner.mk_ty(TyKind::Int(IntTy::I32));
-        let t_u32 = interner.mk_ty(TyKind::Uint(UintTy::U32));
+        let t_bool = interner.mk_ty(Ty::Bool);
+        let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let t_u32 = interner.mk_ty(Ty::Uint(UintTy::U32));
         assert_ne!(t_bool, t_i32);
         assert_ne!(t_i32, t_u32);
     }
@@ -356,8 +361,8 @@ mod tests {
     #[test]
     fn intern_ty_list_deduplicates() {
         let interner = Interner::new();
-        let t_i32 = interner.mk_ty(TyKind::Int(IntTy::I32));
-        let t_bool = interner.mk_ty(TyKind::Bool);
+        let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let t_bool = interner.mk_ty(Ty::Bool);
         let list1 = interner.mk_ty_list(&[t_i32, t_bool]);
         let list2 = interner.mk_ty_list(&[t_i32, t_bool]);
         assert_eq!(list1, list2);
@@ -370,5 +375,26 @@ mod tests {
         let empty2 = interner.mk_ty_list(&[]);
         assert_eq!(empty1, empty2);
         assert!(empty1.is_empty());
+    }
+
+    #[test]
+    fn intern_const_deduplicates() {
+        let interner = Interner::new();
+        let ty_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let c1 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(42)), ty_i32);
+        let c2 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(42)), ty_i32);
+        assert_eq!(c1, c2);
+    }
+
+    #[test]
+    fn intern_different_consts_distinct() {
+        let interner = Interner::new();
+        let ty_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let c1 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(42)), ty_i32);
+        let c2 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(43)), ty_i32);
+        let c3 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(42)), interner.mk_ty(Ty::Int(IntTy::I64)));
+        assert_ne!(c1, c2);
+        assert_ne!(c1, c3);
+        assert_ne!(c2, c3);
     }
 }

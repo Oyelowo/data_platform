@@ -10,7 +10,7 @@ use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{
-    AnonStructDef, Const, ConstKind, ConstVid, FloatVid, FnSig, InferTy, IntVid, Ty, TyKind, TyVid,
+    AnonStructDef, Const, ConstVid, FloatVid, FnSig, InferTy, IntVid, Ty, TyId, TyVid,
 };
 
 use crate::const_variable::ConstVarValue;
@@ -20,11 +20,11 @@ use crate::snapshot::Snapshot;
 use crate::type_variable::{FloatVarValue, IntVarValue, TypeVarValue, VariableTables};
 
 /// The inference context.
-pub struct InferCtxt<'tcx> {
-    tables: VariableTables<'tcx>,
+pub struct InferCtxt {
+    tables: VariableTables,
 }
 
-impl<'tcx> InferCtxt<'tcx> {
+impl InferCtxt {
     pub fn new() -> Self {
         Self {
             tables: VariableTables::new(),
@@ -36,30 +36,27 @@ impl<'tcx> InferCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     /// Create a new general type variable.
-    pub fn new_ty_var(&mut self, interner: &Interner<'tcx>) -> Ty<'tcx> {
+    pub fn new_ty_var(&mut self, interner: &Interner) -> TyId {
         let vid = self.tables.ty_vars.new_var(TypeVarValue::Unknown);
-        interner.mk_ty(TyKind::Infer(InferTy::TyVar(vid)))
+        interner.mk_ty(Ty::Infer(InferTy::TyVar(vid)))
     }
 
     /// Create a new integral type variable.
-    pub fn new_int_var(&mut self, interner: &Interner<'tcx>) -> Ty<'tcx> {
+    pub fn new_int_var(&mut self, interner: &Interner) -> TyId {
         let vid = self.tables.int_vars.new_var(IntVarValue::Unknown);
-        interner.mk_ty(TyKind::Infer(InferTy::IntVar(vid)))
+        interner.mk_ty(Ty::Infer(InferTy::IntVar(vid)))
     }
 
     /// Create a new floating-point type variable.
-    pub fn new_float_var(&mut self, interner: &Interner<'tcx>) -> Ty<'tcx> {
+    pub fn new_float_var(&mut self, interner: &Interner) -> TyId {
         let vid = self.tables.float_vars.new_var(FloatVarValue::Unknown);
-        interner.mk_ty(TyKind::Infer(InferTy::FloatVar(vid)))
+        interner.mk_ty(Ty::Infer(InferTy::FloatVar(vid)))
     }
 
     /// Create a new const inference variable with the given expected type.
-    pub fn new_const_var(&mut self, ty: Ty<'tcx>) -> Const<'tcx> {
+    pub fn new_const_var(&mut self, interner: &Interner, ty: TyId) -> yelang_ty::ty::ConstId {
         let vid = self.tables.const_vars.new_var(ConstVarValue::Unknown);
-        Const {
-            kind: ConstKind::Infer(vid),
-            ty,
-        }
+        interner.mk_const_from_parts(Const::Infer(vid), ty)
     }
 
     // -----------------------------------------------------------------------
@@ -72,7 +69,7 @@ impl<'tcx> InferCtxt<'tcx> {
     }
 
     /// Probe the value of a general type variable (with path compression).
-    pub fn probe_ty_var(&mut self, vid: TyVid) -> &TypeVarValue<'tcx> {
+    pub fn probe_ty_var(&mut self, vid: TyVid) -> &TypeVarValue {
         self.tables.ty_vars.probe_value(vid)
     }
 
@@ -102,7 +99,7 @@ impl<'tcx> InferCtxt<'tcx> {
     }
 
     /// Probe the value of a const inference variable.
-    pub fn probe_const_var(&mut self, vid: ConstVid) -> &ConstVarValue<'tcx> {
+    pub fn probe_const_var(&mut self, vid: ConstVid) -> &ConstVarValue {
         self.tables.const_vars.probe_value(vid)
     }
 
@@ -139,123 +136,131 @@ impl<'tcx> InferCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     /// Unify two types structurally.
-    pub fn eq(&mut self, a: Ty<'tcx>, b: Ty<'tcx>) -> Result<(), TypeError<'tcx>> {
+    pub fn eq(&mut self, interner: &Interner, a: TyId, b: TyId) -> Result<(), TypeError> {
         if a == b {
             return Ok(());
         }
 
-        match (a.kind(), b.kind()) {
+        match (interner.ty(a), interner.ty(b)) {
             // Inference variables
-            (TyKind::Infer(InferTy::TyVar(vid_a)), TyKind::Infer(InferTy::TyVar(vid_b))) => {
-                self.unify_var_var(*vid_a, *vid_b)
+            (Ty::Infer(InferTy::TyVar(vid_a)), Ty::Infer(InferTy::TyVar(vid_b))) => {
+                self.unify_var_var(interner, vid_a, vid_b)
             }
-            (TyKind::Infer(InferTy::TyVar(vid)), _other) => self.unify_var_value(*vid, b),
-            (_other, TyKind::Infer(InferTy::TyVar(vid))) => self.unify_var_value(*vid, a),
+            (Ty::Infer(InferTy::TyVar(vid)), _other) => {
+                self.unify_var_value(interner, vid, b)
+            }
+            (_other, Ty::Infer(InferTy::TyVar(vid))) => {
+                self.unify_var_value(interner, vid, a)
+            }
 
             // Int variables
-            (TyKind::Infer(InferTy::IntVar(vid_a)), TyKind::Infer(InferTy::IntVar(vid_b))) => {
-                self.tables.int_vars.union(*vid_a, *vid_b);
+            (Ty::Infer(InferTy::IntVar(vid_a)), Ty::Infer(InferTy::IntVar(vid_b))) => {
+                self.tables.int_vars.union(vid_a, vid_b);
                 Ok(())
             }
 
-            (TyKind::Infer(InferTy::IntVar(vid)), TyKind::Int(it)) => {
-                self.unify_int_var_value(*vid, *it)
+            (Ty::Infer(InferTy::IntVar(vid)), Ty::Int(it)) => {
+                self.unify_int_var_value(vid, it)
             }
-            (TyKind::Int(it), TyKind::Infer(InferTy::IntVar(vid))) => {
-                self.unify_int_var_value(*vid, *it)
+            (Ty::Int(it), Ty::Infer(InferTy::IntVar(vid))) => {
+                self.unify_int_var_value(vid, it)
             }
 
             // Float variables
-            (TyKind::Infer(InferTy::FloatVar(vid_a)), TyKind::Infer(InferTy::FloatVar(vid_b))) => {
-                self.tables.float_vars.union(*vid_a, *vid_b);
+            (Ty::Infer(InferTy::FloatVar(vid_a)), Ty::Infer(InferTy::FloatVar(vid_b))) => {
+                self.tables.float_vars.union(vid_a, vid_b);
                 Ok(())
             }
-            (TyKind::Infer(InferTy::FloatVar(vid)), TyKind::Float(ft)) => {
-                self.unify_float_var_value(*vid, *ft)
+            (Ty::Infer(InferTy::FloatVar(vid)), Ty::Float(ft)) => {
+                self.unify_float_var_value(vid, ft)
             }
-            (TyKind::Float(ft), TyKind::Infer(InferTy::FloatVar(vid))) => {
-                self.unify_float_var_value(*vid, *ft)
+            (Ty::Float(ft), Ty::Infer(InferTy::FloatVar(vid))) => {
+                self.unify_float_var_value(vid, ft)
             }
 
             // Primitive types (already handled by a == b above for interned types)
-            (TyKind::Bool, TyKind::Bool)
-            | (TyKind::Char, TyKind::Char)
-            | (TyKind::Never, TyKind::Never) => Ok(()),
+            (Ty::Bool, Ty::Bool)
+            | (Ty::Char, Ty::Char)
+            | (Ty::Never, Ty::Never) => Ok(()),
 
-            (TyKind::Int(a), TyKind::Int(b)) if a == b => Ok(()),
-            (TyKind::Uint(a), TyKind::Uint(b)) if a == b => Ok(()),
-            (TyKind::Float(a), TyKind::Float(b)) if a == b => Ok(()),
+            (Ty::Int(a), Ty::Int(b)) if a == b => Ok(()),
+            (Ty::Uint(a), Ty::Uint(b)) if a == b => Ok(()),
+            (Ty::Float(a), Ty::Float(b)) if a == b => Ok(()),
 
             // ADT
-            (TyKind::Adt(def_a, args_a), TyKind::Adt(def_b, args_b)) => {
+            (Ty::Adt(def_a, args_a), Ty::Adt(def_b, args_b)) => {
                 if def_a.def_id != def_b.def_id {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_generic_args(args_a, args_b)
+                self.eq_generic_args(interner, &args_a, &args_b)
             }
 
             // Tuples
-            (TyKind::Tuple(args_a), TyKind::Tuple(args_b)) => self.eq_generic_args(args_a, args_b),
+            (Ty::Tuple(args_a), Ty::Tuple(args_b)) => {
+                self.eq_generic_args(interner, &args_a, &args_b)
+            }
 
             // Arrays
-            (TyKind::Array(ty_a, len_a), TyKind::Array(ty_b, len_b)) => {
-                self.eq(*ty_a, *ty_b)?;
-                self.eq_const(*len_a, *len_b)
+            (Ty::Array(ty_a, len_a), Ty::Array(ty_b, len_b)) => {
+                self.eq(interner, ty_a, ty_b)?;
+                self.eq_const(interner, len_a, len_b)
             }
 
             // Slices
-            (TyKind::Slice(ty_a), TyKind::Slice(ty_b)) => self.eq(*ty_a, *ty_b),
+            (Ty::Slice(ty_a), Ty::Slice(ty_b)) => self.eq(interner, ty_a, ty_b),
 
             // Raw pointers
-            (TyKind::RawPtr(tam_a), TyKind::RawPtr(tam_b)) => {
+            (Ty::RawPtr(tam_a), Ty::RawPtr(tam_b)) => {
                 if tam_a.mutbl != tam_b.mutbl {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq(tam_a.ty, tam_b.ty)
+                self.eq(interner, tam_a.ty, tam_b.ty)
             }
 
             // References
-            (TyKind::Ref(ty_a, mut_a), TyKind::Ref(ty_b, mut_b)) => {
+            (Ty::Ref(ty_a, mut_a), Ty::Ref(ty_b, mut_b)) => {
                 if mut_a != mut_b {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq(*ty_a, *ty_b)
+                self.eq(interner, ty_a, ty_b)
             }
 
             // Functions
-            (TyKind::FnPtr(sig_a), TyKind::FnPtr(sig_b)) => self.eq_fn_sigs(&sig_a.sig, &sig_b.sig),
-            (TyKind::FnDef(fd_a), TyKind::FnDef(fd_b)) => {
+            (Ty::FnPtr(sig_a), Ty::FnPtr(sig_b)) => {
+                self.eq_fn_sigs(interner, &sig_a.sig, &sig_b.sig)
+            }
+            (Ty::FnDef(fd_a), Ty::FnDef(fd_b)) => {
                 if fd_a.def_id != fd_b.def_id {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_generic_args(&fd_a.args, &fd_b.args)
+                self.eq_generic_args(interner, &fd_a.args, &fd_b.args)
             }
 
             // Anonymous structs
-            (TyKind::AnonStruct(anon_a), TyKind::AnonStruct(anon_b)) => {
-                self.eq_anon_structs(anon_a, anon_b, a, b)
+            (Ty::AnonStruct(anon_a), Ty::AnonStruct(anon_b)) => {
+                self.eq_anon_structs(interner, &anon_a, &anon_b, a, b)
             }
 
             // Unions
-            (TyKind::Union(a1, a2), TyKind::Union(b1, b2)) => {
-                self.eq(*a1, *b1)?;
-                self.eq(*a2, *b2)
+            (Ty::Union(a1, a2), Ty::Union(b1, b2)) => {
+                self.eq(interner, a1, b1)?;
+                self.eq(interner, a2, b2)
             }
 
             // Type literals
-            (TyKind::TypeLit(sym_a), TyKind::TypeLit(sym_b)) => {
+            (Ty::TypeLit(sym_a), Ty::TypeLit(sym_b)) => {
                 if sym_a != sym_b {
                     return Err(TypeError::Mismatch {
                         expected: a,
@@ -266,51 +271,51 @@ impl<'tcx> InferCtxt<'tcx> {
             }
 
             // Utility types
-            (TyKind::Utility(kind_a, args_a), TyKind::Utility(kind_b, args_b)) => {
+            (Ty::Utility(kind_a, args_a), Ty::Utility(kind_b, args_b)) => {
                 if kind_a != kind_b {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_generic_args(args_a, args_b)
+                self.eq_generic_args(interner, &args_a, &args_b)
             }
 
             // Aliases (associated types / impl Trait)
-            (TyKind::Alias(alias_a), TyKind::Alias(alias_b)) => {
+            (Ty::Alias(alias_a), Ty::Alias(alias_b)) => {
                 if alias_a.def_id != alias_b.def_id {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_generic_args(&alias_a.args, &alias_b.args)
+                self.eq_generic_args(interner, &alias_a.args, &alias_b.args)
             }
 
             // Projection types
-            (TyKind::Projection(proj_a), TyKind::Projection(proj_b)) => {
+            (Ty::Projection(proj_a), Ty::Projection(proj_b)) => {
                 if proj_a.item_def_id != proj_b.item_def_id {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_trait_refs(&proj_a.trait_ref, &proj_b.trait_ref)
+                self.eq_trait_refs(interner, &proj_a.trait_ref, &proj_b.trait_ref)
             }
 
             // Trait objects
-            (TyKind::Dynamic(binder_a), TyKind::Dynamic(binder_b)) => {
+            (Ty::Dynamic(binder_a), Ty::Dynamic(binder_b)) => {
                 if binder_a.bound_vars != binder_b.bound_vars {
                     return Err(TypeError::Mismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_dynamic_predicates(a, b, binder_a.value, binder_b.value)
+                self.eq_dynamic_predicates(interner, a, b, binder_a.value, binder_b.value)
             }
 
             // Placeholders
-            (TyKind::Placeholder(p_a), TyKind::Placeholder(p_b)) => {
+            (Ty::Placeholder(p_a), Ty::Placeholder(p_b)) => {
                 if p_a != p_b {
                     return Err(TypeError::Mismatch {
                         expected: a,
@@ -321,12 +326,12 @@ impl<'tcx> InferCtxt<'tcx> {
             }
 
             // Bound variables (under the same binder, same index)
-            (TyKind::Bound(d_a, b_a), TyKind::Bound(d_b, b_b)) if d_a == d_b && b_a == b_b => {
+            (Ty::Bound(d_a, b_a), Ty::Bound(d_b, b_b)) if d_a == d_b && b_a == b_b => {
                 Ok(())
             }
 
             // Error type unifies with anything (error recovery)
-            (TyKind::Error, _) | (_, TyKind::Error) => Ok(()),
+            (Ty::Error, _) | (_, Ty::Error) => Ok(()),
 
             // Mismatch
             _ => Err(TypeError::Mismatch {
@@ -340,7 +345,12 @@ impl<'tcx> InferCtxt<'tcx> {
     // Helper unification methods
     // -----------------------------------------------------------------------
 
-    fn unify_var_var(&mut self, vid_a: TyVid, vid_b: TyVid) -> Result<(), TypeError<'tcx>> {
+    fn unify_var_var(
+        &mut self,
+        interner: &Interner,
+        vid_a: TyVid,
+        vid_b: TyVid,
+    ) -> Result<(), TypeError> {
         let val_a = self
             .tables
             .ty_vars
@@ -353,19 +363,19 @@ impl<'tcx> InferCtxt<'tcx> {
             .clone();
         self.tables.ty_vars.union(vid_a, vid_b);
 
-        match (&val_a, &val_b) {
+        match (val_a, val_b) {
             (TypeVarValue::Known(ty_a), TypeVarValue::Known(ty_b)) => {
-                self.eq(*ty_a, *ty_b)?;
+                self.eq(interner, ty_a, ty_b)?;
             }
             (TypeVarValue::Known(ty), TypeVarValue::Unknown) => {
                 self.tables
                     .ty_vars
-                    .set_value(vid_a, TypeVarValue::Known(*ty));
+                    .set_value(vid_a, TypeVarValue::Known(ty));
             }
             (TypeVarValue::Unknown, TypeVarValue::Known(ty)) => {
                 self.tables
                     .ty_vars
-                    .set_value(vid_b, TypeVarValue::Known(*ty));
+                    .set_value(vid_b, TypeVarValue::Known(ty));
             }
             (TypeVarValue::Unknown, TypeVarValue::Unknown) => {}
         }
@@ -373,9 +383,14 @@ impl<'tcx> InferCtxt<'tcx> {
         Ok(())
     }
 
-    fn unify_var_value(&mut self, vid: TyVid, ty: Ty<'tcx>) -> Result<(), TypeError<'tcx>> {
+    fn unify_var_value(
+        &mut self,
+        interner: &Interner,
+        vid: TyVid,
+        ty: TyId,
+    ) -> Result<(), TypeError> {
         // Occurs check: `vid` must not appear inside `ty`.
-        if occurs_check(&mut self.tables, vid, ty) {
+        if occurs_check(interner, &mut self.tables, vid, ty) {
             return Err(TypeError::CyclicTy(vid));
         }
 
@@ -384,7 +399,7 @@ impl<'tcx> InferCtxt<'tcx> {
 
         match existing {
             TypeVarValue::Known(existing_ty) => {
-                self.eq(existing_ty, ty)?;
+                self.eq(interner, existing_ty, ty)?;
             }
             TypeVarValue::Unknown => {
                 self.tables.ty_vars.set_value(root, TypeVarValue::Known(ty));
@@ -394,7 +409,7 @@ impl<'tcx> InferCtxt<'tcx> {
         Ok(())
     }
 
-    fn unify_int_var_value(&mut self, vid: IntVid, it: IntTy) -> Result<(), TypeError<'tcx>> {
+    fn unify_int_var_value(&mut self, vid: IntVid, it: IntTy) -> Result<(), TypeError> {
         let root = self.tables.int_vars.find(vid);
         let existing = self.tables.int_vars.probe_value(root).clone();
         match existing {
@@ -413,7 +428,7 @@ impl<'tcx> InferCtxt<'tcx> {
         Ok(())
     }
 
-    fn unify_float_var_value(&mut self, vid: FloatVid, ft: FloatTy) -> Result<(), TypeError<'tcx>> {
+    fn unify_float_var_value(&mut self, vid: FloatVid, ft: FloatTy) -> Result<(), TypeError> {
         let root = self.tables.float_vars.find(vid);
         let existing = self.tables.float_vars.probe_value(root).clone();
         match existing {
@@ -440,9 +455,10 @@ impl<'tcx> InferCtxt<'tcx> {
 
     pub fn eq_generic_args(
         &mut self,
-        a: &List<GenericArg<'tcx>>,
-        b: &List<GenericArg<'tcx>>,
-    ) -> Result<(), TypeError<'tcx>> {
+        interner: &Interner,
+        a: &List<GenericArg>,
+        b: &List<GenericArg>,
+    ) -> Result<(), TypeError> {
         if a.len() != b.len() {
             return Err(TypeError::GenericArgCount {
                 expected: a.len(),
@@ -451,8 +467,10 @@ impl<'tcx> InferCtxt<'tcx> {
         }
         for (index, (arg_a, arg_b)) in a.iter().zip(b.iter()).enumerate() {
             match (arg_a, arg_b) {
-                (GenericArg::Type(ta), GenericArg::Type(tb)) => self.eq(*ta, *tb)?,
-                (GenericArg::Const(ca), GenericArg::Const(cb)) => self.eq_const(*ca, *cb)?,
+                (GenericArg::Type(ta), GenericArg::Type(tb)) => self.eq(interner, *ta, *tb)?,
+                (GenericArg::Const(ca), GenericArg::Const(cb)) => {
+                    self.eq_const(interner, *ca, *cb)?
+                }
                 _ => {
                     return Err(TypeError::GenericArgKindMismatch { index });
                 }
@@ -463,18 +481,19 @@ impl<'tcx> InferCtxt<'tcx> {
 
     pub(crate) fn eq_const(
         &mut self,
-        a: Const<'tcx>,
-        b: Const<'tcx>,
-    ) -> Result<(), TypeError<'tcx>> {
-        self.eq(a.ty, b.ty)?;
-        match (a.kind, b.kind) {
-            (ConstKind::Infer(vid_a), ConstKind::Infer(vid_b)) => {
+        interner: &Interner,
+        a: yelang_ty::ty::ConstId,
+        b: yelang_ty::ty::ConstId,
+    ) -> Result<(), TypeError> {
+        self.eq(interner, interner.const_ty(a), interner.const_ty(b))?;
+        match (interner.const_kind(a), interner.const_kind(b)) {
+            (Const::Infer(vid_a), Const::Infer(vid_b)) => {
                 self.tables.const_vars.union(vid_a, vid_b);
                 Ok(())
             }
-            (ConstKind::Infer(vid), _) => self.unify_const_var_value(vid, b),
-            (_, ConstKind::Infer(vid)) => self.unify_const_var_value(vid, a),
-            (ConstKind::Value(va), ConstKind::Value(vb)) => {
+            (Const::Infer(vid), _) => self.unify_const_var_value(interner, vid, b),
+            (_, Const::Infer(vid)) => self.unify_const_var_value(interner, vid, a),
+            (Const::Value(va), Const::Value(vb)) => {
                 if va != vb {
                     return Err(TypeError::ConstMismatch {
                         expected: a,
@@ -483,19 +502,19 @@ impl<'tcx> InferCtxt<'tcx> {
                 }
                 Ok(())
             }
-            (ConstKind::Param(pa), ConstKind::Param(pb)) if pa == pb => Ok(()),
-            (ConstKind::Placeholder(pa), ConstKind::Placeholder(pb)) if pa == pb => Ok(()),
-            (ConstKind::Bound(da, ba), ConstKind::Bound(db, bb)) if da == db && ba == bb => Ok(()),
-            (ConstKind::Unevaluated(ua), ConstKind::Unevaluated(ub)) => {
+            (Const::Param(pa), Const::Param(pb)) if pa == pb => Ok(()),
+            (Const::Placeholder(pa), Const::Placeholder(pb)) if pa == pb => Ok(()),
+            (Const::Bound(da, ba), Const::Bound(db, bb)) if da == db && ba == bb => Ok(()),
+            (Const::Unevaluated(ua), Const::Unevaluated(ub)) => {
                 if ua.def != ub.def {
                     return Err(TypeError::ConstMismatch {
                         expected: a,
                         found: b,
                     });
                 }
-                self.eq_generic_args(&ua.args, &ub.args)
+                self.eq_generic_args(interner, &ua.args, &ub.args)
             }
-            (ConstKind::Error, _) | (_, ConstKind::Error) => Ok(()),
+            (Const::Error, _) | (_, Const::Error) => Ok(()),
             _ => Err(TypeError::ConstMismatch {
                 expected: a,
                 found: b,
@@ -505,13 +524,14 @@ impl<'tcx> InferCtxt<'tcx> {
 
     fn unify_const_var_value(
         &mut self,
+        interner: &Interner,
         vid: ConstVid,
-        ct: Const<'tcx>,
-    ) -> Result<(), TypeError<'tcx>> {
+        ct: yelang_ty::ty::ConstId,
+    ) -> Result<(), TypeError> {
         let root = self.tables.const_vars.find(vid);
         let existing = self.tables.const_vars.probe_value(root).clone();
         match existing {
-            ConstVarValue::Known(existing_ct) => self.eq_const(existing_ct, ct),
+            ConstVarValue::Known(existing_ct) => self.eq_const(interner, existing_ct, ct),
             ConstVarValue::Unknown => {
                 self.tables
                     .const_vars
@@ -521,18 +541,19 @@ impl<'tcx> InferCtxt<'tcx> {
         }
     }
 
-    fn eq_fn_sigs(&mut self, a: &FnSig<'tcx>, b: &FnSig<'tcx>) -> Result<(), TypeError<'tcx>> {
-        self.eq_generic_args(&a.inputs, &b.inputs)?;
-        self.eq(a.output, b.output)
+    fn eq_fn_sigs(&mut self, interner: &Interner, a: &FnSig, b: &FnSig) -> Result<(), TypeError> {
+        self.eq_generic_args(interner, &a.inputs, &b.inputs)?;
+        self.eq(interner, a.output, b.output)
     }
 
     fn eq_anon_structs(
         &mut self,
-        a: &AnonStructDef<'tcx>,
-        b: &AnonStructDef<'tcx>,
-        ty_a: Ty<'tcx>,
-        ty_b: Ty<'tcx>,
-    ) -> Result<(), TypeError<'tcx>> {
+        interner: &Interner,
+        a: &AnonStructDef,
+        b: &AnonStructDef,
+        ty_a: TyId,
+        ty_b: TyId,
+    ) -> Result<(), TypeError> {
         // For anonymous structs, we require exact field match (for now).
         // Width subtyping is handled as coercion, not unification.
         if a.fields.len() != b.fields.len() {
@@ -548,32 +569,34 @@ impl<'tcx> InferCtxt<'tcx> {
                     found: ty_b,
                 });
             }
-            self.eq(f_a.ty, f_b.ty)?;
+            self.eq(interner, f_a.ty, f_b.ty)?;
         }
         Ok(())
     }
 
     pub fn eq_trait_refs(
         &mut self,
-        a: &yelang_ty::predicate::TraitRef<'tcx>,
-        b: &yelang_ty::predicate::TraitRef<'tcx>,
-    ) -> Result<(), TypeError<'tcx>> {
+        interner: &Interner,
+        a: &yelang_ty::predicate::TraitRef,
+        b: &yelang_ty::predicate::TraitRef,
+    ) -> Result<(), TypeError> {
         if a.def_id != b.def_id {
             return Err(TypeError::TraitRefMismatch {
                 expected: *a,
                 found: *b,
             });
         }
-        self.eq_generic_args(&a.args, &b.args)
+        self.eq_generic_args(interner, &a.args, &b.args)
     }
 
     fn eq_dynamic_predicates(
         &mut self,
-        ty_a: Ty<'tcx>,
-        ty_b: Ty<'tcx>,
-        a: List<ExistentialPredicate<'tcx>>,
-        b: List<ExistentialPredicate<'tcx>>,
-    ) -> Result<(), TypeError<'tcx>> {
+        interner: &Interner,
+        ty_a: TyId,
+        ty_b: TyId,
+        a: List<ExistentialPredicate>,
+        b: List<ExistentialPredicate>,
+    ) -> Result<(), TypeError> {
         if a.len() != b.len() {
             return Err(TypeError::Mismatch {
                 expected: ty_a,
@@ -581,7 +604,7 @@ impl<'tcx> InferCtxt<'tcx> {
             });
         }
         for (pa, pb) in a.iter().zip(b.iter()) {
-            self.eq_existential_predicates(*pa, *pb)
+            self.eq_existential_predicates(interner, *pa, *pb)
                 .map_err(|_| TypeError::Mismatch {
                     expected: ty_a,
                     found: ty_b,
@@ -592,9 +615,10 @@ impl<'tcx> InferCtxt<'tcx> {
 
     fn eq_existential_predicates(
         &mut self,
-        a: ExistentialPredicate<'tcx>,
-        b: ExistentialPredicate<'tcx>,
-    ) -> Result<(), TypeError<'tcx>> {
+        interner: &Interner,
+        a: ExistentialPredicate,
+        b: ExistentialPredicate,
+    ) -> Result<(), TypeError> {
         match (a, b) {
             (ExistentialPredicate::Trait(ta), ExistentialPredicate::Trait(tb)) => {
                 if ta.def_id != tb.def_id {
@@ -603,7 +627,7 @@ impl<'tcx> InferCtxt<'tcx> {
                         found: b,
                     });
                 }
-                self.eq_generic_args(&ta.args, &tb.args)
+                self.eq_generic_args(interner, &ta.args, &tb.args)
             }
             (ExistentialPredicate::Projection(pa), ExistentialPredicate::Projection(pb)) => {
                 if pa.def_id != pb.def_id {
@@ -612,8 +636,8 @@ impl<'tcx> InferCtxt<'tcx> {
                         found: b,
                     });
                 }
-                self.eq_generic_args(&pa.args, &pb.args)?;
-                self.eq(pa.term, pb.term)
+                self.eq_generic_args(interner, &pa.args, &pb.args)?;
+                self.eq(interner, pa.term, pb.term)
             }
             (ExistentialPredicate::AutoTrait(da), ExistentialPredicate::AutoTrait(db)) => {
                 if da != db {
@@ -632,7 +656,7 @@ impl<'tcx> InferCtxt<'tcx> {
     }
 }
 
-impl<'tcx> Default for InferCtxt<'tcx> {
+impl Default for InferCtxt {
     fn default() -> Self {
         Self::new()
     }

@@ -46,7 +46,7 @@ pub fn derive_copy(
     }
 
     let self_ty = adt.self_ty(ctx);
-    let generics = derive_generics(ctx, adt.generics, copy_trait);
+    let generics = derive_generics(ctx, &adt.generics, copy_trait);
     Some(impl_item(ctx, copy_trait, self_ty, generics, vec![]))
 }
 

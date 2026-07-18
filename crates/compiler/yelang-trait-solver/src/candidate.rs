@@ -10,17 +10,17 @@ use crate::solver_ctx::{BuiltinTraitKind, ImplInfo};
 
 /// A candidate solution for a goal.
 #[derive(Clone, Debug)]
-pub struct Candidate<'tcx> {
-    pub source: CandidateSource<'tcx>,
+pub struct Candidate {
+    pub source: CandidateSource,
 }
 
 /// Where a candidate came from.
 #[derive(Clone, Debug)]
-pub enum CandidateSource<'tcx> {
+pub enum CandidateSource {
     /// From a user-written impl block.
-    UserImpl(ImplInfo<'tcx>),
+    UserImpl(ImplInfo),
     /// From a param-env assumption (where clause).
-    ParamEnv(Predicate<'tcx>),
+    ParamEnv(Predicate),
     /// From a built-in rule (`Sized`, `Copy`, `Clone`, ...).
     Builtin(BuiltinTraitKind),
     /// From an auto-trait derivation.

@@ -41,7 +41,7 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
 
     let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty);
-    let generics = derive_generics(ctx, adt.generics, clone_trait);
+    let generics = derive_generics(ctx, &adt.generics, clone_trait);
 
     Some(impl_item(ctx, clone_trait, self_ty, generics, vec![clone_method]))
 }

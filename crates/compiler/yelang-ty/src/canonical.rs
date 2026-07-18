@@ -10,26 +10,24 @@ use crate::ty::{PlaceholderType, UniverseIndex};
 
 /// A canonicalized value: all inference vars are bound.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Canonical<'tcx, V> {
+pub struct Canonical<V> {
     pub value: V,
     pub max_universe: UniverseIndex,
-    pub variables: CanonicalVarKinds<'tcx>,
-    pub _marker: std::marker::PhantomData<&'tcx ()>,
+    pub variables: CanonicalVarKinds,
 }
 
-impl<'tcx, V> Canonical<'tcx, V> {
-    pub fn new(value: V, max_universe: UniverseIndex, variables: CanonicalVarKinds<'tcx>) -> Self {
+impl<V> Canonical<V> {
+    pub fn new(value: V, max_universe: UniverseIndex, variables: CanonicalVarKinds) -> Self {
         Self {
             value,
             max_universe,
             variables,
-            _marker: std::marker::PhantomData,
         }
     }
 }
 
 /// An interned list of canonical variable kinds.
-pub type CanonicalVarKinds<'tcx> = List<CanonicalVarKind>;
+pub type CanonicalVarKinds = List<CanonicalVarKind>;
 
 /// The kind of a canonical variable.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -78,13 +76,13 @@ impl std::fmt::Display for NoSolution {
 impl std::error::Error for NoSolution {}
 
 /// The result of a canonical goal evaluation.
-pub type CanonicalResponse<'tcx> = Canonical<'tcx, Response<'tcx>>;
+pub type CanonicalResponse = Canonical<Response>;
 
 /// A response from the trait solver.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Response<'tcx> {
+pub struct Response {
     pub certainty: Certainty,
-    pub goals: List<Canonical<'tcx, crate::predicate::Predicate<'tcx>>>,
+    pub goals: List<Canonical<crate::predicate::Predicate>>,
 }
 
 #[cfg(test)]

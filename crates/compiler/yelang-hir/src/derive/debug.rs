@@ -95,7 +95,7 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
 
     let debug_self_ty = adt.self_ty(ctx);
-    let generics = derive_generics(ctx, adt.generics, debug_trait);
+    let generics = derive_generics(ctx, &adt.generics, debug_trait);
     Some(impl_item(ctx, debug_trait, debug_self_ty, generics, vec![fmt_method]))
 }
 

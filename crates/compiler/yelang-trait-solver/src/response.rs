@@ -7,13 +7,13 @@ use yelang_ty::canonical::Canonical;
 use crate::goal::Goal;
 
 /// The result of evaluating a canonical goal.
-pub type SolverResult<'tcx> = Result<CanonicalResponse<'tcx>, NoSolution>;
+pub type SolverResult = Result<CanonicalResponse, NoSolution>;
 
 /// A nested goal with its source (for diagnostics and cycle tracking).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct NestedGoal<'tcx> {
+pub struct NestedGoal {
     pub source: GoalSource,
-    pub goal: CanonicalGoal<'tcx>,
+    pub goal: CanonicalGoal,
 }
 
 /// Where a nested goal came from.
@@ -35,4 +35,4 @@ pub enum GoalSource {
 ///
 /// The whole goal (param-env + predicate) is canonicalized so that the solver
 /// cache distinguishes goals with different available assumptions.
-pub type CanonicalGoal<'tcx> = Canonical<'tcx, Goal<'tcx>>;
+pub type CanonicalGoal = Canonical<Goal>;

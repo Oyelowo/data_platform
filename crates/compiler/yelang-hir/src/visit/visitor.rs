@@ -190,7 +190,11 @@ pub fn walk_crate<'hir, V: Visitor<'hir>>(visitor: &mut V, crate_hir: &'hir Crat
 }
 
 pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
-    match &item.kind {
+    let crate_hir = match visitor.crate_hir() {
+        Some(c) => c,
+        None => return,
+    };
+    match item.kind(crate_hir) {
         ItemKind::Fn { sig, body, generics } => {
             visitor.visit_generics(generics);
             walk_fn_sig(visitor, sig);
@@ -216,7 +220,7 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
                 visitor.visit_trait_ref(super_trait);
             }
             for trait_item in items {
-                match &trait_item.kind {
+                match trait_item.kind(crate_hir) {
                     crate::hir::core::TraitItemKind::Fn { sig, default } => {
                         walk_fn_sig(visitor, sig);
                         if let Some(body) = *default {
@@ -253,7 +257,7 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
                 visitor.visit_trait_ref(trait_ref);
             }
             for impl_item in items {
-                match &impl_item.kind {
+                match impl_item.kind(crate_hir) {
                     crate::hir::core::ImplItemKind::Fn { sig, body } => {
                         walk_fn_sig(visitor, sig);
                         visitor.visit_body_by_id(*body);
@@ -281,11 +285,9 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
             visitor.visit_body_by_id(*body);
         }
         ItemKind::Mod { items } => {
-            if let Some(crate_hir) = visitor.crate_hir() {
-                for def_id in items {
-                    if let Some(Some(item)) = crate_hir.items.get(*def_id) {
-                        visitor.visit_item(item);
-                    }
+            for def_id in items {
+                if let Some(Some(item)) = crate_hir.items.get(*def_id) {
+                    visitor.visit_item(item);
                 }
             }
         }
@@ -762,7 +764,11 @@ pub fn walk_impl<'hir, V: Visitor<'hir>>(visitor: &mut V, impl_: &'hir Impl) {
 }
 
 pub fn walk_impl_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir ImplItem) {
-    match &item.kind {
+    let crate_hir = match visitor.crate_hir() {
+        Some(c) => c,
+        None => return,
+    };
+    match item.kind(crate_hir) {
         crate::hir::core::ImplItemKind::Fn { sig, body } => {
             walk_fn_sig(visitor, sig);
             visitor.visit_body_by_id(*body);
@@ -788,7 +794,11 @@ pub fn walk_trait<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_: &'hir Trait) 
 }
 
 pub fn walk_trait_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir TraitItem) {
-    match &item.kind {
+    let crate_hir = match visitor.crate_hir() {
+        Some(c) => c,
+        None => return,
+    };
+    match item.kind(crate_hir) {
         crate::hir::core::TraitItemKind::Fn { sig, default } => {
             walk_fn_sig(visitor, sig);
             if let Some(body) = *default {

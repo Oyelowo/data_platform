@@ -1,19 +1,19 @@
 /*! Type variable tables for general, int, and float variables. */
 
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{FloatVid, IntVid, Ty, TyVid};
+use yelang_ty::ty::{FloatVid, IntVid, TyId, TyVid};
 
 use crate::const_variable::{ConstVarValue, ConstVariableTable};
 use crate::unify::UnificationTable;
 
 /// Value stored for a general type variable.
 #[derive(Clone, Debug, PartialEq)]
-pub enum TypeVarValue<'tcx> {
-    Known(Ty<'tcx>),
+pub enum TypeVarValue {
+    Known(TyId),
     Unknown,
 }
 
-impl<'tcx> Default for TypeVarValue<'tcx> {
+impl Default for TypeVarValue {
     fn default() -> Self {
         TypeVarValue::Unknown
     }
@@ -46,7 +46,7 @@ impl Default for FloatVarValue {
 }
 
 /// Table of general type variables.
-pub type TypeVariableTable<'tcx> = UnificationTable<TyVid, TypeVarValue<'tcx>>;
+pub type TypeVariableTable = UnificationTable<TyVid, TypeVarValue>;
 
 /// Table of integral type variables.
 pub type IntVariableTable = UnificationTable<IntVid, IntVarValue>;
@@ -55,14 +55,14 @@ pub type IntVariableTable = UnificationTable<IntVid, IntVarValue>;
 pub type FloatVariableTable = UnificationTable<FloatVid, FloatVarValue>;
 
 /// Combined variable tables.
-pub struct VariableTables<'tcx> {
-    pub ty_vars: TypeVariableTable<'tcx>,
+pub struct VariableTables {
+    pub ty_vars: TypeVariableTable,
     pub int_vars: IntVariableTable,
     pub float_vars: FloatVariableTable,
-    pub const_vars: ConstVariableTable<'tcx>,
+    pub const_vars: ConstVariableTable,
 }
 
-impl<'tcx> VariableTables<'tcx> {
+impl VariableTables {
     pub fn new() -> Self {
         Self {
             ty_vars: TypeVariableTable::new(TypeVarValue::Unknown),
@@ -73,7 +73,7 @@ impl<'tcx> VariableTables<'tcx> {
     }
 }
 
-impl<'tcx> Default for VariableTables<'tcx> {
+impl Default for VariableTables {
     fn default() -> Self {
         Self::new()
     }

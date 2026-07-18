@@ -16,7 +16,7 @@ fn lower_simple_fn() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(&item.kind, ItemKind::Fn { .. }));
+    assert!(matches!(item.kind(&crate_hir), ItemKind::Fn { .. }));
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn lower_fn_with_params() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { sig, .. } = &item.kind else {
+    let ItemKind::Fn { sig, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     assert_eq!(sig.inputs.len(), 2);
@@ -39,7 +39,7 @@ fn lower_fn_with_generics() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else {
+    let ItemKind::Fn { generics, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     assert_eq!(generics.params.len(), 1);
@@ -52,7 +52,7 @@ fn lower_fn_with_where_clause() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else {
+    let ItemKind::Fn { generics, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     assert!(generics.where_clause.is_some());
@@ -65,7 +65,7 @@ fn lower_async_fn() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { sig, .. } = &item.kind else {
+    let ItemKind::Fn { sig, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     assert!(sig.is_async);
@@ -82,7 +82,7 @@ fn lower_struct_named_fields() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Struct { data, .. } = &item.kind else {
+    let ItemKind::Struct { data, .. } = item.kind(&crate_hir) else {
         panic!("expected struct")
     };
     match data {
@@ -98,7 +98,7 @@ fn lower_tuple_struct() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Struct { data, .. } = &item.kind else {
+    let ItemKind::Struct { data, .. } = item.kind(&crate_hir) else {
         panic!("expected struct")
     };
     match data {
@@ -114,7 +114,7 @@ fn lower_unit_struct() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Struct { data, .. } = &item.kind else {
+    let ItemKind::Struct { data, .. } = item.kind(&crate_hir) else {
         panic!("expected struct")
     };
     assert!(matches!(data, VariantData::Unit));
@@ -127,7 +127,7 @@ fn lower_struct_with_generics() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Struct { generics, .. } = &item.kind else {
+    let ItemKind::Struct { generics, .. } = item.kind(&crate_hir) else {
         panic!("expected struct")
     };
     assert_eq!(generics.params.len(), 1);
@@ -144,7 +144,7 @@ fn lower_enum_unit_variants() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else {
+    let ItemKind::Enum { def, .. } = item.kind(&crate_hir) else {
         panic!("expected enum")
     };
     assert_eq!(def.variants.len(), 2);
@@ -158,7 +158,7 @@ fn lower_enum_tuple_variants() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else {
+    let ItemKind::Enum { def, .. } = item.kind(&crate_hir) else {
         panic!("expected enum")
     };
     assert_eq!(def.variants.len(), 2);
@@ -175,7 +175,7 @@ fn lower_enum_struct_variants() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else {
+    let ItemKind::Enum { def, .. } = item.kind(&crate_hir) else {
         panic!("expected enum")
     };
     assert_eq!(def.variants.len(), 2);
@@ -192,7 +192,7 @@ fn lower_enum_with_discriminant() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Enum { def, .. } = &item.kind else {
+    let ItemKind::Enum { def, .. } = item.kind(&crate_hir) else {
         panic!("expected enum")
     };
     assert!(def.variants[0].discriminant.is_some());
@@ -209,7 +209,7 @@ fn lower_trait_with_methods() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Trait { items, .. } = &item.kind else {
+    let ItemKind::Trait { items, .. } = item.kind(&crate_hir) else {
         panic!("expected trait")
     };
     assert_eq!(items.len(), 1);
@@ -227,7 +227,7 @@ fn lower_trait_with_const_and_type() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Trait { items, .. } = &item.kind else {
+    let ItemKind::Trait { items, .. } = item.kind(&crate_hir) else {
         panic!("expected trait")
     };
     assert_eq!(items.len(), 2);
@@ -248,15 +248,15 @@ fn lower_inherent_impl() {
     let (program, interner) = parse_program(src);
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
-    // Should have Point struct and impl item
-    assert_eq!(crate_hir.items.len(), 2);
-    let impl_item = crate_hir
-        .items
-        .values()
-        .filter_map(|opt| opt.as_ref())
-        .find(|i| matches!(i.kind, ItemKind::Impl { .. }))
+    // Should have Point struct and impl item (synthetic sub-item DefIds may
+    // leave gaps in the item table, so count actual entries).
+    let actual_items: Vec<_> = crate_hir.items.values().filter_map(|opt| opt.as_ref()).collect();
+    assert_eq!(actual_items.len(), 2);
+    let impl_item = actual_items
+        .into_iter()
+        .find(|i| matches!(i.kind(&crate_hir), ItemKind::Impl { .. }))
         .expect("expected impl item");
-    let ItemKind::Impl { self_ty, .. } = &impl_item.kind else {
+    let ItemKind::Impl { self_ty, .. } = impl_item.kind(&crate_hir) else {
         unreachable!()
     };
     let ty = crate_hir.tys.get(*self_ty).unwrap();
@@ -280,16 +280,16 @@ fn lower_self_struct_literal_in_impl() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .find(|i| matches!(i.kind, ItemKind::Impl { .. }))
+        .find(|i| matches!(i.kind(&crate_hir), ItemKind::Impl { .. }))
         .expect("expected impl item");
-    let ItemKind::Impl { items, .. } = &impl_item.kind else {
+    let ItemKind::Impl { items, .. } = impl_item.kind(&crate_hir) else {
         unreachable!()
     };
     let method = items
         .iter()
         .find(|i| i.ident.as_str(&interner) == "origin")
         .expect("expected origin");
-    let crate::hir::core::ImplItemKind::Fn { body, .. } = &method.kind else {
+    let crate::hir::core::ImplItemKind::Fn { body, .. } = method.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -324,11 +324,11 @@ fn lower_trait_impl() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .find(|i| matches!(i.kind, ItemKind::Impl { .. }))
+        .find(|i| matches!(i.kind(&crate_hir), ItemKind::Impl { .. }))
         .expect("expected impl item");
     let ItemKind::Impl {
         of_trait, generics, ..
-    } = &impl_item.kind
+    } = impl_item.kind(&crate_hir)
     else {
         unreachable!()
     };
@@ -347,7 +347,7 @@ fn lower_type_alias() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::TyAlias { ty, .. } = &item.kind else {
+    let ItemKind::TyAlias { ty, .. } = item.kind(&crate_hir) else {
         panic!("expected type alias")
     };
     let ty_node = crate_hir.tys.get(*ty).unwrap();
@@ -361,7 +361,7 @@ fn lower_type_alias_with_generics() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::TyAlias { generics, .. } = &item.kind else {
+    let ItemKind::TyAlias { generics, .. } = item.kind(&crate_hir) else {
         panic!("expected type alias")
     };
     assert_eq!(generics.params.len(), 1);
@@ -378,7 +378,7 @@ fn lower_const_item() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind, ItemKind::Const { .. }));
+    assert!(matches!(item.kind(&crate_hir), ItemKind::Const { .. }));
 }
 
 #[test]
@@ -388,7 +388,7 @@ fn lower_static_item() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Static { mutability, .. } = &item.kind else {
+    let ItemKind::Static { mutability, .. } = item.kind(&crate_hir) else {
         panic!("expected static")
     };
     assert!(matches!(mutability, yelang_ast::Mutability::Immutable));
@@ -401,7 +401,7 @@ fn lower_mutable_static_item() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Static { mutability, .. } = &item.kind else {
+    let ItemKind::Static { mutability, .. } = item.kind(&crate_hir) else {
         panic!("expected static")
     };
     assert!(matches!(mutability, yelang_ast::Mutability::Mutable));
@@ -423,7 +423,7 @@ fn lower_inline_module() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Mod { items } = &item.kind else {
+    let ItemKind::Mod { items } = item.kind(&crate_hir) else {
         panic!("expected module")
     };
     assert_eq!(items.len(), 2);
@@ -440,5 +440,5 @@ fn lower_use_item() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind, ItemKind::Use { .. }));
+    assert!(matches!(item.kind(&crate_hir), ItemKind::Use { .. }));
 }

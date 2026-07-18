@@ -125,9 +125,10 @@ pub fn expand_item_derives(
                     self_ty,
                     of_trait,
                     polarity: _,
-                } = &generated_item.kind
+                } = generated_item.kind(&ctx.crate_hir)
                 {
                     ctx.crate_hir.impls.push(crate::hir::core::Impl {
+                        def_id: generated_item.def_id,
                         generics: generics.clone(),
                         self_ty: self_ty.clone(),
                         of_trait: of_trait.clone(),

@@ -47,7 +47,7 @@ fn desugar_while() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -65,7 +65,7 @@ fn desugar_for() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -82,7 +82,7 @@ fn desugar_try_operator() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -106,7 +106,7 @@ fn desugar_let_chain() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();

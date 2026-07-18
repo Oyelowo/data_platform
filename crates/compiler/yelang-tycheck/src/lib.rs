@@ -22,6 +22,7 @@ pub mod hir_ty_lower;
 pub mod lower_ctx;
 pub mod method;
 pub mod pat;
+pub mod solver_ctxt;
 pub mod tcx;
 pub mod typeck_results;
 pub mod writeback;

@@ -7,8 +7,9 @@
 use yelang_arena::{Arena, ArenaMap, IndexVec};
 use yelang_lexer::Span;
 
-use crate::hir::core::{ForeignItem, Impl, Trait};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, TyId};
+use crate::hir::core::{ForeignItem, ForeignItemKind, Impl, ImplItemKind, Trait, TraitItemKind};
+use crate::hir::item::ItemKind;
+use crate::ids::{BodyId, DefId, ExprId, ForeignItemKindId, ImplItemKindId, ItemKindId, PatId, StmtId, TraitItemKindId, TyId};
 
 /// The root of the HIR for a single compilation unit.
 #[derive(Debug, Clone)]
@@ -32,6 +33,14 @@ pub struct Crate {
     pub stmts: Arena<StmtId, Stmt>,
     /// All type nodes keyed by `TyId`.
     pub tys: Arena<TyId, Ty>,
+    /// All item-kind payloads keyed by `ItemKindId`.
+    pub item_kinds: Arena<ItemKindId, ItemKind>,
+    /// All trait-item-kind payloads keyed by `TraitItemKindId`.
+    pub trait_item_kinds: Arena<TraitItemKindId, TraitItemKind>,
+    /// All impl-item-kind payloads keyed by `ImplItemKindId`.
+    pub impl_item_kinds: Arena<ImplItemKindId, ImplItemKind>,
+    /// All foreign-item-kind payloads keyed by `ForeignItemKindId`.
+    pub foreign_item_kinds: Arena<ForeignItemKindId, ForeignItemKind>,
     /// Secondary map from `ExprId` to the source span of the expression.
     pub expr_spans: ArenaMap<ExprId, Span>,
     /// Secondary map from `PatId` to the source span of the pattern.
@@ -57,6 +66,10 @@ impl Crate {
             pats: Arena::new(),
             stmts: Arena::new(),
             tys: Arena::new(),
+            item_kinds: Arena::new(),
+            trait_item_kinds: Arena::new(),
+            impl_item_kinds: Arena::new(),
+            foreign_item_kinds: Arena::new(),
             expr_spans: ArenaMap::new(),
             pat_spans: ArenaMap::new(),
             stmt_spans: ArenaMap::new(),
@@ -98,6 +111,26 @@ impl Crate {
         let id = self.bodies.insert(body);
         self.body_spans.insert(id, span);
         id
+    }
+
+    /// Allocate an item-kind payload, returning the `ItemKindId`.
+    pub fn alloc_item_kind(&mut self, kind: ItemKind) -> ItemKindId {
+        self.item_kinds.insert(kind)
+    }
+
+    /// Allocate a trait-item-kind payload, returning the `TraitItemKindId`.
+    pub fn alloc_trait_item_kind(&mut self, kind: TraitItemKind) -> TraitItemKindId {
+        self.trait_item_kinds.insert(kind)
+    }
+
+    /// Allocate an impl-item-kind payload, returning the `ImplItemKindId`.
+    pub fn alloc_impl_item_kind(&mut self, kind: ImplItemKind) -> ImplItemKindId {
+        self.impl_item_kinds.insert(kind)
+    }
+
+    /// Allocate a foreign-item-kind payload, returning the `ForeignItemKindId`.
+    pub fn alloc_foreign_item_kind(&mut self, kind: ForeignItemKind) -> ForeignItemKindId {
+        self.foreign_item_kinds.insert(kind)
     }
 
     /// Look up the source span of an expression.

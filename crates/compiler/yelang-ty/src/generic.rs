@@ -4,13 +4,13 @@ use yelang_arena::DefId;
 use yelang_interner::Symbol;
 
 use crate::primitive::{IntTy, UintTy};
-use crate::ty::{Const, Ty};
+use crate::ty::{ConstId, TyId};
 
 /// A single generic argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum GenericArg<'tcx> {
-    Type(Ty<'tcx>),
-    Const(Const<'tcx>),
+pub enum GenericArg {
+    Type(TyId),
+    Const(ConstId),
 }
 
 /// Definition of generic parameters for an item.
@@ -65,19 +65,19 @@ pub struct GenericParamCount {
 
 /// A substitution maps parameter indices to concrete arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Substitution<'tcx> {
-    pub args: Vec<GenericArg<'tcx>>,
+pub struct Substitution {
+    pub args: Vec<GenericArg>,
 }
 
-impl<'tcx> GenericArg<'tcx> {
-    pub fn expect_type(self) -> Ty<'tcx> {
+impl GenericArg {
+    pub fn expect_type(self) -> TyId {
         match self {
             GenericArg::Type(ty) => ty,
             GenericArg::Const(_) => panic!("expected type, found const"),
         }
     }
 
-    pub fn expect_const(self) -> Const<'tcx> {
+    pub fn expect_const(self) -> ConstId {
         match self {
             GenericArg::Type(_) => panic!("expected const, found type"),
             GenericArg::Const(ct) => ct,
@@ -113,12 +113,12 @@ impl GenericParamCount {
     }
 }
 
-impl<'tcx> Substitution<'tcx> {
+impl Substitution {
     pub fn empty() -> Self {
         Self { args: Vec::new() }
     }
 
-    pub fn from_args(args: Vec<GenericArg<'tcx>>) -> Self {
+    pub fn from_args(args: Vec<GenericArg>) -> Self {
         Self { args }
     }
 
@@ -130,11 +130,11 @@ impl<'tcx> Substitution<'tcx> {
         self.args.len()
     }
 
-    pub fn get(&self, index: usize) -> Option<GenericArg<'tcx>> {
+    pub fn get(&self, index: usize) -> Option<GenericArg> {
         self.args.get(index).copied()
     }
 
-    pub fn type_at(&self, index: usize) -> Ty<'tcx> {
+    pub fn type_at(&self, index: usize) -> TyId {
         self.args[index].expect_type()
     }
 }
@@ -144,12 +144,12 @@ mod tests {
     use super::*;
     use crate::interner::Interner;
     use crate::primitive::IntTy;
-    use crate::ty::TyKind;
+    use crate::ty::Ty;
 
     #[test]
     fn generic_arg_type() {
         let interner = Interner::new();
-        let t = interner.mk_ty(TyKind::Int(IntTy::I32));
+        let t = interner.mk_ty(Ty::Int(IntTy::I32));
         let arg = GenericArg::Type(t);
         assert_eq!(arg.expect_type(), t);
         assert!(arg.is_type());
@@ -159,8 +159,8 @@ mod tests {
     #[test]
     fn substitution_basic() {
         let interner = Interner::new();
-        let t1 = interner.mk_ty(TyKind::Int(IntTy::I32));
-        let t2 = interner.mk_ty(TyKind::Bool);
+        let t1 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let t2 = interner.mk_ty(Ty::Bool);
         let sub = Substitution::from_args(vec![GenericArg::Type(t1), GenericArg::Type(t2)]);
         assert_eq!(sub.len(), 2);
         assert_eq!(sub.type_at(0), t1);

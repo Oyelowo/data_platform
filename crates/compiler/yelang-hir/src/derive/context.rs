@@ -22,16 +22,16 @@ pub struct AdtInfo<'a> {
     /// The struct/enum's identifier.
     pub ident: yelang_ast::Ident,
     /// The generic parameters of the ADT.
-    pub generics: &'a Generics,
+    pub generics: Generics,
     /// The shape of the ADT.
-    pub shape: AdtShape<'a>,
+    pub shape: AdtShape,
 }
 
 /// Shape of an algebraic data type.
 #[derive(Debug, Clone)]
-pub enum AdtShape<'a> {
-    Struct(&'a VariantData),
-    Enum(&'a EnumDef),
+pub enum AdtShape {
+    Struct(VariantData),
+    Enum(EnumDef),
 }
 
 impl<'a> AdtInfo<'a> {
@@ -92,9 +92,13 @@ pub struct DeriveContext<'a, 'b: 'a> {
 impl<'a, 'b: 'a> DeriveContext<'a, 'b> {
     /// Try to extract ADT information from the item being derived for.
     pub fn adt_info(&self) -> Result<AdtInfo<'a>, DeriveError> {
-        let (generics, shape) = match &self.hir_item.kind {
-            ItemKind::Struct { data, generics } => (generics, AdtShape::Struct(data)),
-            ItemKind::Enum { def, generics } => (generics, AdtShape::Enum(def)),
+        let (generics, shape) = match self.hir_item.kind(&self.ctx.crate_hir) {
+            ItemKind::Struct { data, generics } => {
+                (generics.clone(), AdtShape::Struct(data.clone()))
+            }
+            ItemKind::Enum { def, generics } => {
+                (generics.clone(), AdtShape::Enum(def.clone()))
+            }
             other => {
                 return Err(DeriveError::UnsupportedItem {
                     derive: self.derive_name,

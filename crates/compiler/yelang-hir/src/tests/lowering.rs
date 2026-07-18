@@ -50,7 +50,7 @@ fn lower_simple_fn() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind, ItemKind::Fn { .. }));
+    assert!(matches!(item.kind(&crate_hir), ItemKind::Fn { .. }));
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn lower_struct_item() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind, ItemKind::Struct { .. }));
+    assert!(matches!(item.kind(&crate_hir), ItemKind::Struct { .. }));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn lower_enum_item() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind, ItemKind::Enum { .. }));
+    assert!(matches!(item.kind(&crate_hir), ItemKind::Enum { .. }));
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn lower_binary_expr() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -101,7 +101,7 @@ fn lower_call_expr() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -124,7 +124,7 @@ fn lower_match_expr() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn");
     };
     let body = crate_hir.bodies.get(*body).unwrap();

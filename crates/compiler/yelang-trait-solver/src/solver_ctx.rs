@@ -9,30 +9,30 @@ use yelang_arena::DefId;
 use yelang_interner::Symbol;
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::{Predicate, TraitRef};
-use yelang_ty::ty::{ImplPolarity, PolyFnSig, Ty};
+use yelang_ty::ty::{ImplPolarity, PolyFnSig, TyId};
 
 /// Information about a trait definition that the solver needs.
 #[derive(Clone, Debug)]
-pub struct TraitDefInfo<'tcx> {
+pub struct TraitDefInfo {
     pub def_id: DefId,
     /// Whether this is an auto trait (coinductive cycles are allowed).
     pub is_auto: bool,
     /// Supertraits, e.g. `trait Foo: Bar + Baz` stores `Bar` and `Baz`.
-    pub supertraits: Vec<TraitRef<'tcx>>,
+    pub supertraits: Vec<TraitRef>,
 }
 
 /// Information about a trait impl block that the solver needs.
 #[derive(Clone, Debug)]
-pub struct ImplInfo<'tcx> {
+pub struct ImplInfo {
     pub def_id: DefId,
     /// The trait ref implemented by this impl, with `Self` as the first arg.
-    pub trait_ref: TraitRef<'tcx>,
+    pub trait_ref: TraitRef,
     /// Polarity of the impl.
     pub polarity: ImplPolarity,
     /// Number of generic parameters (type + const) introduced by the impl.
     pub generic_param_count: usize,
     /// Where-clause predicates of the impl, with params referenced by index.
-    pub predicates: Vec<Predicate<'tcx>>,
+    pub predicates: Vec<Predicate>,
 }
 
 /// Built-in traits the solver knows about without user-written impls.
@@ -45,49 +45,49 @@ pub enum BuiltinTraitKind {
 
 /// An associated item, used for projection normalization.
 #[derive(Clone, Debug)]
-pub struct AssocItemInfo<'tcx> {
+pub struct AssocItemInfo {
     pub def_id: DefId,
     /// For an impl assoc item, the def id of the corresponding trait item.
     /// For a trait assoc item this is `None` (the item is its own trait item).
     pub trait_item_def_id: Option<DefId>,
     pub ident: Symbol,
-    pub kind: AssocItemKind<'tcx>,
+    pub kind: AssocItemKind,
 }
 
 /// Kind of an associated item.
 #[derive(Clone, Debug)]
-pub enum AssocItemKind<'tcx> {
+pub enum AssocItemKind {
     /// An associated type.
     Type {
-        bounds: Vec<TraitRef<'tcx>>,
-        default: Option<Ty<'tcx>>,
+        bounds: Vec<TraitRef>,
+        default: Option<TyId>,
     },
     /// An associated function.
-    Fn { sig: PolyFnSig<'tcx> },
+    Fn { sig: PolyFnSig },
     /// An associated const.
-    Const { ty: Ty<'tcx> },
+    Const { ty: TyId },
 }
 
 /// The solver's interface to the rest of the compiler.
-pub trait SolverCtxt<'tcx> {
+pub trait SolverCtxt {
     /// The interner for creating types and lists.
-    fn interner(&self) -> &Interner<'tcx>;
+    fn interner(&self) -> &Interner;
 
     /// Look up a trait definition.
-    fn trait_info(&self, def_id: DefId) -> Option<TraitDefInfo<'tcx>>;
+    fn trait_info(&self, def_id: DefId) -> Option<TraitDefInfo>;
 
     /// All user-written impls of the given trait.
-    fn impls_for_trait(&self, def_id: DefId) -> &[ImplInfo<'tcx>];
+    fn impls_for_trait(&self, def_id: DefId) -> &[ImplInfo];
 
     /// If the trait is a built-in, return its kind.
     fn builtin_kind(&self, def_id: DefId) -> Option<BuiltinTraitKind>;
 
     /// Associated items of a trait definition.
-    fn trait_assoc_items(&self, def_id: DefId) -> &[AssocItemInfo<'tcx>];
+    fn trait_assoc_items(&self, def_id: DefId) -> &[AssocItemInfo];
 
     /// Associated items of an impl block.
-    fn impl_assoc_items(&self, impl_def_id: DefId) -> &[AssocItemInfo<'tcx>];
+    fn impl_assoc_items(&self, impl_def_id: DefId) -> &[AssocItemInfo];
 
     /// Field types of an ADT, for auto-trait derivation.
-    fn adt_field_tys(&self, adt_def_id: DefId) -> &[Ty<'tcx>];
+    fn adt_field_tys(&self, adt_def_id: DefId) -> &[TyId];
 }

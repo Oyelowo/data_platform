@@ -224,89 +224,96 @@ pub fn fold_body_id(f: &mut impl Folder, crate_hir: &mut Crate, body_id: BodyId)
 }
 
 pub fn walk_item(f: &mut impl Folder, crate_hir: &mut Crate, item: Item) -> Item {
+    let kind = crate_hir
+        .item_kinds
+        .get(item.kind)
+        .cloned()
+        .unwrap_or(ItemKind::Mod { items: vec![] });
+    let new_kind = match kind {
+        ItemKind::Fn { sig, body, generics } => ItemKind::Fn {
+            sig: walk_fn_sig(f, crate_hir, sig),
+            body: fold_body_id(f, crate_hir, body),
+            generics: walk_generics(f, crate_hir, generics),
+        },
+        ItemKind::Struct { data, generics } => ItemKind::Struct {
+            data: walk_variant_data(f, crate_hir, data),
+            generics: walk_generics(f, crate_hir, generics),
+        },
+        ItemKind::Enum { def, generics } => ItemKind::Enum {
+            def: crate::hir::core::EnumDef {
+                variants: def
+                    .variants
+                    .into_iter()
+                    .map(|variant| walk_variant_def(f, crate_hir, variant))
+                    .collect(),
+                span: def.span,
+            },
+            generics: walk_generics(f, crate_hir, generics),
+        },
+        ItemKind::Trait {
+            items,
+            generics,
+            super_traits,
+        } => ItemKind::Trait {
+            items: items
+                .into_iter()
+                .map(|item| walk_trait_item(f, crate_hir, item))
+                .collect(),
+            generics: walk_generics(f, crate_hir, generics),
+            super_traits: super_traits
+                .into_iter()
+                .map(|trait_ref| f.fold_trait_ref(trait_ref))
+                .collect(),
+        },
+        ItemKind::Impl {
+            items,
+            generics,
+            self_ty,
+            of_trait,
+            polarity,
+        } => ItemKind::Impl {
+            items: items
+                .into_iter()
+                .map(|item| walk_impl_item(f, crate_hir, item))
+                .collect(),
+            generics: walk_generics(f, crate_hir, generics),
+            self_ty: fold_ty_id(f, crate_hir, self_ty),
+            of_trait: of_trait.map(|trait_ref| f.fold_trait_ref(trait_ref)),
+            polarity,
+        },
+        ItemKind::TyAlias { ty, generics } => ItemKind::TyAlias {
+            ty: fold_ty_id(f, crate_hir, ty),
+            generics: walk_generics(f, crate_hir, generics),
+        },
+        ItemKind::Const { ty, body } => ItemKind::Const {
+            ty: fold_ty_id(f, crate_hir, ty),
+            body: fold_body_id(f, crate_hir, body),
+        },
+        ItemKind::Static {
+            ty,
+            mutability,
+            body,
+        } => ItemKind::Static {
+            ty: fold_ty_id(f, crate_hir, ty),
+            mutability,
+            body: fold_body_id(f, crate_hir, body),
+        },
+        ItemKind::Mod { items } => ItemKind::Mod {
+            items: items
+                .into_iter()
+                .map(|def_id| fold_item_id(f, crate_hir, def_id))
+                .collect(),
+        },
+        ItemKind::Use { path, kind } => ItemKind::Use {
+            path: walk_use_path(f, crate_hir, path),
+            kind,
+        },
+    };
+    let kind = crate_hir.alloc_item_kind(new_kind);
     Item {
         def_id: item.def_id,
         ident: item.ident,
-        kind: match item.kind {
-            ItemKind::Fn { sig, body, generics } => ItemKind::Fn {
-                sig: walk_fn_sig(f, crate_hir, sig),
-                body: fold_body_id(f, crate_hir, body),
-                generics: walk_generics(f, crate_hir, generics),
-            },
-            ItemKind::Struct { data, generics } => ItemKind::Struct {
-                data: walk_variant_data(f, crate_hir, data),
-                generics: walk_generics(f, crate_hir, generics),
-            },
-            ItemKind::Enum { def, generics } => ItemKind::Enum {
-                def: crate::hir::core::EnumDef {
-                    variants: def
-                        .variants
-                        .into_iter()
-                        .map(|variant| walk_variant_def(f, crate_hir, variant))
-                        .collect(),
-                    span: def.span,
-                },
-                generics: walk_generics(f, crate_hir, generics),
-            },
-            ItemKind::Trait {
-                items,
-                generics,
-                super_traits,
-            } => ItemKind::Trait {
-                items: items
-                    .into_iter()
-                    .map(|item| walk_trait_item(f, crate_hir, item))
-                    .collect(),
-                generics: walk_generics(f, crate_hir, generics),
-                super_traits: super_traits
-                    .into_iter()
-                    .map(|trait_ref| f.fold_trait_ref(trait_ref))
-                    .collect(),
-            },
-            ItemKind::Impl {
-                items,
-                generics,
-                self_ty,
-                of_trait,
-                polarity,
-            } => ItemKind::Impl {
-                items: items
-                    .into_iter()
-                    .map(|item| walk_impl_item(f, crate_hir, item))
-                    .collect(),
-                generics: walk_generics(f, crate_hir, generics),
-                self_ty: fold_ty_id(f, crate_hir, self_ty),
-                of_trait: of_trait.map(|trait_ref| f.fold_trait_ref(trait_ref)),
-                polarity,
-            },
-            ItemKind::TyAlias { ty, generics } => ItemKind::TyAlias {
-                ty: fold_ty_id(f, crate_hir, ty),
-                generics: walk_generics(f, crate_hir, generics),
-            },
-            ItemKind::Const { ty, body } => ItemKind::Const {
-                ty: fold_ty_id(f, crate_hir, ty),
-                body: fold_body_id(f, crate_hir, body),
-            },
-            ItemKind::Static {
-                ty,
-                mutability,
-                body,
-            } => ItemKind::Static {
-                ty: fold_ty_id(f, crate_hir, ty),
-                mutability,
-                body: fold_body_id(f, crate_hir, body),
-            },
-            ItemKind::Mod { items } => ItemKind::Mod {
-                items: items
-                    .into_iter()
-                    .map(|def_id| fold_item_id(f, crate_hir, def_id))
-                    .collect(),
-            },
-            ItemKind::Use { path, kind } => ItemKind::Use {
-                path: walk_use_path(f, crate_hir, path),
-                kind,
-            },
-        },
+        kind,
         vis: item.vis,
         attrs: item.attrs,
         span: item.span,
@@ -936,6 +943,7 @@ pub fn walk_variant_def(
     variant: VariantDef,
 ) -> VariantDef {
     VariantDef {
+        def_id: variant.def_id,
         ident: variant.ident,
         data: walk_variant_data(f, crate_hir, variant.data),
         discriminant: variant.discriminant.map(|c| walk_const(f, crate_hir, c)),
@@ -946,6 +954,7 @@ pub fn walk_variant_def(
 
 pub fn walk_field_def(f: &mut impl Folder, crate_hir: &mut Crate, field: FieldDef) -> FieldDef {
     FieldDef {
+        def_id: field.def_id,
         ident: field.ident,
         ty: fold_ty_id(f, crate_hir, field.ty),
         span: field.span,
@@ -960,6 +969,7 @@ pub fn walk_struct_field(
     field: StructField,
 ) -> StructField {
     StructField {
+        def_id: field.def_id,
         ty: fold_ty_id(f, crate_hir, field.ty),
         span: field.span,
         vis: field.vis,
@@ -969,6 +979,7 @@ pub fn walk_struct_field(
 
 pub fn walk_impl(f: &mut impl Folder, crate_hir: &mut Crate, impl_: Impl) -> Impl {
     Impl {
+        def_id: impl_.def_id,
         generics: walk_generics(f, crate_hir, impl_.generics),
         self_ty: fold_ty_id(f, crate_hir, impl_.self_ty),
         of_trait: impl_.of_trait.map(|tr| f.fold_trait_ref(tr)),
@@ -983,27 +994,37 @@ pub fn walk_impl(f: &mut impl Folder, crate_hir: &mut Crate, impl_: Impl) -> Imp
 }
 
 pub fn walk_impl_item(f: &mut impl Folder, crate_hir: &mut Crate, item: ImplItem) -> ImplItem {
+    let kind = crate_hir
+        .impl_item_kinds
+        .get(item.kind)
+        .cloned()
+        .unwrap_or(crate::hir::core::ImplItemKind::Type {
+            ty: TyId::default(),
+        });
+    let new_kind = match kind {
+        crate::hir::core::ImplItemKind::Fn { sig, body } => {
+            crate::hir::core::ImplItemKind::Fn {
+                sig: walk_fn_sig(f, crate_hir, sig),
+                body: fold_body_id(f, crate_hir, body),
+            }
+        }
+        crate::hir::core::ImplItemKind::Const { ty, body } => {
+            crate::hir::core::ImplItemKind::Const {
+                ty: fold_ty_id(f, crate_hir, ty),
+                body: fold_body_id(f, crate_hir, body),
+            }
+        }
+        crate::hir::core::ImplItemKind::Type { ty } => {
+            crate::hir::core::ImplItemKind::Type {
+                ty: fold_ty_id(f, crate_hir, ty),
+            }
+        }
+    };
+    let kind = crate_hir.alloc_impl_item_kind(new_kind);
     ImplItem {
+        def_id: item.def_id,
         ident: item.ident,
-        kind: match item.kind {
-            crate::hir::core::ImplItemKind::Fn { sig, body } => {
-                crate::hir::core::ImplItemKind::Fn {
-                    sig: walk_fn_sig(f, crate_hir, sig),
-                    body: fold_body_id(f, crate_hir, body),
-                }
-            }
-            crate::hir::core::ImplItemKind::Const { ty, body } => {
-                crate::hir::core::ImplItemKind::Const {
-                    ty: fold_ty_id(f, crate_hir, ty),
-                    body: fold_body_id(f, crate_hir, body),
-                }
-            }
-            crate::hir::core::ImplItemKind::Type { ty } => {
-                crate::hir::core::ImplItemKind::Type {
-                    ty: fold_ty_id(f, crate_hir, ty),
-                }
-            }
-        },
+        kind,
         attrs: item.attrs,
         span: item.span,
         defaultness: item.defaultness,
@@ -1029,31 +1050,42 @@ pub fn walk_trait(f: &mut impl Folder, crate_hir: &mut Crate, trait_: Trait) -> 
 }
 
 pub fn walk_trait_item(f: &mut impl Folder, crate_hir: &mut Crate, item: TraitItem) -> TraitItem {
+    let kind = crate_hir
+        .trait_item_kinds
+        .get(item.kind)
+        .cloned()
+        .unwrap_or(crate::hir::core::TraitItemKind::Type {
+            bounds: vec![],
+            default: None,
+        });
+    let new_kind = match kind {
+        crate::hir::core::TraitItemKind::Fn { sig, default } => {
+            crate::hir::core::TraitItemKind::Fn {
+                sig: walk_fn_sig(f, crate_hir, sig),
+                default: default.map(|body| fold_body_id(f, crate_hir, body)),
+            }
+        }
+        crate::hir::core::TraitItemKind::Const { ty, body } => {
+            crate::hir::core::TraitItemKind::Const {
+                ty: fold_ty_id(f, crate_hir, ty),
+                body: body.map(|b| fold_body_id(f, crate_hir, b)),
+            }
+        }
+        crate::hir::core::TraitItemKind::Type { bounds, default } => {
+            crate::hir::core::TraitItemKind::Type {
+                bounds: bounds
+                    .into_iter()
+                    .map(|bound| f.fold_trait_bound(bound))
+                    .collect(),
+                default: default.map(|ty| fold_ty_id(f, crate_hir, ty)),
+            }
+        }
+    };
+    let kind = crate_hir.alloc_trait_item_kind(new_kind);
     TraitItem {
+        def_id: item.def_id,
         ident: item.ident,
-        kind: match item.kind {
-            crate::hir::core::TraitItemKind::Fn { sig, default } => {
-                crate::hir::core::TraitItemKind::Fn {
-                    sig: walk_fn_sig(f, crate_hir, sig),
-                    default: default.map(|body| fold_body_id(f, crate_hir, body)),
-                }
-            }
-            crate::hir::core::TraitItemKind::Const { ty, body } => {
-                crate::hir::core::TraitItemKind::Const {
-                    ty: fold_ty_id(f, crate_hir, ty),
-                    body: body.map(|b| fold_body_id(f, crate_hir, b)),
-                }
-            }
-            crate::hir::core::TraitItemKind::Type { bounds, default } => {
-                crate::hir::core::TraitItemKind::Type {
-                    bounds: bounds
-                        .into_iter()
-                        .map(|bound| f.fold_trait_bound(bound))
-                        .collect(),
-                    default: default.map(|ty| fold_ty_id(f, crate_hir, ty)),
-                }
-            }
-        },
+        kind,
         attrs: item.attrs,
         span: item.span,
     }

@@ -62,7 +62,7 @@ pub fn derive_eq(
     }
 
     let self_ty = adt.self_ty(ctx);
-    let generics = derive_generics(ctx, adt.generics, eq_trait);
+    let generics = derive_generics(ctx, &adt.generics, eq_trait);
     Some(impl_item(ctx, eq_trait, self_ty, generics, vec![]))
 }
 

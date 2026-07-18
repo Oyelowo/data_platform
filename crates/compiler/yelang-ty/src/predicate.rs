@@ -2,33 +2,33 @@
 
 use yelang_arena::DefId;
 
-use crate::ty::{Const, GenericArgsRef, ImplPolarity, ProjectionTy, Ty};
+use crate::ty::{ConstId, GenericArgsRef, ImplPolarity, ProjectionTy, TyId};
 
 /// Something that must be proven to hold.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Predicate<'tcx> {
+pub enum Predicate {
     /// A trait bound: `T: Clone`.
-    Trait(TraitPredicate<'tcx>),
+    Trait(TraitPredicate),
     /// An associated type projection equality: `<T as Iterator>::Item == U`.
-    Projection(ProjectionPredicate<'tcx>),
+    Projection(ProjectionPredicate),
     /// A normalization goal: `<T as Iterator>::Item normalizes-to U`.
-    NormalizesTo(NormalizesToPredicate<'tcx>),
+    NormalizesTo(NormalizesToPredicate),
     /// A well-formedness goal: `T` is well-formed.
-    WellFormed(WellFormedPredicate<'tcx>),
+    WellFormed(WellFormedPredicate),
     /// A type outlives bound (no-op in Yelang, kept for uniformity).
-    TypeOutlives(TypeOutlivesPredicate<'tcx>),
+    TypeOutlives(TypeOutlivesPredicate),
     /// A const expression that must be evaluatable.
-    ConstEvaluatable(Const<'tcx>),
+    ConstEvaluatable(ConstId),
 }
 
 /// A trait bound predicate.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TraitPredicate<'tcx> {
-    pub trait_ref: TraitRef<'tcx>,
+pub struct TraitPredicate {
+    pub trait_ref: TraitRef,
     pub polarity: ImplPolarity,
 }
 
-impl<'tcx> std::fmt::Debug for TraitPredicate<'tcx> {
+impl std::fmt::Debug for TraitPredicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -40,19 +40,19 @@ impl<'tcx> std::fmt::Debug for TraitPredicate<'tcx> {
 
 /// A trait reference: `Clone` in `T: Clone`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TraitRef<'tcx> {
+pub struct TraitRef {
     pub def_id: DefId,
-    pub args: GenericArgsRef<'tcx>,
+    pub args: GenericArgsRef,
 }
 
 /// A projection predicate: `<T as Trait>::Assoc == U`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ProjectionPredicate<'tcx> {
-    pub projection_ty: ProjectionTy<'tcx>,
-    pub term: Ty<'tcx>,
+pub struct ProjectionPredicate {
+    pub projection_ty: ProjectionTy,
+    pub term: TyId,
 }
 
-impl<'tcx> std::fmt::Debug for ProjectionPredicate<'tcx> {
+impl std::fmt::Debug for ProjectionPredicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -64,12 +64,12 @@ impl<'tcx> std::fmt::Debug for ProjectionPredicate<'tcx> {
 
 /// A normalization predicate: `<T as Trait>::Assoc normalizes-to U`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NormalizesToPredicate<'tcx> {
-    pub projection_ty: ProjectionTy<'tcx>,
-    pub term: Ty<'tcx>,
+pub struct NormalizesToPredicate {
+    pub projection_ty: ProjectionTy,
+    pub term: TyId,
 }
 
-impl<'tcx> std::fmt::Debug for NormalizesToPredicate<'tcx> {
+impl std::fmt::Debug for NormalizesToPredicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -81,28 +81,28 @@ impl<'tcx> std::fmt::Debug for NormalizesToPredicate<'tcx> {
 
 /// A type outlives predicate (no-op in Yelang).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TypeOutlivesPredicate<'tcx> {
-    pub ty: Ty<'tcx>,
+pub struct TypeOutlivesPredicate {
+    pub ty: TyId,
 }
 
 /// The environment of assumptions available when proving a goal.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ParamEnv<'tcx> {
-    pub caller_bounds: ListPredicate<'tcx>,
+pub struct ParamEnv {
+    pub caller_bounds: ListPredicate,
 }
 
 /// An interned list of predicates.
-pub type ListPredicate<'tcx> = crate::list::List<Predicate<'tcx>>;
+pub type ListPredicate = crate::list::List<Predicate>;
 
 /// A well-formed predicate.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WellFormedPredicate<'tcx> {
-    pub ty: Ty<'tcx>,
+pub struct WellFormedPredicate {
+    pub ty: TyId,
 }
 
 use std::fmt;
 
-impl<'tcx> fmt::Debug for Predicate<'tcx> {
+impl fmt::Debug for Predicate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Predicate::Trait(tp) => {
@@ -129,13 +129,13 @@ impl<'tcx> fmt::Debug for Predicate<'tcx> {
     }
 }
 
-impl<'tcx> fmt::Debug for TraitRef<'tcx> {
+impl fmt::Debug for TraitRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "TraitRef({:?})", self.def_id)
     }
 }
 
-impl<'tcx> fmt::Debug for ParamEnv<'tcx> {
+impl fmt::Debug for ParamEnv {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ParamEnv({:?})", self.caller_bounds)
     }
@@ -146,12 +146,12 @@ mod tests {
     use super::*;
     use crate::interner::Interner;
     use crate::primitive::IntTy;
-    use crate::ty::TyKind;
+    use crate::ty::Ty;
 
     #[test]
     fn trait_predicate_basic() {
         let interner = Interner::new();
-        let t_i32 = interner.mk_ty(TyKind::Int(IntTy::I32));
+        let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
         let args = interner.mk_generic_args(&[crate::generic::GenericArg::Type(t_i32)]);
         let trait_ref = TraitRef {
             def_id: DefId::new(1),

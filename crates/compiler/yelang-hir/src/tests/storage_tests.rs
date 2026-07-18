@@ -46,7 +46,7 @@ fn derived_impl_def_id_is_above_resolved_definitions() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .find(|item| matches!(item.kind, ItemKind::Impl { .. }))
+        .find(|item| matches!(item.kind(&crate_hir), ItemKind::Impl { .. }))
         .expect("derived Copy impl should be present");
 
     assert!(

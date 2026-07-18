@@ -2,7 +2,7 @@ use yelang_arena::DefId;
 use yelang_ty::canonical::Certainty;
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate, TraitRef};
-use yelang_ty::ty::{ImplPolarity, ParamTy, Ty, TyKind};
+use yelang_ty::ty::{ImplPolarity, ParamTy, Ty, TyId};
 
 use crate::eval_ctxt::EvalCtxt;
 use crate::goal::Goal;
@@ -10,35 +10,35 @@ use crate::solver_ctx::BuiltinTraitKind;
 
 use super::support::TestCtxt;
 
-fn empty_env<'tcx>(_interner: &'tcx Interner<'tcx>) -> ParamEnv<'tcx> {
+fn empty_env(_interner: &Interner) -> ParamEnv {
     ParamEnv {
         caller_bounds: yelang_ty::list::List::empty(),
     }
 }
 
-fn param_ty<'tcx>(interner: &'tcx Interner<'tcx>, index: u32) -> Ty<'tcx> {
-    interner.mk_ty(TyKind::Param(ParamTy {
+fn param_ty(interner: &Interner, index: u32) -> TyId {
+    interner.mk_ty(Ty::Param(ParamTy {
         index,
         name: yelang_interner::Symbol::from(index),
     }))
 }
 
-fn trait_ref_with_self<'tcx>(
-    interner: &'tcx Interner<'tcx>,
+fn trait_ref_with_self(
+    interner: &Interner,
     trait_def_id: DefId,
-    self_ty: Ty<'tcx>,
-) -> TraitRef<'tcx> {
+    self_ty: TyId,
+) -> TraitRef {
     TraitRef {
         def_id: trait_def_id,
         args: interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(self_ty)]),
     }
 }
 
-fn add_simple_impl<'tcx>(
-    cx: &mut TestCtxt<'tcx>,
+fn add_simple_impl(
+    cx: &mut TestCtxt<'_>,
     impl_def_id: DefId,
     trait_def_id: DefId,
-    self_ty: Ty<'tcx>,
+    self_ty: TyId,
 ) {
     cx.add_impl(impl_def_id, trait_def_id, self_ty, 0, Vec::new());
 }
@@ -162,7 +162,7 @@ fn builtin_sized() {
 
     let slice_goal = cx.trait_goal(
         sized,
-        interner.mk_ty(TyKind::Slice(cx.mk_i32())),
+        interner.mk_ty(Ty::Slice(cx.mk_i32())),
         empty_env(&interner),
     );
     assert!(ecx.evaluate_root_goal(slice_goal).is_err());
@@ -183,7 +183,7 @@ fn builtin_copy_conservative() {
     );
 
     // ADTs are not built-in Copy.
-    let adt = interner.mk_ty(TyKind::Adt(
+    let adt = interner.mk_ty(Ty::Adt(
         yelang_ty::ty::AdtDef {
             def_id: DefId::new(99),
         },
@@ -230,7 +230,7 @@ fn coinductive_auto_trait_cycle_succeeds() {
     // Structural derivation requires Recursive: Send, which is a coinductive
     // cycle and should succeed.
     let recursive_def = DefId::new(200);
-    let recursive_ty = interner.mk_ty(TyKind::Adt(
+    let recursive_ty = interner.mk_ty(Ty::Adt(
         yelang_ty::ty::AdtDef { def_id: recursive_def },
         yelang_ty::list::List::empty(),
     ));
@@ -366,7 +366,7 @@ fn normalizes_to_simple_impl() {
     cx.add_trait_assoc_type(foo, foo_item, yelang_interner::Symbol::from(1u32));
 
     let i32_ty = cx.mk_i32();
-    let bool_ty = interner.mk_ty(TyKind::Bool);
+    let bool_ty = interner.mk_ty(Ty::Bool);
     let impl_foo_i32 = DefId::new(302);
     cx.add_impl(impl_foo_i32, foo, i32_ty, 0, Vec::new());
     cx.add_impl_assoc_type(impl_foo_i32, DefId::new(3021), foo_item, yelang_interner::Symbol::from(1u32), bool_ty);
@@ -423,7 +423,7 @@ fn normalizes_to_no_impl_fails() {
     cx.add_trait(foo, false);
     cx.add_trait_assoc_type(foo, foo_item, yelang_interner::Symbol::from(1u32));
 
-    let goal = cx.normalizes_to_goal(foo, foo_item, cx.mk_i32(), interner.mk_ty(TyKind::Bool), empty_env(&interner));
+    let goal = cx.normalizes_to_goal(foo, foo_item, cx.mk_i32(), interner.mk_ty(Ty::Bool), empty_env(&interner));
 
     let mut ecx = EvalCtxt::new(&interner, &cx);
     assert!(ecx.evaluate_root_goal(goal).is_err());
@@ -440,7 +440,7 @@ fn projection_equality_via_normalization() {
     cx.add_trait_assoc_type(foo, foo_item, yelang_interner::Symbol::from(1u32));
 
     let i32_ty = cx.mk_i32();
-    let bool_ty = interner.mk_ty(TyKind::Bool);
+    let bool_ty = interner.mk_ty(Ty::Bool);
     let impl_foo_i32 = DefId::new(302);
     cx.add_impl(impl_foo_i32, foo, i32_ty, 0, Vec::new());
     cx.add_impl_assoc_type(impl_foo_i32, DefId::new(3021), foo_item, yelang_interner::Symbol::from(1u32), bool_ty);
@@ -482,9 +482,9 @@ fn auto_trait_tuple() {
     let send = DefId::new(400);
     cx.add_trait(send, true);
 
-    let pair = interner.mk_ty(TyKind::Tuple(interner.mk_generic_args(&[
+    let pair = interner.mk_ty(Ty::Tuple(interner.mk_generic_args(&[
         yelang_ty::generic::GenericArg::Type(cx.mk_i32()),
-        yelang_ty::generic::GenericArg::Type(interner.mk_ty(TyKind::Bool)),
+        yelang_ty::generic::GenericArg::Type(interner.mk_ty(Ty::Bool)),
     ])));
 
     let goal = cx.trait_goal(send, pair, empty_env(&interner));
@@ -501,7 +501,7 @@ fn auto_trait_reference() {
     let send = DefId::new(400);
     cx.add_trait(send, true);
 
-    let ref_i32 = interner.mk_ty(TyKind::Ref(cx.mk_i32(), yelang_ty::ty::Mutability::Not));
+    let ref_i32 = interner.mk_ty(Ty::Ref(cx.mk_i32(), yelang_ty::ty::Mutability::Not));
 
     let goal = cx.trait_goal(send, ref_i32, empty_env(&interner));
 

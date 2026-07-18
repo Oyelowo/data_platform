@@ -7,14 +7,14 @@
 
 use yelang_hir::ids::{ExprId, PatId};
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{InferTy, Ty, TyKind};
+use yelang_ty::ty::{InferTy, Ty, TyId};
 
 use crate::fn_ctxt::FnCtxt;
 
 /// Write inferred types back to the results tables.
-pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
+pub fn writeback_types(fcx: &mut FnCtxt<'_>) {
     // Resolve expression types
-    let expr_entries: Vec<(ExprId, Ty<'tcx>)> = fcx
+    let expr_entries: Vec<(ExprId, TyId)> = fcx
         .results
         .expr_types
         .iter()
@@ -26,7 +26,7 @@ pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
     }
 
     // Resolve pattern types
-    let pat_entries: Vec<(PatId, Ty<'tcx>)> = fcx
+    let pat_entries: Vec<(PatId, TyId)> = fcx
         .results
         .pat_types
         .iter()
@@ -38,7 +38,7 @@ pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
     }
 
     // Resolve local types
-    let local_entries: Vec<(PatId, Ty<'tcx>)> = fcx
+    let local_entries: Vec<(PatId, TyId)> = fcx
         .results
         .local_types
         .iter()
@@ -51,20 +51,21 @@ pub fn writeback_types<'tcx>(fcx: &mut FnCtxt<'tcx>) {
 }
 
 /// Resolve a type, applying fallback for unresolved int/float variables.
-fn resolve_with_fallback<'tcx>(fcx: &mut FnCtxt<'tcx>, ty: Ty<'tcx>) -> Ty<'tcx> {
-    match ty.kind() {
-        TyKind::Infer(InferTy::IntVar(_)) => {
+fn resolve_with_fallback(fcx: &mut FnCtxt<'_>, ty: TyId) -> TyId {
+    let interner = fcx.tcx.interner();
+    match interner.ty(ty) {
+        Ty::Infer(InferTy::IntVar(_)) => {
             // Integer fallback: i32
             fcx.mk_int(IntTy::I32)
         }
-        TyKind::Infer(InferTy::FloatVar(_)) => {
+        Ty::Infer(InferTy::FloatVar(_)) => {
             // Float fallback: f64
             fcx.mk_float(FloatTy::F64)
         }
-        TyKind::Infer(InferTy::TyVar(_)) => {
+        Ty::Infer(InferTy::TyVar(_)) => {
             // General type variable: try to resolve, otherwise error
             let resolved = fcx.resolve_ty(ty);
-            if matches!(resolved.kind(), TyKind::Infer(InferTy::TyVar(_))) {
+            if matches!(interner.ty(resolved), Ty::Infer(InferTy::TyVar(_))) {
                 fcx.mk_error()
             } else {
                 resolved

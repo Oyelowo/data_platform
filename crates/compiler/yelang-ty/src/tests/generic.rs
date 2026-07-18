@@ -1,7 +1,7 @@
 use crate::generic::{GenericArg, GenericParamCount, Substitution};
 use crate::interner::Interner;
 use crate::primitive::IntTy;
-use crate::ty::TyKind;
+use crate::ty::Ty;
 
 #[test]
 fn substitution_empty() {
@@ -13,8 +13,8 @@ fn substitution_empty() {
 #[test]
 fn substitution_type_at() {
     let interner = Interner::new();
-    let t1 = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let t2 = interner.mk_ty(TyKind::Bool);
+    let t1 = interner.mk_ty(Ty::Int(IntTy::I32));
+    let t2 = interner.mk_ty(Ty::Bool);
     let sub = Substitution::from_args(vec![GenericArg::Type(t1), GenericArg::Type(t2)]);
     assert_eq!(sub.type_at(0), t1);
     assert_eq!(sub.type_at(1), t2);

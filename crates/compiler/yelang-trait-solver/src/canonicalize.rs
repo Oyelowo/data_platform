@@ -15,7 +15,8 @@ use yelang_ty::interner::Interner;
 
 use crate::goal::Goal;
 use yelang_ty::ty::{
-    Const, ConstKind, FloatVid, InferTy, IntVid, PlaceholderType, Ty, TyKind, TyVid, UniverseIndex,
+    Const, ConstId, ConstVid, FloatVid, InferTy, IntVid, PlaceholderType, Ty, TyId, TyVid,
+    UniverseIndex,
 };
 
 use crate::response::CanonicalGoal;
@@ -29,23 +30,23 @@ enum CanonicalVarKey {
     TyVar(TyVid),
     IntVar(IntVid),
     FloatVar(FloatVid),
-    ConstVar(yelang_ty::ty::ConstVid),
+    ConstVar(ConstVid),
     PlaceholderTy(PlaceholderType),
 }
 
 /// Folds a value, replacing free variables with canonical bound variables.
-pub struct Canonicalizer<'a, 'tcx> {
-    interner: &'tcx Interner<'tcx>,
-    infcx: &'a mut InferCtxt<'tcx>,
+pub struct Canonicalizer<'a> {
+    interner: &'a Interner,
+    infcx: &'a mut InferCtxt,
     max_universe: UniverseIndex,
     variables: Vec<CanonicalVarKind>,
     var_map: FxHashMap<CanonicalVarKey, BoundVar>,
 }
 
-impl<'a, 'tcx> Canonicalizer<'a, 'tcx> {
+impl<'a> Canonicalizer<'a> {
     pub fn new(
-        interner: &'tcx Interner<'tcx>,
-        infcx: &'a mut InferCtxt<'tcx>,
+        interner: &'a Interner,
+        infcx: &'a mut InferCtxt,
         max_universe: UniverseIndex,
     ) -> Self {
         Self {
@@ -82,20 +83,20 @@ impl<'a, 'tcx> Canonicalizer<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx> TypeFolder<'tcx> for Canonicalizer<'a, 'tcx> {
-    fn interner(&self) -> &'tcx Interner<'tcx> {
+impl<'a> TypeFolder for Canonicalizer<'a> {
+    fn interner(&self) -> &Interner {
         self.interner
     }
 
-    fn fold_ty(&mut self, ty: Ty<'tcx>) -> Ty<'tcx> {
-        match *ty.kind() {
-            TyKind::Infer(InferTy::TyVar(vid)) => {
+    fn fold_ty(&mut self, ty: TyId) -> TyId {
+        match self.interner.ty(ty) {
+            Ty::Infer(InferTy::TyVar(vid)) => {
                 let root = self.infcx.find_ty_var(vid);
                 match self.infcx.probe_ty_var(root) {
                     TypeVarValue::Known(known) => known.fold_with(self),
                     TypeVarValue::Unknown => {
                         let index = self.canonical_var(CanonicalVarKey::TyVar(root));
-                        self.interner.mk_ty(TyKind::Bound(
+                        self.interner.mk_ty(Ty::Bound(
                             DebruijnIndex::INNERMOST,
                             BoundTy {
                                 var: index,
@@ -105,13 +106,13 @@ impl<'a, 'tcx> TypeFolder<'tcx> for Canonicalizer<'a, 'tcx> {
                     }
                 }
             }
-            TyKind::Infer(InferTy::IntVar(vid)) => {
+            Ty::Infer(InferTy::IntVar(vid)) => {
                 let root = self.infcx.find_int_var(vid);
                 match self.infcx.probe_int_var(root) {
-                    IntVarValue::Known(it) => self.interner.mk_ty(TyKind::Int(*it)),
+                    IntVarValue::Known(it) => self.interner.mk_ty(Ty::Int(*it)),
                     IntVarValue::Unknown => {
                         let index = self.canonical_var(CanonicalVarKey::IntVar(root));
-                        self.interner.mk_ty(TyKind::Bound(
+                        self.interner.mk_ty(Ty::Bound(
                             DebruijnIndex::INNERMOST,
                             BoundTy {
                                 var: index,
@@ -121,13 +122,13 @@ impl<'a, 'tcx> TypeFolder<'tcx> for Canonicalizer<'a, 'tcx> {
                     }
                 }
             }
-            TyKind::Infer(InferTy::FloatVar(vid)) => {
+            Ty::Infer(InferTy::FloatVar(vid)) => {
                 let root = self.infcx.find_float_var(vid);
                 match self.infcx.probe_float_var(root) {
-                    FloatVarValue::Known(ft) => self.interner.mk_ty(TyKind::Float(*ft)),
+                    FloatVarValue::Known(ft) => self.interner.mk_ty(Ty::Float(*ft)),
                     FloatVarValue::Unknown => {
                         let index = self.canonical_var(CanonicalVarKey::FloatVar(root));
-                        self.interner.mk_ty(TyKind::Bound(
+                        self.interner.mk_ty(Ty::Bound(
                             DebruijnIndex::INNERMOST,
                             BoundTy {
                                 var: index,
@@ -137,9 +138,9 @@ impl<'a, 'tcx> TypeFolder<'tcx> for Canonicalizer<'a, 'tcx> {
                     }
                 }
             }
-            TyKind::Placeholder(placeholder) => {
+            Ty::Placeholder(placeholder) => {
                 let index = self.canonical_var(CanonicalVarKey::PlaceholderTy(placeholder));
-                self.interner.mk_ty(TyKind::Bound(
+                self.interner.mk_ty(Ty::Bound(
                     DebruijnIndex::INNERMOST,
                     BoundTy {
                         var: index,
@@ -147,35 +148,37 @@ impl<'a, 'tcx> TypeFolder<'tcx> for Canonicalizer<'a, 'tcx> {
                     },
                 ))
             }
-            TyKind::Bound(debruijn, bound_ty) => {
+            Ty::Bound(debruijn, bound_ty) => {
                 // The canonical binder becomes the new outermost binder, so
                 // existing bound variables shift out by one level.
                 self.interner
-                    .mk_ty(TyKind::Bound(debruijn.shifted_in(), bound_ty))
+                    .mk_ty(Ty::Bound(debruijn.shifted_in(), bound_ty))
             }
             _ => ty.super_fold_with(self),
         }
     }
 
-    fn fold_const(&mut self, ct: Const<'tcx>) -> Const<'tcx> {
-        match ct.kind {
-            ConstKind::Infer(vid) => {
+    fn fold_const(&mut self, ct: ConstId) -> ConstId {
+        let ty = self.interner.const_ty(ct);
+        let kind = self.interner.const_kind(ct);
+        match kind {
+            Const::Infer(vid) => {
                 let root = self.infcx.find_const_var(vid);
                 match self.infcx.probe_const_var(root) {
                     ConstVarValue::Known(known) => known.fold_with(self),
                     ConstVarValue::Unknown => {
                         let index = self.canonical_var(CanonicalVarKey::ConstVar(root));
-                        Const {
-                            ty: ct.ty.fold_with(self),
-                            kind: ConstKind::Bound(DebruijnIndex::INNERMOST, BoundVar(index.0)),
-                        }
+                        self.interner.mk_const_from_parts(
+                            Const::Bound(DebruijnIndex::INNERMOST, BoundVar(index.0)),
+                            ty.fold_with(self),
+                        )
                     }
                 }
             }
-            ConstKind::Bound(debruijn, bound_var) => Const {
-                ty: ct.ty.fold_with(self),
-                kind: ConstKind::Bound(debruijn.shifted_in(), bound_var),
-            },
+            Const::Bound(debruijn, bound_var) => self.interner.mk_const_from_parts(
+                Const::Bound(debruijn.shifted_in(), bound_var),
+                ty.fold_with(self),
+            ),
             _ => ct.super_fold_with(self),
         }
     }
@@ -186,14 +189,14 @@ impl<'a, 'tcx> TypeFolder<'tcx> for Canonicalizer<'a, 'tcx> {
 /// Inference variables become bound variables; placeholders become placeholder
 /// canonical variables. Existing bound variables are shifted out by one binder
 /// level to make room for the new outer binder.
-pub fn canonicalize<'tcx, V>(
+pub fn canonicalize<V>(
     value: V,
-    interner: &'tcx Interner<'tcx>,
-    infcx: &mut InferCtxt<'tcx>,
+    interner: &Interner,
+    infcx: &mut InferCtxt,
     max_universe: UniverseIndex,
-) -> Canonical<'tcx, V>
+) -> Canonical<V>
 where
-    V: TypeFoldable<'tcx>,
+    V: TypeFoldable,
 {
     let mut canonicalizer = Canonicalizer::new(interner, infcx, max_universe);
     let value = value.fold_with(&mut canonicalizer);
@@ -202,11 +205,11 @@ where
 }
 
 /// Canonicalize a solver goal.
-pub fn canonicalize_goal<'tcx>(
-    goal: Goal<'tcx>,
-    interner: &'tcx Interner<'tcx>,
-    infcx: &mut InferCtxt<'tcx>,
+pub fn canonicalize_goal(
+    goal: Goal,
+    interner: &Interner,
+    infcx: &mut InferCtxt,
     max_universe: UniverseIndex,
-) -> CanonicalGoal<'tcx> {
+) -> CanonicalGoal {
     canonicalize(goal, interner, infcx, max_universe)
 }

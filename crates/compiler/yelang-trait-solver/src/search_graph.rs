@@ -16,17 +16,17 @@ use crate::response::{CanonicalGoal, CanonicalResponse};
 
 /// The search graph tracks in-progress and completed goals.
 #[derive(Debug, Default)]
-pub struct SearchGraph<'tcx> {
+pub struct SearchGraph {
     /// Stack of currently evaluating goals (for cycle detection).
-    stack: Vec<StackEntry<'tcx>>,
+    stack: Vec<StackEntry>,
     /// Cache of completed goals.
-    cache: FxHashMap<CanonicalGoal<'tcx>, CacheEntry<'tcx>>,
+    cache: FxHashMap<CanonicalGoal, CacheEntry>,
 }
 
 /// An entry on the evaluation stack.
 #[derive(Clone, Debug)]
-pub struct StackEntry<'tcx> {
-    pub goal: CanonicalGoal<'tcx>,
+pub struct StackEntry {
+    pub goal: CanonicalGoal,
     /// The remaining depth budget when this goal was pushed.
     pub available_depth: usize,
     /// Whether this entry has been used to prove itself (coinductive cycle).
@@ -34,26 +34,26 @@ pub struct StackEntry<'tcx> {
     /// Whether this entry is part of any cycle.
     pub has_cycle: bool,
     /// The provisional result (used during cycle resolution).
-    pub provisional: Option<CanonicalResponse<'tcx>>,
+    pub provisional: Option<CanonicalResponse>,
 }
 
 /// A cached completed goal.
 #[derive(Clone, Debug)]
-pub struct CacheEntry<'tcx> {
-    pub result: CanonicalResponse<'tcx>,
+pub struct CacheEntry {
+    pub result: CanonicalResponse,
     /// The remaining depth budget the solver had when proving this result.
     /// The cache entry is only reusable when the caller has at least this
     /// much budget left.
     pub available_depth: usize,
 }
 
-impl<'tcx> SearchGraph<'tcx> {
+impl SearchGraph {
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Check if a goal is currently being evaluated (cycle detection).
-    pub fn is_in_stack(&self, goal: &CanonicalGoal<'tcx>) -> Option<usize> {
+    pub fn is_in_stack(&self, goal: &CanonicalGoal) -> Option<usize> {
         self.stack.iter().position(|e| e.goal == *goal)
     }
 
@@ -61,9 +61,9 @@ impl<'tcx> SearchGraph<'tcx> {
     /// remaining depth budget.
     pub fn lookup_cache(
         &self,
-        goal: &CanonicalGoal<'tcx>,
+        goal: &CanonicalGoal,
         available_depth: usize,
-    ) -> Option<&CacheEntry<'tcx>> {
+    ) -> Option<&CacheEntry> {
         let entry = self.cache.get(goal)?;
         if entry.available_depth <= available_depth {
             Some(entry)
@@ -73,7 +73,7 @@ impl<'tcx> SearchGraph<'tcx> {
     }
 
     /// Push a goal onto the evaluation stack.
-    pub fn push(&mut self, goal: CanonicalGoal<'tcx>, available_depth: usize) {
+    pub fn push(&mut self, goal: CanonicalGoal, available_depth: usize) {
         self.stack.push(StackEntry {
             goal,
             available_depth,
@@ -84,7 +84,7 @@ impl<'tcx> SearchGraph<'tcx> {
     }
 
     /// Pop a goal from the evaluation stack.
-    pub fn pop(&mut self) -> Option<StackEntry<'tcx>> {
+    pub fn pop(&mut self) -> Option<StackEntry> {
         self.stack.pop()
     }
 
@@ -105,7 +105,7 @@ impl<'tcx> SearchGraph<'tcx> {
     }
 
     /// Set a provisional result for a stack entry.
-    pub fn set_provisional(&mut self, stack_index: usize, response: CanonicalResponse<'tcx>) {
+    pub fn set_provisional(&mut self, stack_index: usize, response: CanonicalResponse) {
         if let Some(entry) = self.stack.get_mut(stack_index) {
             entry.provisional = Some(response);
         }
@@ -114,8 +114,8 @@ impl<'tcx> SearchGraph<'tcx> {
     /// Insert a completed goal into the cache.
     pub fn insert_cache(
         &mut self,
-        goal: CanonicalGoal<'tcx>,
-        result: CanonicalResponse<'tcx>,
+        goal: CanonicalGoal,
+        result: CanonicalResponse,
         available_depth: usize,
     ) {
         self.cache.insert(
@@ -133,12 +133,12 @@ impl<'tcx> SearchGraph<'tcx> {
     }
 
     /// Access the stack entry at the given index.
-    pub fn stack_entry(&self, index: usize) -> Option<&StackEntry<'tcx>> {
+    pub fn stack_entry(&self, index: usize) -> Option<&StackEntry> {
         self.stack.get(index)
     }
 
     /// Mutable access to the stack entry at the given index.
-    pub fn stack_entry_mut(&mut self, index: usize) -> Option<&mut StackEntry<'tcx>> {
+    pub fn stack_entry_mut(&mut self, index: usize) -> Option<&mut StackEntry> {
         self.stack.get_mut(index)
     }
 }

@@ -470,13 +470,21 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                     .items
                     .get(def_id)
                     .and_then(|opt| opt.clone())
-                    .unwrap_or_else(|| Item {
-                        def_id,
-                        ident: yelang_ast::Ident::new(yelang_interner::Symbol::from(0u32), span),
-                        attrs: vec![],
-                        kind: crate::hir::core::ItemKind::Mod { items: vec![] },
-                        vis: yelang_ast::Visibility::Private,
-                        span,
+                    .unwrap_or_else(|| {
+                        let kind_id = ctx
+                            .crate_hir
+                            .alloc_item_kind(crate::hir::core::ItemKind::Mod { items: vec![] });
+                        Item {
+                            def_id,
+                            ident: yelang_ast::Ident::new(
+                                yelang_interner::Symbol::from(0u32),
+                                span,
+                            ),
+                            attrs: vec![],
+                            kind: kind_id,
+                            vis: yelang_ast::Visibility::Private,
+                            span,
+                        }
                     }),
             }
         }

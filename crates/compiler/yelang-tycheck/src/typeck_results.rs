@@ -2,24 +2,24 @@
 
 use yelang_arena::{DefId, FxHashMap};
 use yelang_hir::ids::{ExprId, PatId};
-use yelang_ty::ty::Ty;
+use yelang_ty::ty::TyId;
 
 /// The result of type-checking a function body.
 ///
 /// Maps HIR node IDs to their inferred types.
 #[derive(Debug, Clone)]
-pub struct TypeckResults<'tcx> {
+pub struct TypeckResults {
     /// Inferred type of each expression.
-    pub expr_types: FxHashMap<ExprId, Ty<'tcx>>,
+    pub expr_types: FxHashMap<ExprId, TyId>,
     /// Inferred type of each pattern.
-    pub pat_types: FxHashMap<PatId, Ty<'tcx>>,
+    pub pat_types: FxHashMap<PatId, TyId>,
     /// Type of each local variable (from pattern bindings).
-    pub local_types: FxHashMap<PatId, Ty<'tcx>>,
+    pub local_types: FxHashMap<PatId, TyId>,
     /// The function's definition id.
     pub def_id: DefId,
 }
 
-impl<'tcx> TypeckResults<'tcx> {
+impl TypeckResults {
     pub fn new(def_id: DefId) -> Self {
         Self {
             expr_types: FxHashMap::new(),
@@ -29,15 +29,15 @@ impl<'tcx> TypeckResults<'tcx> {
         }
     }
 
-    pub fn expr_ty(&self, expr_id: ExprId) -> Option<Ty<'tcx>> {
+    pub fn expr_ty(&self, expr_id: ExprId) -> Option<TyId> {
         self.expr_types.get(&expr_id).copied()
     }
 
-    pub fn pat_ty(&self, pat_id: PatId) -> Option<Ty<'tcx>> {
+    pub fn pat_ty(&self, pat_id: PatId) -> Option<TyId> {
         self.pat_types.get(&pat_id).copied()
     }
 
-    pub fn local_ty(&self, pat_id: PatId) -> Option<Ty<'tcx>> {
+    pub fn local_ty(&self, pat_id: PatId) -> Option<TyId> {
         self.local_types.get(&pat_id).copied()
     }
 }

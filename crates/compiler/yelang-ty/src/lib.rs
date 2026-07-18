@@ -2,14 +2,16 @@
  * yelang-ty: Core Type System IR
  *
  * This crate defines the canonical representation of types used throughout
- * the Yelang compiler after HIR lowering. Every `Ty` is interned and
- * arena-allocated, so equality is pointer equality.
+ * the Yelang compiler after HIR lowering. Every `TyId` is an interned ID into
+ * the `Interner`'s dense type table, so equality is integer equality.
  *
  * ## Architecture
  *
- * - `ty::Ty` — A pointer to an interned `TyKind`.
- * - `ty::TyKind` — All type constructors (primitives, ADTs, tuples, etc.).
- * - `interner::Interner` — Hash-consing arena for types and lists.
+ * - `ty::Ty` — All type constructors (primitives, ADTs, tuples, etc.).
+ * - `ty::TyId` — A lifetime-free ID for an interned `Ty`.
+ * - `ty::Const` — All type-level constant constructors.
+ * - `ty::ConstId` — A lifetime-free ID for an interned `Const`.
+ * - `interner::Interner` — Hash-consing arena for types, constants, and lists.
  * - `generic::GenericArg` — Type/const generic arguments.
  * - `predicate::Predicate` — Trait bounds, projection equalities.
  * - `canonical::Canonical<T>` — Inference-var-free goals for caching.
@@ -17,10 +19,10 @@
  *
  * ## Design Axioms
  *
- * 1. **Pointer equality**: Two types are equal iff their `Ty` pointers are equal.
+ * 1. **ID equality**: Two types are equal iff their `TyId` IDs are equal.
  * 2. **No lifetimes**: Yelang is lifetime-free; no region variables exist.
  * 3. **No subtyping**: Unification is equality; width subtyping is coercion.
- * 4. **Copy everywhere**: `Ty<'tcx>` is `Copy` (it's just a reference).
+ * 4. **Copy everywhere**: `TyId`/`ConstId` are `Copy` (they are just 4-byte IDs).
  */
 
 pub mod binder;
@@ -40,15 +42,12 @@ pub mod visit;
 
 pub use binder::*;
 pub use canonical::*;
-pub use consts::*;
-pub use existential::*;
 pub use fold::*;
 pub use generic::*;
 pub use interner::*;
 pub use list::*;
 pub use predicate::*;
 pub use primitive::*;
-pub use projection::*;
 pub use subst::*;
 pub use ty::*;
 pub use visit::*;

@@ -4,48 +4,51 @@
  */
 
 use crate::existential::ExistentialPredicate;
+use crate::interner::Interner;
 use crate::list::List;
 use crate::predicate::Predicate;
-use crate::ty::{Const, ConstKind, Ty, TyKind};
+use crate::ty::{Const, Ty, TyId, ConstId};
 
 /// Control flow for visitation.
 pub type ControlFlow = std::ops::ControlFlow<()>;
 
 /// A visitor that inspects types.
-pub trait TypeVisitor<'tcx>: Sized {
-    fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow {
+pub trait TypeVisitor: Sized {
+    fn interner(&self) -> &Interner;
+
+    fn visit_ty(&mut self, ty: TyId) -> ControlFlow {
         ty.super_visit_with(self)
     }
 
-    fn visit_const(&mut self, _ct: Const<'tcx>) -> ControlFlow {
+    fn visit_const(&mut self, _ct: ConstId) -> ControlFlow {
         ControlFlow::Continue(())
     }
 }
 
 /// Types that can be structurally visited.
-pub trait TypeVisitable<'tcx>: Sized {
-    fn visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow;
+pub trait TypeVisitable: Sized {
+    fn visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow;
 }
 
 /// Super-visit: the default structural traversal.
-pub trait TypeSuperVisitable<'tcx> {
-    fn super_visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow;
+pub trait TypeSuperVisitable {
+    fn super_visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow;
 }
 
-impl<'tcx> TypeVisitable<'tcx> for Ty<'tcx> {
-    fn visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow {
+impl TypeVisitable for TyId {
+    fn visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow {
         visitor.visit_ty(self)
     }
 }
 
-impl<'tcx> TypeVisitable<'tcx> for Const<'tcx> {
-    fn visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow {
+impl TypeVisitable for ConstId {
+    fn visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow {
         visitor.visit_const(self)
     }
 }
 
-fn visit_generic_args<'tcx, V: TypeVisitor<'tcx>>(
-    args: &crate::ty::GenericArgsRef<'tcx>,
+fn visit_generic_args<V: TypeVisitor>(
+    args: &crate::ty::GenericArgsRef,
     visitor: &mut V,
 ) -> ControlFlow {
     for arg in args.iter() {
@@ -57,52 +60,53 @@ fn visit_generic_args<'tcx, V: TypeVisitor<'tcx>>(
     ControlFlow::Continue(())
 }
 
-impl<'tcx> TypeSuperVisitable<'tcx> for Ty<'tcx> {
-    fn super_visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow {
-        match self.kind() {
-            TyKind::Bool
-            | TyKind::Char
-            | TyKind::Str
-            | TyKind::Int(_)
-            | TyKind::Uint(_)
-            | TyKind::Float(_)
-            | TyKind::Param(_)
-            | TyKind::Bound(_, _)
-            | TyKind::Infer(_)
-            | TyKind::Never
-            | TyKind::TypeLit(_)
-            | TyKind::Placeholder(_)
-            | TyKind::Error => ControlFlow::Continue(()),
-            TyKind::Adt(_, args) => visit_generic_args(args, visitor),
-            TyKind::FnPtr(sig) => {
+impl TypeSuperVisitable for TyId {
+    fn super_visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow {
+        let kind = visitor.interner().ty(self);
+        match kind {
+            Ty::Bool
+            | Ty::Char
+            | Ty::Str
+            | Ty::Int(_)
+            | Ty::Uint(_)
+            | Ty::Float(_)
+            | Ty::Param(_)
+            | Ty::Bound(_, _)
+            | Ty::Infer(_)
+            | Ty::Never
+            | Ty::TypeLit(_)
+            | Ty::Placeholder(_)
+            | Ty::Error => ControlFlow::Continue(()),
+            Ty::Adt(_, args) => visit_generic_args(&args, visitor),
+            Ty::FnPtr(sig) => {
                 visit_generic_args(&sig.sig.inputs, visitor)?;
                 visitor.visit_ty(sig.sig.output)
             }
-            TyKind::FnDef(fd) => visit_generic_args(&fd.args, visitor),
-            TyKind::Tuple(args) => visit_generic_args(args, visitor),
-            TyKind::Array(ty, ct) => {
-                visitor.visit_ty(*ty)?;
-                visitor.visit_const(*ct)
+            Ty::FnDef(fd) => visit_generic_args(&fd.args, visitor),
+            Ty::Tuple(args) => visit_generic_args(&args, visitor),
+            Ty::Array(ty, ct) => {
+                visitor.visit_ty(ty)?;
+                visitor.visit_const(ct)
             }
-            TyKind::Slice(ty) => visitor.visit_ty(*ty),
-            TyKind::RawPtr(tam) => visitor.visit_ty(tam.ty),
-            TyKind::Ref(ty, _) => visitor.visit_ty(*ty),
-            TyKind::AnonStruct(anon) => {
+            Ty::Slice(ty) => visitor.visit_ty(ty),
+            Ty::RawPtr(tam) => visitor.visit_ty(tam.ty),
+            Ty::Ref(ty, _) => visitor.visit_ty(ty),
+            Ty::AnonStruct(anon) => {
                 for f in anon.fields.iter() {
                     visitor.visit_ty(f.ty)?;
                 }
                 ControlFlow::Continue(())
             }
-            TyKind::Union(a, b) => {
-                visitor.visit_ty(*a)?;
-                visitor.visit_ty(*b)
+            Ty::Union(a, b) => {
+                visitor.visit_ty(a)?;
+                visitor.visit_ty(b)
             }
-            TyKind::Utility(_, args) => visit_generic_args(args, visitor),
-            TyKind::Alias(alias) => visit_generic_args(&alias.args, visitor),
-            TyKind::Projection(proj) => {
+            Ty::Utility(_, args) => visit_generic_args(&args, visitor),
+            Ty::Alias(alias) => visit_generic_args(&alias.args, visitor),
+            Ty::Projection(proj) => {
                 visit_generic_args(&proj.trait_ref.args, visitor)
             }
-            TyKind::Dynamic(binder) => {
+            Ty::Dynamic(binder) => {
                 for pred in binder.value.iter() {
                     match pred {
                         ExistentialPredicate::Trait(tr) => {
@@ -121,23 +125,25 @@ impl<'tcx> TypeSuperVisitable<'tcx> for Ty<'tcx> {
     }
 }
 
-impl<'tcx> TypeSuperVisitable<'tcx> for Const<'tcx> {
-    fn super_visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow {
-        visitor.visit_ty(self.ty)?;
-        match self.kind {
-            ConstKind::Unevaluated(u) => visit_generic_args(&u.args, visitor),
-            ConstKind::Value(_)
-            | ConstKind::Param(_)
-            | ConstKind::Bound(_, _)
-            | ConstKind::Placeholder(_)
-            | ConstKind::Infer(_)
-            | ConstKind::Error => ControlFlow::Continue(()),
+impl TypeSuperVisitable for ConstId {
+    fn super_visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow {
+        let interner = visitor.interner();
+        let kind = interner.const_kind(self);
+        visitor.visit_ty(interner.const_ty(self))?;
+        match kind {
+            Const::Unevaluated(u) => visit_generic_args(&u.args, visitor),
+            Const::Value(_)
+            | Const::Param(_)
+            | Const::Bound(_, _)
+            | Const::Placeholder(_)
+            | Const::Infer(_)
+            | Const::Error => ControlFlow::Continue(()),
         }
     }
 }
 
-impl<'tcx> TypeVisitable<'tcx> for Predicate<'tcx> {
-    fn visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow {
+impl TypeVisitable for Predicate {
+    fn visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow {
         match self {
             Predicate::Trait(p) => {
                 visit_generic_args(&p.trait_ref.args, visitor)?;
@@ -164,8 +170,8 @@ impl<'tcx> TypeVisitable<'tcx> for Predicate<'tcx> {
     }
 }
 
-impl<'tcx> TypeVisitable<'tcx> for List<Predicate<'tcx>> {
-    fn visit_with<V: TypeVisitor<'tcx>>(self, visitor: &mut V) -> ControlFlow {
+impl TypeVisitable for List<Predicate> {
+    fn visit_with<V: TypeVisitor>(self, visitor: &mut V) -> ControlFlow {
         for predicate in self.iter() {
             predicate.visit_with(visitor)?;
         }
@@ -178,16 +184,20 @@ mod tests {
     use super::*;
     use crate::interner::Interner;
     use crate::primitive::IntTy;
-    use crate::ty::{AdtDef, ParamTy, TyKind};
-    use crate::visit::{TypeVisitable, TypeVisitor};
+    use crate::ty::{AdtDef, ParamTy, Ty};
     use yelang_interner::Symbol;
 
-    struct CountTysVisitor {
+    struct CountTysVisitor<'a> {
+        interner: &'a Interner,
         count: usize,
     }
 
-    impl<'tcx> TypeVisitor<'tcx> for CountTysVisitor {
-        fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow {
+    impl<'a> TypeVisitor for CountTysVisitor<'a> {
+        fn interner(&self) -> &Interner {
+            self.interner
+        }
+
+        fn visit_ty(&mut self, ty: TyId) -> ControlFlow {
             self.count += 1;
             ty.super_visit_with(self)
         }
@@ -196,15 +206,15 @@ mod tests {
     #[test]
     fn visit_counts_nested_types() {
         let interner = Interner::new();
-        let t_i32 = interner.mk_ty(TyKind::Int(IntTy::I32));
-        let t_bool = interner.mk_ty(TyKind::Bool);
+        let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let t_bool = interner.mk_ty(Ty::Bool);
         let args = interner.mk_generic_args(&[
             crate::generic::GenericArg::Type(t_i32),
             crate::generic::GenericArg::Type(t_bool),
         ]);
-        let t_adt = interner.mk_ty(TyKind::Adt(AdtDef { def_id: yelang_arena::DefId::new(1) }, args));
+        let t_adt = interner.mk_ty(Ty::Adt(AdtDef { def_id: yelang_arena::DefId::new(1) }, args));
 
-        let mut visitor = CountTysVisitor { count: 0 };
+        let mut visitor = CountTysVisitor { interner: &interner, count: 0 };
         assert!(t_adt.visit_with(&mut visitor).is_continue());
         // Adt + 2 args = 3
         assert_eq!(visitor.count, 3);
@@ -213,17 +223,23 @@ mod tests {
     #[test]
     fn visit_finds_param() {
         let interner = Interner::new();
-        let t_param = interner.mk_ty(TyKind::Param(ParamTy {
+        let t_param = interner.mk_ty(Ty::Param(ParamTy {
             index: 0,
             name: Symbol::from(1),
         }));
         let args = interner.mk_generic_args(&[crate::generic::GenericArg::Type(t_param)]);
-        let t_tuple = interner.mk_ty(TyKind::Tuple(args));
+        let t_tuple = interner.mk_ty(Ty::Tuple(args));
 
-        struct FindParam;
-        impl<'tcx> TypeVisitor<'tcx> for FindParam {
-            fn visit_ty(&mut self, ty: Ty<'tcx>) -> ControlFlow {
-                if matches!(ty.kind(), TyKind::Param(_)) {
+        struct FindParam<'a> {
+            interner: &'a Interner,
+        }
+        impl<'a> TypeVisitor for FindParam<'a> {
+            fn interner(&self) -> &Interner {
+                self.interner
+            }
+
+            fn visit_ty(&mut self, ty: TyId) -> ControlFlow {
+                if matches!(self.interner.ty(ty), Ty::Param(_)) {
                     ControlFlow::Break(())
                 } else {
                     ty.super_visit_with(self)
@@ -231,7 +247,45 @@ mod tests {
             }
         }
 
-        let mut visitor = FindParam;
+        let mut visitor = FindParam { interner: &interner };
         assert!(t_tuple.visit_with(&mut visitor).is_break());
+    }
+
+    #[test]
+    fn visit_counts_projection_types() {
+        let interner = Interner::new();
+        let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let trait_ref = crate::predicate::TraitRef {
+            def_id: yelang_arena::DefId::new(1),
+            args: interner.mk_generic_args(&[crate::generic::GenericArg::Type(t_i32)]),
+        };
+        let projection = interner.mk_ty(Ty::Projection(crate::ty::ProjectionTy {
+            trait_ref,
+            item_def_id: yelang_arena::DefId::new(2),
+        }));
+
+        let mut visitor = CountTysVisitor { interner: &interner, count: 0 };
+        assert!(projection.visit_with(&mut visitor).is_continue());
+        // Projection + i32 arg = 2
+        assert_eq!(visitor.count, 2);
+    }
+
+    #[test]
+    fn visit_counts_dynamic_predicates() {
+        let interner = Interner::new();
+        let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
+        let existential = crate::ty::ExistentialPredicate::Trait(crate::ty::ExistentialTraitRef {
+            def_id: yelang_arena::DefId::new(1),
+            args: interner.mk_generic_args(&[crate::generic::GenericArg::Type(t_i32)]),
+        });
+        let dynamic = interner.mk_ty(Ty::Dynamic(crate::ty::Binder {
+            bound_vars: interner.mk_bound_var_list(&[]),
+            value: interner.mk_existential_predicates(&[existential]),
+        }));
+
+        let mut visitor = CountTysVisitor { interner: &interner, count: 0 };
+        assert!(dynamic.visit_with(&mut visitor).is_continue());
+        // Dynamic + i32 arg = 2
+        assert_eq!(visitor.count, 2);
     }
 }

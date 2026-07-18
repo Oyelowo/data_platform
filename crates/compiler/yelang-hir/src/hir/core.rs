@@ -13,7 +13,8 @@ pub use crate::hir::pat::Pat;
 pub use crate::hir::adt::{FieldDef, StructField, VariantData};
 pub use crate::hir::ty::Ty;
 
-use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
+use crate::crate_data::Crate;
+use crate::ids::{BodyId, DefId, ExprId, ForeignItemKindId, ImplItemKindId, PatId, StmtId, TraitItemKindId, TyId};
 use crate::res::Res;
 
 /// Re-export commonly-used AST types that contain no unresolved names.
@@ -178,6 +179,7 @@ pub struct EnumDef {
 /// A single enum variant.
 #[derive(Debug, Clone)]
 pub struct VariantDef {
+    pub def_id: DefId,
     pub ident: Ident,
     pub data: VariantData,
     pub discriminant: Option<crate::hir::ty::Const>,
@@ -198,10 +200,21 @@ pub struct Trait {
 /// An item inside a trait definition.
 #[derive(Debug, Clone)]
 pub struct TraitItem {
+    pub def_id: DefId,
     pub ident: Ident,
-    pub kind: TraitItemKind,
+    pub kind: TraitItemKindId,
     pub attrs: Vec<Attribute>,
     pub span: Span,
+}
+
+impl TraitItem {
+    /// Resolve the trait item's payload from the crate arena.
+    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a TraitItemKind {
+        krate
+            .trait_item_kinds
+            .get(self.kind)
+            .expect("TraitItemKindId should be allocated")
+    }
 }
 
 /// Kinds of trait items.
@@ -224,6 +237,7 @@ pub enum TraitItemKind {
 /// An impl block.
 #[derive(Debug, Clone)]
 pub struct Impl {
+    pub def_id: DefId,
     pub generics: Generics,
     pub self_ty: TyId,
     pub of_trait: Option<TraitRef>,
@@ -244,11 +258,22 @@ pub enum ImplPolarity {
 /// An item inside an impl block.
 #[derive(Debug, Clone)]
 pub struct ImplItem {
+    pub def_id: DefId,
     pub ident: Ident,
-    pub kind: ImplItemKind,
+    pub kind: ImplItemKindId,
     pub attrs: Vec<Attribute>,
     pub span: Span,
     pub defaultness: Defaultness,
+}
+
+impl ImplItem {
+    /// Resolve the impl item's payload from the crate arena.
+    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a ImplItemKind {
+        krate
+            .impl_item_kinds
+            .get(self.kind)
+            .expect("ImplItemKindId should be allocated")
+    }
 }
 
 /// Kinds of impl items.
@@ -287,8 +312,18 @@ pub enum UseKind {
 #[derive(Debug, Clone)]
 pub struct ForeignItem {
     pub ident: Ident,
-    pub kind: ForeignItemKind,
+    pub kind: ForeignItemKindId,
     pub span: Span,
+}
+
+impl ForeignItem {
+    /// Resolve the foreign item's payload from the crate arena.
+    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a ForeignItemKind {
+        krate
+            .foreign_item_kinds
+            .get(self.kind)
+            .expect("ForeignItemKindId should be allocated")
+    }
 }
 
 /// Kinds of foreign items.

@@ -5,27 +5,27 @@ use std::fmt;
 use yelang_interner::Symbol;
 use yelang_ty::predicate::{ProjectionPredicate, TraitPredicate};
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{Const, Ty, TyVid};
+use yelang_ty::ty::{ConstId, TyId, TyVid};
 
 /// An error that occurred during type inference or unification.
 #[derive(Clone, Debug, PartialEq)]
-pub enum TypeError<'tcx> {
+pub enum TypeError {
     /// Mismatched types: expected `expected`, found `found`.
-    Mismatch { expected: Ty<'tcx>, found: Ty<'tcx> },
+    Mismatch { expected: TyId, found: TyId },
     /// Cyclic type: `?T = Vec<?T>`.
     CyclicTy(TyVid),
     /// Unsolved inference variable at the end of type checking.
     UnresolvedInferenceVariable(TyVid),
     /// Invalid projection: `<T as Trait>::Item` not found.
-    ProjectionNotFound(ProjectionPredicate<'tcx>),
+    ProjectionNotFound(ProjectionPredicate),
     /// Trait not implemented: `T: Trait` not satisfied.
-    TraitNotImplemented(TraitPredicate<'tcx>),
+    TraitNotImplemented(TraitPredicate),
     /// Ambiguous trait bound.
-    AmbiguousTrait(TraitPredicate<'tcx>),
+    AmbiguousTrait(TraitPredicate),
     /// Invalid field access.
-    NoSuchField { ty: Ty<'tcx>, field: Symbol },
+    NoSuchField { ty: TyId, field: Symbol },
     /// Invalid method call.
-    NoSuchMethod { ty: Ty<'tcx>, method: Symbol },
+    NoSuchMethod { ty: TyId, method: Symbol },
     /// Arity mismatch in call.
     ArgCount { expected: usize, found: usize },
     /// Generic argument count mismatch.
@@ -38,24 +38,24 @@ pub enum TypeError<'tcx> {
     FloatMismatch { expected: FloatTy, found: FloatTy },
     /// Constant value mismatch.
     ConstMismatch {
-        expected: Const<'tcx>,
-        found: Const<'tcx>,
+        expected: ConstId,
+        found: ConstId,
     },
     /// Trait reference mismatch (e.g. different trait in a projection).
     TraitRefMismatch {
-        expected: yelang_ty::predicate::TraitRef<'tcx>,
-        found: yelang_ty::predicate::TraitRef<'tcx>,
+        expected: yelang_ty::predicate::TraitRef,
+        found: yelang_ty::predicate::TraitRef,
     },
     /// Existential predicate mismatch in trait objects.
     ExistentialMismatch {
-        expected: yelang_ty::existential::ExistentialPredicate<'tcx>,
-        found: yelang_ty::existential::ExistentialPredicate<'tcx>,
+        expected: yelang_ty::existential::ExistentialPredicate,
+        found: yelang_ty::existential::ExistentialPredicate,
     },
     /// Custom error message (avoid in unification paths).
     Custom(String),
 }
 
-impl<'tcx> fmt::Display for TypeError<'tcx> {
+impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TypeError::Mismatch { expected, found } => {
@@ -141,4 +141,4 @@ impl<'tcx> fmt::Display for TypeError<'tcx> {
     }
 }
 
-impl<'tcx> std::error::Error for TypeError<'tcx> {}
+impl std::error::Error for TypeError {}

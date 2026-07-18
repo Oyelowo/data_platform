@@ -1,21 +1,21 @@
 /*! Const inference variable support. */
 
-use yelang_ty::ty::{Const, ConstVid};
+use yelang_ty::ty::{ConstId, ConstVid};
 
 use crate::unify::UnificationTable;
 
 /// Value stored for a const inference variable.
 #[derive(Clone, Debug, PartialEq)]
-pub enum ConstVarValue<'tcx> {
-    Known(Const<'tcx>),
+pub enum ConstVarValue {
+    Known(ConstId),
     Unknown,
 }
 
-impl<'tcx> Default for ConstVarValue<'tcx> {
+impl Default for ConstVarValue {
     fn default() -> Self {
         ConstVarValue::Unknown
     }
 }
 
 /// Table of const inference variables.
-pub type ConstVariableTable<'tcx> = UnificationTable<ConstVid, ConstVarValue<'tcx>>;
+pub type ConstVariableTable = UnificationTable<ConstVid, ConstVarValue>;

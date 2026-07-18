@@ -7,7 +7,7 @@ use crate::tests::common::{parse_program, stub_resolved};
 
 fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::core::FnSig {
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { sig, .. } = &item.kind else {
+    let ItemKind::Fn { sig, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     sig
@@ -383,7 +383,7 @@ fn lower_fn_with_complex_generic_bounds() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else {
+    let ItemKind::Fn { generics, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     assert_eq!(generics.params.len(), 2);
@@ -399,7 +399,7 @@ fn lower_hrtb_where_predicate() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { generics, .. } = &item.kind else {
+    let ItemKind::Fn { generics, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let wc = generics

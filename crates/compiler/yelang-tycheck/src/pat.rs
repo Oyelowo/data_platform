@@ -6,12 +6,12 @@
 
 use yelang_hir::hir::pat::Pat;
 use yelang_hir::ids::PatId;
-use yelang_ty::ty::Ty;
+use yelang_ty::ty::TyId;
 
 use crate::fn_ctxt::FnCtxt;
 
 /// Check a pattern against an expected type.
-pub fn check_pat<'tcx>(fcx: &mut FnCtxt<'tcx>, pat_id: PatId, expected_ty: Ty<'tcx>) {
+pub fn check_pat(fcx: &mut FnCtxt<'_>, pat_id: PatId, expected_ty: TyId) {
     let pat = fcx
         .tcx.crate_hir()
         .pats

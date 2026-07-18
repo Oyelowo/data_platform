@@ -9,7 +9,7 @@ use yelang_ty::generic::Substitution;
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::{NormalizesToPredicate, ProjectionPredicate};
 use yelang_ty::subst::substitute;
-use yelang_ty::ty::{ProjectionTy, Ty};
+use yelang_ty::ty::{ProjectionTy, TyId};
 
 use crate::solver_ctx::{AssocItemKind, SolverCtxt};
 
@@ -20,13 +20,13 @@ use crate::solver_ctx::{AssocItemKind, SolverCtxt};
 /// corresponds to that trait item (either by `trait_item_def_id` or by name),
 /// and its `default` (the concrete type written in the impl) is returned with
 /// the impl substitution applied.
-pub fn assoc_type_from_impl<'tcx, C: SolverCtxt<'tcx>>(
+pub fn assoc_type_from_impl<C: SolverCtxt>(
     tcx: &C,
-    interner: &'tcx Interner<'tcx>,
-    projection_ty: ProjectionTy<'tcx>,
+    interner: &Interner,
+    projection_ty: ProjectionTy,
     impl_def_id: DefId,
-    impl_subst: &Substitution<'tcx>,
-) -> Option<Ty<'tcx>> {
+    impl_subst: &Substitution,
+) -> Option<TyId> {
     let trait_items = tcx.trait_assoc_items(projection_ty.trait_ref.def_id);
     let trait_assoc = trait_items
         .iter()
@@ -48,11 +48,11 @@ pub fn assoc_type_from_impl<'tcx, C: SolverCtxt<'tcx>>(
 }
 
 /// Convenience: unwrap a `ProjectionPredicate` into its `ProjectionTy`.
-pub fn projection_predicate_to_ty<'tcx>(pred: ProjectionPredicate<'tcx>) -> ProjectionTy<'tcx> {
+pub fn projection_predicate_to_ty(pred: ProjectionPredicate) -> ProjectionTy {
     pred.projection_ty
 }
 
 /// Convenience: unwrap a `NormalizesToPredicate` into its `ProjectionTy`.
-pub fn normalizes_to_predicate_to_ty<'tcx>(pred: NormalizesToPredicate<'tcx>) -> ProjectionTy<'tcx> {
+pub fn normalizes_to_predicate_to_ty(pred: NormalizesToPredicate) -> ProjectionTy {
     pred.projection_ty
 }

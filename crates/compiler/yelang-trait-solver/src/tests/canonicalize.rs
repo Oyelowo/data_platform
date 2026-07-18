@@ -7,13 +7,13 @@ use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate, TraitRef};
 use yelang_ty::primitive::IntTy;
-use yelang_ty::ty::{ConstKind, InferTy, PlaceholderType, Ty, TyKind, UniverseIndex};
+use yelang_ty::ty::{Const, InferTy, PlaceholderType, Ty, TyId, UniverseIndex};
 
 use crate::canonicalize::canonicalize;
 use crate::goal::Goal;
 use crate::instantiate::instantiate;
 
-fn trait_goal<'tcx>(interner: &'tcx Interner<'tcx>, ty: Ty<'tcx>) -> Goal<'tcx> {
+fn trait_goal(interner: &Interner, ty: TyId) -> Goal {
     let args = interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(ty)]);
     let trait_ref = TraitRef {
         def_id: DefId::new(1),
@@ -44,8 +44,8 @@ fn canonicalize_ty_var_becomes_bound() {
         CanonicalVarKind::Ty(_)
     ));
     assert!(matches!(
-        canonical.value.kind(),
-        TyKind::Bound(
+        interner.ty(canonical.value),
+        Ty::Bound(
             DebruijnIndex(0),
             BoundTy {
                 var: BoundVar(0),
@@ -83,16 +83,16 @@ fn canonicalize_float_var_becomes_float_kind() {
 fn canonicalize_const_var_becomes_const_kind() {
     let interner = Interner::new();
     let mut infcx = InferCtxt::new();
-    let ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let const_var = infcx.new_const_var(ty);
+    let ty = interner.mk_ty(Ty::Int(IntTy::I32));
+    let const_var = infcx.new_const_var(&interner, ty);
 
     let canonical = canonicalize(const_var, &interner, &mut infcx, UniverseIndex(0));
 
     assert_eq!(canonical.variables.len(), 1);
     assert_eq!(canonical.variables.as_slice()[0], CanonicalVarKind::Const);
     assert!(matches!(
-        canonical.value.kind,
-        ConstKind::Bound(DebruijnIndex(0), BoundVar(0))
+        interner.const_kind(canonical.value),
+        Const::Bound(DebruijnIndex(0), BoundVar(0))
     ));
 }
 
@@ -104,7 +104,7 @@ fn canonicalize_placeholder_preserves_universe() {
         universe: UniverseIndex(2),
         name: Symbol::from(7),
     };
-    let ty = interner.mk_ty(TyKind::Placeholder(placeholder));
+    let ty = interner.mk_ty(Ty::Placeholder(placeholder));
 
     let canonical = canonicalize(ty, &interner, &mut infcx, UniverseIndex(2));
 
@@ -119,7 +119,7 @@ fn canonicalize_placeholder_preserves_universe() {
 fn canonicalize_shifts_existing_bound_vars() {
     let interner = Interner::new();
     let mut infcx = InferCtxt::new();
-    let bound = interner.mk_ty(TyKind::Bound(
+    let bound = interner.mk_ty(Ty::Bound(
         DebruijnIndex::INNERMOST,
         BoundTy {
             var: BoundVar(0),
@@ -130,8 +130,8 @@ fn canonicalize_shifts_existing_bound_vars() {
     let canonical = canonicalize(bound, &interner, &mut infcx, UniverseIndex(0));
 
     assert!(matches!(
-        canonical.value.kind(),
-        TyKind::Bound(
+        interner.ty(canonical.value),
+        Ty::Bound(
             DebruijnIndex(1),
             BoundTy {
                 var: BoundVar(0),
@@ -146,7 +146,7 @@ fn canonicalize_shared_var_uses_same_index() {
     let interner = Interner::new();
     let mut infcx = InferCtxt::new();
     let ty_var = infcx.new_ty_var(&interner);
-    let pair = interner.mk_ty(TyKind::Tuple(interner.mk_generic_args(&[
+    let pair = interner.mk_ty(Ty::Tuple(interner.mk_generic_args(&[
         yelang_ty::generic::GenericArg::Type(ty_var),
         yelang_ty::generic::GenericArg::Type(ty_var),
     ])));
@@ -154,10 +154,10 @@ fn canonicalize_shared_var_uses_same_index() {
     let canonical = canonicalize(pair, &interner, &mut infcx, UniverseIndex(0));
 
     assert_eq!(canonical.variables.len(), 1);
-    if let TyKind::Tuple(args) = canonical.value.kind() {
+    if let Ty::Tuple(args) = interner.ty(canonical.value) {
         assert!(args.iter().all(|arg| matches!(
-            arg.expect_type().kind(),
-            TyKind::Bound(
+            interner.ty(arg.expect_type()),
+            Ty::Bound(
                 DebruijnIndex(0),
                 BoundTy {
                     var: BoundVar(0),
@@ -176,7 +176,7 @@ fn canonicalize_distinct_vars_use_distinct_indices() {
     let mut infcx = InferCtxt::new();
     let a = infcx.new_ty_var(&interner);
     let b = infcx.new_ty_var(&interner);
-    let pair = interner.mk_ty(TyKind::Tuple(interner.mk_generic_args(&[
+    let pair = interner.mk_ty(Ty::Tuple(interner.mk_generic_args(&[
         yelang_ty::generic::GenericArg::Type(a),
         yelang_ty::generic::GenericArg::Type(b),
     ])));
@@ -184,13 +184,13 @@ fn canonicalize_distinct_vars_use_distinct_indices() {
     let canonical = canonicalize(pair, &interner, &mut infcx, UniverseIndex(0));
 
     assert_eq!(canonical.variables.len(), 2);
-    if let TyKind::Tuple(args) = canonical.value.kind() {
-        let first = match args[0].expect_type().kind() {
-            TyKind::Bound(_, BoundTy { var, .. }) => var.0,
+    if let Ty::Tuple(args) = interner.ty(canonical.value) {
+        let first = match interner.ty(args[0].expect_type()) {
+            Ty::Bound(_, BoundTy { var, .. }) => var.0,
             _ => panic!("expected bound"),
         };
-        let second = match args[1].expect_type().kind() {
-            TyKind::Bound(_, BoundTy { var, .. }) => var.0,
+        let second = match interner.ty(args[1].expect_type()) {
+            Ty::Bound(_, BoundTy { var, .. }) => var.0,
             _ => panic!("expected bound"),
         };
         assert_ne!(first, second);
@@ -204,8 +204,8 @@ fn canonicalize_resolved_ty_var() {
     let interner = Interner::new();
     let mut infcx = InferCtxt::new();
     let ty_var = infcx.new_ty_var(&interner);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    infcx.eq(ty_var, i32_ty).unwrap();
+    let i32_ty = interner.mk_ty(Ty::Int(IntTy::I32));
+    infcx.eq(&interner, ty_var, i32_ty).unwrap();
 
     let canonical = canonicalize(ty_var, &interner, &mut infcx, UniverseIndex(0));
 
@@ -224,8 +224,8 @@ fn instantiate_creates_fresh_ty_var() {
     let instantiated = instantiate(canonical, &interner, &mut fresh_infcx);
 
     assert!(matches!(
-        instantiated.kind(),
-        TyKind::Infer(InferTy::TyVar(_))
+        interner.ty(instantiated),
+        Ty::Infer(InferTy::TyVar(_))
     ));
 }
 
@@ -237,13 +237,13 @@ fn instantiate_creates_fresh_placeholder() {
         universe: UniverseIndex(1),
         name: Symbol::from(42),
     };
-    let ty = interner.mk_ty(TyKind::Placeholder(placeholder));
+    let ty = interner.mk_ty(Ty::Placeholder(placeholder));
     let canonical = canonicalize(ty, &interner, &mut infcx, UniverseIndex(1));
 
     let mut fresh_infcx = InferCtxt::new();
     let instantiated = instantiate(canonical, &interner, &mut fresh_infcx);
 
-    if let TyKind::Placeholder(p) = instantiated.kind() {
+    if let Ty::Placeholder(p) = interner.ty(instantiated) {
         assert_eq!(p.universe, UniverseIndex(1));
         assert_ne!(p.name, placeholder.name);
     } else {
@@ -255,7 +255,7 @@ fn instantiate_creates_fresh_placeholder() {
 fn instantiate_shifts_bound_vars_back_in() {
     let interner = Interner::new();
     let mut infcx = InferCtxt::new();
-    let bound = interner.mk_ty(TyKind::Bound(
+    let bound = interner.mk_ty(Ty::Bound(
         DebruijnIndex::INNERMOST,
         BoundTy {
             var: BoundVar(0),
@@ -268,8 +268,8 @@ fn instantiate_shifts_bound_vars_back_in() {
     let instantiated = instantiate(canonical, &interner, &mut fresh_infcx);
 
     assert!(matches!(
-        instantiated.kind(),
-        TyKind::Bound(
+        interner.ty(instantiated),
+        Ty::Bound(
             DebruijnIndex(0),
             BoundTy {
                 var: BoundVar(0),

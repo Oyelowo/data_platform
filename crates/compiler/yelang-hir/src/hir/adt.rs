@@ -19,6 +19,7 @@ pub enum VariantData {
 /// A field in a struct with a name.
 #[derive(Debug, Clone)]
 pub struct FieldDef {
+    pub def_id: crate::ids::DefId,
     pub ident: Ident,
     pub ty: TyId,
     pub span: Span,
@@ -29,6 +30,7 @@ pub struct FieldDef {
 /// A field in a tuple struct / tuple variant (positional).
 #[derive(Debug, Clone)]
 pub struct StructField {
+    pub def_id: crate::ids::DefId,
     pub ty: TyId,
     pub span: Span,
     pub vis: crate::hir::core::Visibility,

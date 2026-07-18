@@ -25,10 +25,10 @@ fn lower_resolved_fn_path() {
         .collect();
     let bar = items
         .iter()
-        .find(|i| matches!(&i.kind, ItemKind::Fn { .. }) && i.ident.as_str(&interner) == "bar")
+        .find(|i| matches!(i.kind(&crate_hir), ItemKind::Fn { .. }) && i.ident.as_str(&interner) == "bar")
         .expect("expected bar fn");
 
-    let ItemKind::Fn { body, .. } = &bar.kind else {
+    let ItemKind::Fn { body, .. } = bar.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -48,7 +48,7 @@ fn lower_unresolved_path_falls_back_to_err() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -73,7 +73,7 @@ fn lower_absolute_path() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -93,7 +93,7 @@ fn lower_crate_path() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -113,7 +113,7 @@ fn lower_self_path() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -133,7 +133,7 @@ fn lower_super_path() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();

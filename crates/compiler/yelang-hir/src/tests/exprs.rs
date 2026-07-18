@@ -6,7 +6,7 @@ use crate::tests::common::{parse_program, stub_resolved};
 
 fn get_body_expr(crate_hir: &crate::Crate) -> &crate::hir::core::Expr {
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();
@@ -433,7 +433,7 @@ fn lower_await_expr() {
     let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = &item.kind else {
+    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
         panic!("expected fn")
     };
     let body = crate_hir.bodies.get(*body).unwrap();

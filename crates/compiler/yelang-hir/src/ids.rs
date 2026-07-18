@@ -14,4 +14,8 @@ new_key_type! {
     pub struct StmtId;
     pub struct TyId;
     pub struct BodyId;
+    pub struct ItemKindId;
+    pub struct TraitItemKindId;
+    pub struct ImplItemKindId;
+    pub struct ForeignItemKindId;
 }

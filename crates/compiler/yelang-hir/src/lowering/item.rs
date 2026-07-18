@@ -34,6 +34,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         AstItemKind::Module(m) => lower_module_item(ctx, m, def_id),
         AstItemKind::Use(u) => lower_use_item(ctx, u, def_id),
     };
+    let kind_id = ctx.crate_hir.alloc_item_kind(kind);
 
     let hir_item = Item {
         def_id,
@@ -51,7 +52,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
                 yelang_ast::Ident::new(ctx.interner.get_or_intern("<item>"), item.span)
             }
         },
-        kind,
+        kind: kind_id,
         vis: item.visibility.clone(),
         attrs: item.attributes.clone(),
         span: item.span,
@@ -109,6 +110,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
             fields: fields
                 .iter()
                 .map(|f| FieldDef {
+                    def_id: ctx.next_synthetic_def_id(),
                     ident: f.name,
                     ty: crate::lowering::ty::lower_ty(ctx, &f.ty),
                     span: f.span,
@@ -121,6 +123,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
             fields: tys
                 .iter()
                 .map(|ty| StructField {
+                    def_id: ctx.next_synthetic_def_id(),
                     ty: crate::lowering::ty::lower_ty(ctx, ty),
                     span: ty.span,
                     vis: Visibility::Private,
@@ -149,6 +152,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                     fields: tys
                         .iter()
                         .map(|ty| StructField {
+                            def_id: ctx.next_synthetic_def_id(),
                             ty: crate::lowering::ty::lower_ty(ctx, ty),
                             span: ty.span,
                             vis: Visibility::Private,
@@ -160,6 +164,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                     fields: fields
                         .iter()
                         .map(|f| FieldDef {
+                            def_id: ctx.next_synthetic_def_id(),
                             ident: f.name,
                             ty: crate::lowering::ty::lower_ty(ctx, &f.ty),
                             span: f.span,
@@ -179,6 +184,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                 None => make_implicit_discriminant(ctx, v.span, &mut next_discriminant),
             };
             VariantDef {
+                def_id: ctx.next_synthetic_def_id(),
                 ident: v.name,
                 data,
                 discriminant: Some(discriminant),
@@ -244,6 +250,7 @@ fn lower_trait_item(
         .items
         .iter()
         .map(|item| {
+            let def_id = ctx.next_synthetic_def_id();
             let kind = match &item.item {
                 yelang_ast::TraitItemKind::Method(m) => crate::hir::core::TraitItemKind::Fn {
                     sig: lower_fn_sig(ctx, &m.sig, m.is_const),
@@ -277,8 +284,9 @@ fn lower_trait_item(
                 yelang_ast::TraitItemKind::AssociatedType(t) => t.name,
             };
             crate::hir::core::TraitItem {
+                def_id,
                 ident,
-                kind,
+                kind: ctx.crate_hir.alloc_trait_item_kind(kind),
                 attrs: item.attributes.clone(),
                 span: item.span,
             }
@@ -320,6 +328,7 @@ fn lower_impl_item(
     i: &yelang_ast::item::Impl,
     _def_id: DefId,
 ) -> ItemKind {
+    let impl_def_id = ctx.next_synthetic_def_id();
     let self_ty = crate::lowering::ty::lower_ty(ctx, &i.self_ty);
     let self_ty_def_id = ctx
         .crate_hir
@@ -344,6 +353,7 @@ fn lower_impl_item(
         .items
         .iter()
         .map(|item| {
+            let def_id = ctx.next_synthetic_def_id();
             let kind = match &item.item {
                 yelang_ast::ImplItemKind::Method(m) => {
                     let sig = lower_fn_sig(ctx, &m.sig, m.is_const);
@@ -377,8 +387,9 @@ fn lower_impl_item(
                 yelang_ast::ImplItemKind::Constant(c) => c.name,
             };
             crate::hir::core::ImplItem {
+                def_id,
                 ident,
-                kind,
+                kind: ctx.crate_hir.alloc_impl_item_kind(kind),
                 attrs: item.attributes.clone(),
                 span: item.span,
                 defaultness: match item.defaultness {
@@ -396,6 +407,7 @@ fn lower_impl_item(
     };
 
     let impl_block = crate::hir::core::Impl {
+        def_id: impl_def_id,
         generics: lower_generics(ctx, &i.generics),
         self_ty,
         of_trait,

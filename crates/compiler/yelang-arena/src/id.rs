@@ -121,10 +121,24 @@ pub mod tags {
     /// Tag for `Id<TagSyntaxContext>`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct TagSyntaxContext;
+
+    /// Tag for interned types in the type-system IR.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct TagTy;
+
+    /// Tag for interned type-level constants in the type-system IR.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct TagConst;
 }
 
 /// Type-safe definition ID.
 pub type DefId = Id<tags::TagDef>;
+
+/// Type-safe interned type ID.
+pub type TyId = Id<tags::TagTy>;
+
+/// Type-safe interned type-level constant ID.
+pub type ConstId = Id<tags::TagConst>;
 
 #[cfg(test)]
 mod tests {

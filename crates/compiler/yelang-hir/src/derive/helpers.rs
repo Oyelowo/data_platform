@@ -413,8 +413,12 @@ pub fn method_impl_item(
     body_id: BodyId,
 ) -> ImplItem {
     ImplItem {
+        def_id: ctx.next_synthetic_def_id(),
         ident: ident(ctx, name),
-        kind: ImplItemKind::Fn { sig, body: body_id },
+        kind: ctx
+            .ctx
+            .crate_hir
+            .alloc_impl_item_kind(ImplItemKind::Fn { sig, body: body_id }),
         attrs: vec![],
         span: ctx.derive_span,
         defaultness: crate::hir::core::Defaultness::Final,
@@ -434,22 +438,23 @@ pub fn impl_item(
     items: Vec<ImplItem>,
 ) -> Item {
     let def_id = ctx.next_synthetic_def_id();
+    let kind_id = ctx.ctx.crate_hir.alloc_item_kind(ItemKind::Impl {
+        items,
+        generics,
+        self_ty,
+        polarity: crate::hir::core::ImplPolarity::Positive,
+        of_trait: Some(TraitRef {
+            path: Res::Def {
+                def_id: trait_def_id,
+            },
+            span: ctx.derive_span,
+        }),
+    });
     Item {
         def_id,
         ident: ident(ctx, "<derived impl>"),
         attrs: vec![],
-        kind: ItemKind::Impl {
-            items,
-            generics,
-            self_ty,
-            polarity: crate::hir::core::ImplPolarity::Positive,
-            of_trait: Some(TraitRef {
-                path: Res::Def {
-                    def_id: trait_def_id,
-                },
-                span: ctx.derive_span,
-            }),
-        },
+        kind: kind_id,
         vis: yelang_ast::Visibility::Public(ctx.derive_span),
         span: ctx.derive_span,
     }

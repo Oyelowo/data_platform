@@ -1,37 +1,37 @@
 use crate::interner::Interner;
 use crate::primitive::{IntTy, UintTy};
-use crate::ty::{FloatVid, InferTy, IntVid, TyKind, TyVid};
+use crate::ty::{FloatVid, InferTy, IntVid, Ty, TyVid};
 
 #[test]
 fn ty_interning_preserves_equality() {
     let interner = Interner::new();
-    let a = interner.mk_ty(TyKind::Bool);
-    let b = interner.mk_ty(TyKind::Bool);
+    let a = interner.mk_ty(Ty::Bool);
+    let b = interner.mk_ty(Ty::Bool);
     assert_eq!(a, b);
-    assert_eq!(a.as_ptr(), b.as_ptr());
+    assert_eq!(a.raw(), b.raw());
 }
 
 #[test]
 fn all_primitive_types_intern() {
     let interner = Interner::new();
     let primitives = [
-        interner.mk_ty(TyKind::Bool),
-        interner.mk_ty(TyKind::Char),
-        interner.mk_ty(TyKind::Int(IntTy::I8)),
-        interner.mk_ty(TyKind::Int(IntTy::I16)),
-        interner.mk_ty(TyKind::Int(IntTy::I32)),
-        interner.mk_ty(TyKind::Int(IntTy::I64)),
-        interner.mk_ty(TyKind::Int(IntTy::I128)),
-        interner.mk_ty(TyKind::Int(IntTy::Isize)),
-        interner.mk_ty(TyKind::Uint(UintTy::U8)),
-        interner.mk_ty(TyKind::Uint(UintTy::U16)),
-        interner.mk_ty(TyKind::Uint(UintTy::U32)),
-        interner.mk_ty(TyKind::Uint(UintTy::U64)),
-        interner.mk_ty(TyKind::Uint(UintTy::U128)),
-        interner.mk_ty(TyKind::Uint(UintTy::Usize)),
-        interner.mk_ty(TyKind::Float(crate::primitive::FloatTy::F32)),
-        interner.mk_ty(TyKind::Float(crate::primitive::FloatTy::F64)),
-        interner.mk_ty(TyKind::Never),
+        interner.mk_ty(Ty::Bool),
+        interner.mk_ty(Ty::Char),
+        interner.mk_ty(Ty::Int(IntTy::I8)),
+        interner.mk_ty(Ty::Int(IntTy::I16)),
+        interner.mk_ty(Ty::Int(IntTy::I32)),
+        interner.mk_ty(Ty::Int(IntTy::I64)),
+        interner.mk_ty(Ty::Int(IntTy::I128)),
+        interner.mk_ty(Ty::Int(IntTy::Isize)),
+        interner.mk_ty(Ty::Uint(UintTy::U8)),
+        interner.mk_ty(Ty::Uint(UintTy::U16)),
+        interner.mk_ty(Ty::Uint(UintTy::U32)),
+        interner.mk_ty(Ty::Uint(UintTy::U64)),
+        interner.mk_ty(Ty::Uint(UintTy::U128)),
+        interner.mk_ty(Ty::Uint(UintTy::Usize)),
+        interner.mk_ty(Ty::Float(crate::primitive::FloatTy::F32)),
+        interner.mk_ty(Ty::Float(crate::primitive::FloatTy::F64)),
+        interner.mk_ty(Ty::Never),
     ];
 
     // All should be distinct

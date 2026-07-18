@@ -4,19 +4,19 @@
  * never type, function item to pointer, etc.
  */
 
-use yelang_ty::ty::Ty;
+use yelang_ty::ty::TyId;
 
 use crate::fn_ctxt::FnCtxt;
 
 /// Trait for coercion operations.
-pub trait Coerce<'tcx> {
+pub trait Coerce {
     /// Attempt to coerce `from` to `to`.
     /// On success, returns the coerced type (usually `to`).
-    fn coerce(&mut self, from: Ty<'tcx>, to: Ty<'tcx>) -> Result<Ty<'tcx>, ()>;
+    fn coerce(&mut self, from: TyId, to: TyId) -> Result<TyId, ()>;
 }
 
-impl<'tcx> Coerce<'tcx> for FnCtxt<'tcx> {
-    fn coerce(&mut self, from: Ty<'tcx>, to: Ty<'tcx>) -> Result<Ty<'tcx>, ()> {
+impl Coerce for FnCtxt<'_> {
+    fn coerce(&mut self, from: TyId, to: TyId) -> Result<TyId, ()> {
         // For now, coercion is just exact unification.
         // TODO: implement deref coercion, never-type coercion, fn-item-to-fn-ptr,
         // width subtyping for anon structs, int/float fallback.

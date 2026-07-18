@@ -185,14 +185,14 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
 
     fn visit_item(&mut self, item: &'hir Item) {
         self.check_def_id(item.def_id, Some(item.span));
-        match &item.kind {
+        match item.kind(self.crate_hir) {
             ItemKind::Fn { .. } => self.with_function(|this| walk_item(this, item)),
             _ => walk_item(self, item),
         }
     }
 
     fn visit_impl_item(&mut self, item: &'hir ImplItem) {
-        match &item.kind {
+        match item.kind(self.crate_hir) {
             ImplItemKind::Fn { .. } => {
                 self.with_function(|this| crate::visit::visitor::walk_impl_item(this, item));
             }
@@ -201,7 +201,7 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     }
 
     fn visit_trait_item(&mut self, item: &'hir TraitItem) {
-        match &item.kind {
+        match item.kind(self.crate_hir) {
             TraitItemKind::Fn {
                 default: Some(_), ..
             } => self.with_function(|this| crate::visit::visitor::walk_trait_item(this, item)),
