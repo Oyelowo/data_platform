@@ -1,9 +1,9 @@
 //! Slotted page implementation for the in-place B+ tree.
 //!
 //! This module contains a small, audited amount of `unsafe` code for the
-//! Optimistic Lock Coupling (OLC) latch.  The latch word lives inside the page
-//! buffer at a known, 8-byte aligned offset, and all unsafe access is confined
-//! to the latch helpers below.
+//! Optimistic Lock Coupling (OLC) latch.  The latch word is a separate
+//! `AtomicU64` field on [`Page`] and is not part of the on-disk header, so the
+//! in-memory latch never needs to be derived from a shared `&[u8]` reference.
 //!
 //! See `UNSAFE_MANIFEST.md` for the audit entry for this module.
 
@@ -18,13 +18,17 @@ use crate::slot::{
     OwnedCell, SLOT_SIZE, Slot, ValueKind, cell_size_with_mvcc, parse_cell, write_cell_with_mvcc,
 };
 
-/// Magic for the new slotted-page format ("BTR2" little-endian).
-pub const PAGE_MAGIC_V2: u32 = 0x32_52_54_42;
+/// Magic for the slotted-page format ("BTR2" little-endian).
+pub const PAGE_MAGIC: u32 = 0x32_52_54_42;
 /// Current format version for the slotted-page layout.
-pub const PAGE_FORMAT_VERSION_V2: u16 = 1;
+pub const PAGE_FORMAT_VERSION: u16 = 1;
 
 /// Byte size of the slotted-page header.
-pub const HEADER_SIZE: usize = 64;
+///
+/// The header contains only durable fields.  The in-memory OLC latch word is
+/// stored as a separate `AtomicU64` on [`Page`] and is **not** part of the
+/// on-disk layout.
+pub const HEADER_SIZE: usize = 56;
 
 /// Reserved flags word (bit 0 = leaf, bit 1 = internal).
 pub const PAGE_FLAG_LEAF: u16 = 0x0001;
@@ -37,12 +41,19 @@ pub type PageId = u64;
 pub const NULL_PAGE_ID: PageId = 0;
 
 /// Fixed header stored at the start of every slotted page.
+///
+/// The in-memory `latch_word` field is **not** serialized: the on-disk layout
+/// reserves it as transient padding (bytes 8..15) that must be zero.  This lets
+/// the OLC latch live as a separate `AtomicU64` on [`Page`] without deriving a
+/// typed reference from the shared byte buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
     pub magic: u32,
     pub version: u16,
     pub flags: u16,
     /// Optimistic-lock word: bit 0 = exclusive lock, bits 1..63 = version.
+    ///
+    /// This field is in-memory only; it is not written to disk.
     pub latch_word: u64,
     pub page_id: PageId,
     pub slot_count: u16,
@@ -62,8 +73,8 @@ pub struct Header {
 impl Default for Header {
     fn default() -> Self {
         Self {
-            magic: PAGE_MAGIC_V2,
-            version: PAGE_FORMAT_VERSION_V2,
+            magic: PAGE_MAGIC,
+            version: PAGE_FORMAT_VERSION,
             flags: 0,
             latch_word: 0,
             page_id: NULL_PAGE_ID,
@@ -84,13 +95,13 @@ impl Header {
             return Err(Error::Corruption("page header truncated".into()));
         }
         let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-        if magic != PAGE_MAGIC_V2 {
+        if magic != PAGE_MAGIC {
             return Err(Error::Corruption(format!(
-                "page magic mismatch: expected {PAGE_MAGIC_V2:#x}, got {magic:#x}"
+                "page magic mismatch: expected {PAGE_MAGIC:#x}, got {magic:#x}"
             )));
         }
         let version = u16::from_le_bytes([data[4], data[5]]);
-        if version != PAGE_FORMAT_VERSION_V2 {
+        if version != PAGE_FORMAT_VERSION {
             return Err(Error::Corruption(format!(
                 "unsupported page format version {version}"
             )));
@@ -99,27 +110,25 @@ impl Header {
             magic,
             version,
             flags: u16::from_le_bytes([data[6], data[7]]),
-            latch_word: u64::from_le_bytes([
+            latch_word: 0,
+            page_id: u64::from_le_bytes([
                 data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
             ]),
-            page_id: u64::from_le_bytes([
-                data[16], data[17], data[18], data[19], data[20], data[21], data[22], data[23],
-            ]),
-            slot_count: u16::from_le_bytes([data[24], data[25]]),
-            cell_start: u16::from_le_bytes([data[26], data[27]]),
+            slot_count: u16::from_le_bytes([data[16], data[17]]),
+            cell_start: u16::from_le_bytes([data[18], data[19]]),
             page_lsn: u64::from_le_bytes([
-                data[28], data[29], data[30], data[31], data[32], data[33], data[34], data[35],
+                data[20], data[21], data[22], data[23], data[24], data[25], data[26], data[27],
             ]),
             prev_page_id: u64::from_le_bytes([
-                data[36], data[37], data[38], data[39], data[40], data[41], data[42], data[43],
+                data[28], data[29], data[30], data[31], data[32], data[33], data[34], data[35],
             ]),
             next_page_id: u64::from_le_bytes([
-                data[44], data[45], data[46], data[47], data[48], data[49], data[50], data[51],
+                data[36], data[37], data[38], data[39], data[40], data[41], data[42], data[43],
             ]),
             leftmost_child: u64::from_le_bytes([
-                data[52], data[53], data[54], data[55], data[56], data[57], data[58], data[59],
+                data[44], data[45], data[46], data[47], data[48], data[49], data[50], data[51],
             ]),
-            checksum: u32::from_le_bytes([data[60], data[61], data[62], data[63]]),
+            checksum: u32::from_le_bytes([data[52], data[53], data[54], data[55]]),
         })
     }
 
@@ -127,25 +136,24 @@ impl Header {
         data[0..4].copy_from_slice(&self.magic.to_le_bytes());
         data[4..6].copy_from_slice(&self.version.to_le_bytes());
         data[6..8].copy_from_slice(&self.flags.to_le_bytes());
-        data[8..16].copy_from_slice(&self.latch_word.to_le_bytes());
-        data[16..24].copy_from_slice(&self.page_id.to_le_bytes());
-        data[24..26].copy_from_slice(&self.slot_count.to_le_bytes());
-        data[26..28].copy_from_slice(&self.cell_start.to_le_bytes());
-        data[28..36].copy_from_slice(&self.page_lsn.to_le_bytes());
-        data[36..44].copy_from_slice(&self.prev_page_id.to_le_bytes());
-        data[44..52].copy_from_slice(&self.next_page_id.to_le_bytes());
-        data[52..60].copy_from_slice(&self.leftmost_child.to_le_bytes());
-        data[60..64].copy_from_slice(&self.checksum.to_le_bytes());
+        data[8..16].copy_from_slice(&self.page_id.to_le_bytes());
+        data[16..18].copy_from_slice(&self.slot_count.to_le_bytes());
+        data[18..20].copy_from_slice(&self.cell_start.to_le_bytes());
+        data[20..28].copy_from_slice(&self.page_lsn.to_le_bytes());
+        data[28..36].copy_from_slice(&self.prev_page_id.to_le_bytes());
+        data[36..44].copy_from_slice(&self.next_page_id.to_le_bytes());
+        data[44..52].copy_from_slice(&self.leftmost_child.to_le_bytes());
+        data[52..56].copy_from_slice(&self.checksum.to_le_bytes());
     }
 }
 
 /// A heap-allocated byte buffer aligned to 8 bytes.
 ///
-/// The OLC latch word is a `u64` stored at header byte offset 8.  Miri flagged
-/// that casting a `Vec<u8>` pointer (alignment 1) to `&AtomicU64` is undefined
-/// behavior when the allocation is not 8-byte aligned.  `AlignedBytes` always
-/// allocates with at least 8-byte alignment so every atomic access through the
-/// page header is well-defined.
+/// The header contains `u64` fields (page id, LSN, pointers) and the on-disk
+/// layout must be portable.  `Vec<u8>` is only 1-byte aligned, so `AlignedBytes`
+/// allocates with at least 8-byte alignment.  The OLC latch word itself is a
+/// separate `AtomicU64` field on [`Page`] and is no longer part of the byte
+/// buffer.
 struct AlignedBytes {
     ptr: *mut u8,
     len: usize,
@@ -241,8 +249,9 @@ impl Clone for Page {
         let len = self.page_size();
         let data = AlignedBytes::clone_from_raw(self.buf_ptr(), len)
             .expect("allocation failed while cloning page");
-        // A cloned page starts unlocked.  Zero the latch-word bytes in the
-        // buffer so the checksum remains consistent with the reset latch.
+        // A cloned page starts unlocked.  The in-memory latch field is reset
+        // below; encoding the header already writes zeros for the (removed)
+        // on-disk latch-word region.
         let mut header = self.header().expect("page header is valid");
         header.latch_word = 0;
         let mut header_buf = [0u8; HEADER_SIZE];
@@ -256,7 +265,7 @@ impl Clone for Page {
         }
         let sum = Self::compute_checksum(&page_bytes);
         unsafe {
-            std::ptr::copy_nonoverlapping(sum.to_le_bytes().as_ptr(), data.ptr.add(60), 4);
+            std::ptr::copy_nonoverlapping(sum.to_le_bytes().as_ptr(), data.ptr.add(52), 4);
         }
         Self {
             id: self.id,
@@ -314,7 +323,7 @@ impl Page {
         }
         let sum = Self::compute_checksum(&page_bytes);
         unsafe {
-            std::ptr::copy_nonoverlapping(sum.to_le_bytes().as_ptr(), data.ptr.add(60), 4);
+            std::ptr::copy_nonoverlapping(sum.to_le_bytes().as_ptr(), data.ptr.add(52), 4);
         }
         Ok(Self {
             id,
@@ -344,8 +353,7 @@ impl Page {
         }
         let data = AlignedBytes::from_slice(&src)?;
         // The latch word is transient in-memory state; never restore a locked
-        // page from disk.  The on-disk header bytes at offset 8..16 are ignored
-        // by the checksum and are simply zeroed when the page is serialised.
+        // page from disk.  It is not part of the on-disk header.
         Ok(Self {
             id,
             data: UnsafeCell::new(data),
@@ -467,7 +475,7 @@ impl Page {
         let page_bytes = unsafe { self.read_bytes(0, self.page_size()) };
         let sum = Self::compute_checksum(&page_bytes);
         unsafe {
-            self.write_bytes(60, &sum.to_le_bytes());
+            self.write_bytes(52, &sum.to_le_bytes());
         }
     }
 
@@ -876,14 +884,12 @@ impl Page {
     }
 
     fn compute_checksum(data: &[u8]) -> u32 {
-        // Exclude the transient latch word (bytes 8..16) and the checksum field
-        // (bytes 60..64) from the checksum.  The latch word changes on every
-        // lock/unlock and version bump; including it would make the checksum
-        // stale between mutation and unlock.
-        let mut body = Vec::with_capacity(data.len() - 12);
-        body.extend_from_slice(&data[..8]);
-        body.extend_from_slice(&data[16..60]);
-        body.extend_from_slice(&data[64..]);
+        // Exclude only the checksum field (bytes 52..56) from the checksum.  The
+        // in-memory OLC latch word is no longer part of the on-disk layout, so
+        // there is no transient region to skip.
+        let mut body = Vec::with_capacity(data.len() - 4);
+        body.extend_from_slice(&data[..52]);
+        body.extend_from_slice(&data[56..]);
         crc32c(&body)
     }
 }
