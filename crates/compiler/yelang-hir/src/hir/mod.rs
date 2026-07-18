@@ -11,7 +11,6 @@ pub mod expr;
 pub mod item;
 pub mod pat;
 pub mod ty;
-pub mod visitor;
 
 // Re-export the most commonly used HIR types at the `hir` level so callers
 // can write `crate::hir::Expr`, `crate::hir::Ty`, etc.
@@ -26,4 +25,4 @@ pub use core::{
 pub use expr::{ComprehensionKind, DocumentProjection, Expr, GeneratorKind};
 pub use pat::{BindingMode, FieldPat, Pat};
 pub use ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};
-pub use visitor::{walk_crate, Visitor};
+pub use crate::visit::visitor::{walk_crate, Visitor};

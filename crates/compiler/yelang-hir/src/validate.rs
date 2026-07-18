@@ -16,7 +16,7 @@ use crate::crate_data::Crate;
 use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use crate::res::Res;
 use crate::hir::ty::Const;
-use crate::hir::visitor::{Visitor, walk_crate, walk_expr, walk_item, walk_pat, walk_ty};
+use crate::visit::visitor::{Visitor, walk_crate, walk_expr, walk_item, walk_pat, walk_ty};
 
 /// An error reported by the HIR validation pass.
 #[derive(Debug, Clone)]
@@ -194,9 +194,9 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     fn visit_impl_item(&mut self, item: &'hir ImplItem) {
         match &item.kind {
             ImplItemKind::Fn { .. } => {
-                self.with_function(|this| crate::hir::visitor::walk_impl_item(this, item));
+                self.with_function(|this| crate::visit::visitor::walk_impl_item(this, item));
             }
-            _ => crate::hir::visitor::walk_impl_item(self, item),
+            _ => crate::visit::visitor::walk_impl_item(self, item),
         }
     }
 
@@ -204,8 +204,8 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
         match &item.kind {
             TraitItemKind::Fn {
                 default: Some(_), ..
-            } => self.with_function(|this| crate::hir::visitor::walk_trait_item(this, item)),
-            _ => crate::hir::visitor::walk_trait_item(self, item),
+            } => self.with_function(|this| crate::visit::visitor::walk_trait_item(this, item)),
+            _ => crate::visit::visitor::walk_trait_item(self, item),
         }
     }
 

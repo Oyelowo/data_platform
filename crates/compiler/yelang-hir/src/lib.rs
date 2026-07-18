@@ -11,6 +11,7 @@ pub mod lowering;
 pub mod map;
 pub mod res;
 pub mod validate;
+pub mod visit;
 
 #[cfg(test)]
 pub mod tests;

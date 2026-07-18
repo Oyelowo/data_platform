@@ -8,7 +8,7 @@ use crate::crate_data::Crate;
 use crate::hir::core::Expr;
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
-use crate::hir::visitor::{Visitor, walk_crate};
+use crate::visit::visitor::{Visitor, walk_crate};
 
 struct ExprCounter<'hir> {
     count: usize,
