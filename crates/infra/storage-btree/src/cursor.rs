@@ -303,7 +303,7 @@ mod tests {
     fn make_tree() -> (Arc<BPlusTree>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, 512, disk, alloc).unwrap());
         (Arc::new(BPlusTree::new(pool, 64).unwrap()), dir)
     }

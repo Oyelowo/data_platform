@@ -61,13 +61,13 @@ impl MvccHeader {
             ));
         }
         Ok(Self {
-            begin_ts: u64::from_le_bytes([
+            begin_ts: TxnId::from_le_bytes([
                 buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
             ]),
-            end_ts: u64::from_le_bytes([
+            end_ts: TxnId::from_le_bytes([
                 buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
             ]),
-            prev_version_lsn: u64::from_le_bytes([
+            prev_version_lsn: Lsn::from_le_bytes([
                 buf[16], buf[17], buf[18], buf[19], buf[20], buf[21], buf[22], buf[23],
             ]),
         })
@@ -264,7 +264,7 @@ mod tests {
         let h = MvccHeader::autocommit();
         let v = ValueKind::Inline(b"v");
         assert_eq!(
-            is_visible(&h, &v, 100, NULL_TXN_ID, &o),
+            is_visible(&h, &v, Timestamp::new(100), NULL_TXN_ID, &o),
             VisibleValue::Found(OwnedValue::Inline(b"v".to_vec()))
         );
     }
@@ -272,20 +272,20 @@ mod tests {
     #[test]
     fn committed_version_visible() {
         let mut o = oracle();
-        o.committed.insert(5, 10);
+        o.committed.insert(TxnId::new(5), Timestamp::new(10));
         let h = MvccHeader {
-            begin_ts: 5,
+            begin_ts: TxnId::new(5),
             end_ts: NULL_TXN_ID,
             prev_version_lsn: NULL_LSN,
         };
         let v = ValueKind::Inline(b"v");
         assert_eq!(
-            is_visible(&h, &v, 20, NULL_TXN_ID, &o),
+            is_visible(&h, &v, Timestamp::new(20), NULL_TXN_ID, &o),
             VisibleValue::Found(OwnedValue::Inline(b"v".to_vec()))
         );
         // Before creator commit: not visible.
         assert_eq!(
-            is_visible(&h, &v, 5, NULL_TXN_ID, &o),
+            is_visible(&h, &v, Timestamp::new(5), NULL_TXN_ID, &o),
             VisibleValue::NotFound
         );
     }
@@ -294,13 +294,13 @@ mod tests {
     fn own_write_visible_even_before_commit() {
         let o = oracle();
         let h = MvccHeader {
-            begin_ts: 5,
+            begin_ts: TxnId::new(5),
             end_ts: NULL_TXN_ID,
             prev_version_lsn: NULL_LSN,
         };
         let v = ValueKind::Inline(b"v");
         assert_eq!(
-            is_visible(&h, &v, 1, 5, &o),
+            is_visible(&h, &v, Timestamp::new(1), TxnId::new(5), &o),
             VisibleValue::Found(OwnedValue::Inline(b"v".to_vec()))
         );
     }
@@ -308,20 +308,20 @@ mod tests {
     #[test]
     fn deleted_version_not_visible_after_commit() {
         let mut o = oracle();
-        o.committed.insert(5, 10); // creator
-        o.committed.insert(7, 15); // deleter
+        o.committed.insert(TxnId::new(5), Timestamp::new(10)); // creator
+        o.committed.insert(TxnId::new(7), Timestamp::new(15)); // deleter
         let h = MvccHeader {
-            begin_ts: 5,
-            end_ts: 7,
+            begin_ts: TxnId::new(5),
+            end_ts: TxnId::new(7),
             prev_version_lsn: NULL_LSN,
         };
         let v = ValueKind::Inline(b"v");
         assert_eq!(
-            is_visible(&h, &v, 20, NULL_TXN_ID, &o),
+            is_visible(&h, &v, Timestamp::new(20), NULL_TXN_ID, &o),
             VisibleValue::NotFound
         );
         assert_eq!(
-            is_visible(&h, &v, 12, NULL_TXN_ID, &o),
+            is_visible(&h, &v, Timestamp::new(12), NULL_TXN_ID, &o),
             VisibleValue::Found(OwnedValue::Inline(b"v".to_vec()))
         );
     }
@@ -329,16 +329,16 @@ mod tests {
     #[test]
     fn aborted_delete_is_ignored() {
         let mut o = oracle();
-        o.committed.insert(5, 10);
-        o.aborted.insert(7);
+        o.committed.insert(TxnId::new(5), Timestamp::new(10));
+        o.aborted.insert(TxnId::new(7));
         let h = MvccHeader {
-            begin_ts: 5,
-            end_ts: 7,
+            begin_ts: TxnId::new(5),
+            end_ts: TxnId::new(7),
             prev_version_lsn: NULL_LSN,
         };
         let v = ValueKind::Inline(b"v");
         assert_eq!(
-            is_visible(&h, &v, 20, NULL_TXN_ID, &o),
+            is_visible(&h, &v, Timestamp::new(20), NULL_TXN_ID, &o),
             VisibleValue::Found(OwnedValue::Inline(b"v".to_vec()))
         );
     }
@@ -346,21 +346,21 @@ mod tests {
     #[test]
     fn chain_resolution_fetches_previous_version() {
         let mut o = oracle();
-        o.committed.insert(10, 20);
+        o.committed.insert(TxnId::new(10), Timestamp::new(20));
         let h = MvccHeader {
-            begin_ts: 10,
+            begin_ts: TxnId::new(10),
             end_ts: NULL_TXN_ID,
-            prev_version_lsn: 100,
+            prev_version_lsn: Lsn::new(100),
         };
         let v = ValueKind::Inline(b"new");
         let result = resolve_version_chain(
             &h,
             &v,
-            5, // before creator commit
+            Timestamp::new(5), // before creator commit
             NULL_TXN_ID,
             &o,
             |lsn| {
-                assert_eq!(lsn, 100);
+                assert_eq!(lsn, Lsn::new(100));
                 Ok(Some((
                     MvccHeader::autocommit(),
                     OwnedValue::Inline(b"old".to_vec()),

@@ -16,15 +16,80 @@ use crate::sync::Mutex as SyncMutex;
 
 use crate::error::{Error, Result};
 
-/// Logical transaction identifier.  `0` is reserved (no transaction / autocommit).
-pub type TxnId = u64;
+/// Logical transaction identifier.
+///
+/// `0` is reserved and means "no transaction" (autocommit / never began).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct TxnId(pub u64);
+
 /// Monotonic timestamp used for snapshot visibility and commit ordering.
-pub type Timestamp = u64;
+///
+/// `0` is reserved as `NULL_TS` and means "no timestamp".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Timestamp(pub u64);
 
 /// Sentinel meaning "no transaction".
-pub const NULL_TXN_ID: TxnId = 0;
+pub const NULL_TXN_ID: TxnId = TxnId(0);
 /// Sentinel meaning "no timestamp".
-pub const NULL_TS: Timestamp = 0;
+pub const NULL_TS: Timestamp = Timestamp(0);
+
+impl TxnId {
+    /// Create a transaction id from its raw 64-bit value.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Return the raw 64-bit value.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Encode as little-endian bytes.
+    pub const fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    /// Decode from little-endian bytes.
+    pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
+        Self(u64::from_le_bytes(bytes))
+    }
+}
+
+impl std::fmt::Display for TxnId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Timestamp {
+    /// Create a timestamp from its raw 64-bit value.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Return the raw 64-bit value.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Encode as little-endian bytes.
+    pub const fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    /// Decode from little-endian bytes.
+    pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
+        Self(u64::from_le_bytes(bytes))
+    }
+}
+
+impl std::fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// Isolation level for a transaction.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -90,7 +155,7 @@ impl TransactionTable {
 
     /// Start a new transaction.  Returns its `TxnId` and `read_ts`.
     pub fn begin(&self, isolation: IsolationLevel) -> Result<(TxnId, Timestamp)> {
-        let txn_id = self.clock.fetch_add(2, Ordering::SeqCst);
+        let txn_id = TxnId::new(self.clock.fetch_add(2, Ordering::SeqCst));
         if txn_id == NULL_TXN_ID {
             return Err(Error::Corruption("transaction id overflow to NULL".into()));
         }
@@ -104,7 +169,7 @@ impl TransactionTable {
 
     /// Return a snapshot read timestamp for a statement or transaction.
     pub fn current_timestamp(&self) -> Timestamp {
-        self.clock.load(Ordering::SeqCst)
+        Timestamp::new(self.clock.load(Ordering::SeqCst))
     }
 
     /// Reserve the next commit timestamp without updating transaction state.
@@ -112,7 +177,7 @@ impl TransactionTable {
     /// Used by callers that must log a `Commit` record before marking the
     /// transaction committed in memory.
     pub fn reserve_commit_ts(&self) -> Timestamp {
-        self.clock.fetch_add(2, Ordering::SeqCst)
+        Timestamp::new(self.clock.fetch_add(2, Ordering::SeqCst))
     }
 
     /// Commit `txn_id`.  Returns the assigned commit timestamp.
@@ -205,10 +270,10 @@ impl TxnOracle for TransactionTable {
 fn read_ts_for(isolation: IsolationLevel, current_ts: Timestamp) -> Timestamp {
     match isolation {
         // Snapshot sees the world as of just before the transaction began.
-        IsolationLevel::Snapshot => current_ts.saturating_sub(1),
+        IsolationLevel::Snapshot => Timestamp::new(current_ts.get().saturating_sub(1)),
         // ReadCommitted re-evaluates every statement; we pass the current
         // timestamp from the caller at statement time.
-        IsolationLevel::ReadCommitted => current_ts.saturating_sub(1),
+        IsolationLevel::ReadCommitted => Timestamp::new(current_ts.get().saturating_sub(1)),
     }
 }
 
@@ -230,18 +295,18 @@ impl Transaction {
             txn_id,
             read_ts,
             isolation,
-            last_lsn: Arc::new(AtomicU64::new(crate::wal::NULL_LSN)),
+            last_lsn: Arc::new(AtomicU64::new(crate::wal::NULL_LSN.get())),
         }
     }
 
     /// Update the transaction's last LSN.
     pub fn set_last_lsn(&self, lsn: crate::wal::Lsn) {
-        self.last_lsn.store(lsn, Ordering::SeqCst);
+        self.last_lsn.store(lsn.get(), Ordering::SeqCst);
     }
 
     /// Return the transaction's last LSN.
     pub fn last_lsn(&self) -> crate::wal::Lsn {
-        self.last_lsn.load(Ordering::SeqCst)
+        crate::wal::Lsn::new(self.last_lsn.load(Ordering::SeqCst))
     }
 }
 

@@ -84,13 +84,14 @@ fn cleaner_loop(pool: Arc<BufferPool>, stop: Arc<AtomicBool>, interval: Duration
 mod tests {
     use super::*;
     use crate::disk::PagedFile;
+    use crate::page::PageId;
     use crate::space::PageAllocator;
     use crate::sync::Mutex as SyncMutex;
 
     fn make_pool(capacity: usize) -> (Arc<BufferPool>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(capacity, 512, disk, alloc).unwrap());
         (pool, dir)
     }
@@ -119,7 +120,7 @@ mod tests {
 
         // Reopen a fresh pool over the same file and verify the page is durable.
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(4, 512, disk, alloc).unwrap());
         let guard = pool2.fetch_or_read(id).unwrap();
         let cell = guard.page().get(b"k").unwrap().unwrap();

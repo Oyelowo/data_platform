@@ -41,7 +41,7 @@ impl Frame {
     fn empty(frame_id: FrameId, page_size: usize) -> Result<Self> {
         Ok(Self {
             page_id: NULL_PAGE_ID,
-            page: Arc::new(Page::new(frame_id as PageId, page_size)?),
+            page: Arc::new(Page::new(PageId::new(frame_id as u64), page_size)?),
             pin_count: AtomicU32::new(0),
             dirty: AtomicBool::new(false),
             ref_bit: AtomicBool::new(false),
@@ -121,19 +121,34 @@ impl PageGuard {
     /// `Page`'s mutation methods are `&self` and rely on the exclusive latch
     /// held by this guard for serialisation.
     ///
-    /// The helper spins briefly with `try_write`; only if the latch remains
-    /// contended after many retries does it return `Error::Contention`.  This
-    /// matches the standard OLC pattern: latches are held for very short
-    /// durations, so yielding and retrying is almost always sufficient.
+    /// The helper retries `try_write` with exponential backoff plus jitter;
+    /// only if the latch remains contended after many retries does it return
+    /// `Error::Contention`.  This matches the standard OLC pattern: latches are
+    /// held for very short durations, so yielding and retrying is almost always
+    /// sufficient.  Backoff keeps CPU usage low under high contention and the
+    /// jitter reduces thundering-herd collisions between threads racing for the
+    /// same page.
     pub fn with_mut<R>(&self, f: impl FnOnce(&Page) -> Result<R>) -> Result<R> {
         const MAX_RETRIES: usize = 1024;
+        const MIN_BACKOFF_NS: u64 = 100;
+        const MAX_BACKOFF_NS: u64 = 1_000_000; // 1 ms
         let mut guard = None;
-        for _ in 0..MAX_RETRIES {
+        let mut backoff_ns = MIN_BACKOFF_NS;
+        for attempt in 0..MAX_RETRIES {
             if let Some(g) = self.page.try_write() {
                 guard = Some(g);
                 break;
             }
-            std::thread::yield_now();
+            // Exponential backoff capped at MAX_BACKOFF_NS, with a small amount
+            // of jitter derived from the current instant to desynchronize
+            // contending threads without adding a rand dependency.
+            let jitter_ns = std::time::Instant::now()
+                .elapsed()
+                .as_nanos()
+                .wrapping_add(attempt as u128) as u64
+                % backoff_ns;
+            std::thread::sleep(std::time::Duration::from_nanos(backoff_ns + jitter_ns));
+            backoff_ns = (backoff_ns * 2).min(MAX_BACKOFF_NS);
         }
         let guard = guard.ok_or_else(|| {
             Error::Contention("page write latch remained contended after retries".into())
@@ -478,7 +493,7 @@ impl BufferPool {
                     )));
                 }
                 frame.page_id = NULL_PAGE_ID;
-                frame.page = Arc::new(Page::new(frame_id as PageId, self.page_size)?);
+                frame.page = Arc::new(Page::new(PageId::new(frame_id as u64), self.page_size)?);
                 frame.dirty.store(false, Ordering::Relaxed);
                 frame.ref_bit.store(false, Ordering::Relaxed);
                 let mut table = self.page_table[shard].write();
@@ -527,7 +542,7 @@ impl BufferPool {
     }
 
     fn shard(&self, page_id: PageId) -> usize {
-        (page_id as usize) % Self::NUM_SHARDS
+        (page_id.get() as usize) % Self::NUM_SHARDS
     }
 }
 
@@ -538,7 +553,7 @@ mod tests {
     fn make_pool(capacity: usize) -> (Arc<BufferPool>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(capacity, 512, disk, alloc).unwrap());
         (pool, dir)
     }
@@ -573,7 +588,7 @@ mod tests {
     #[test]
     fn fetch_missing_page_fails() {
         let (pool, _dir) = make_pool(4);
-        assert!(pool.fetch(99).is_err());
+        assert!(pool.fetch(PageId::new(99)).is_err());
     }
 
     #[test]
@@ -622,7 +637,7 @@ mod tests {
 
         // Open a fresh pool over the same file and read the page.
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(4, 512, disk, alloc).unwrap());
         let guard = pool2.fetch_or_read(id).unwrap();
         let cell = guard.page().get(b"k").unwrap().unwrap();

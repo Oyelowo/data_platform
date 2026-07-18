@@ -151,7 +151,7 @@ impl BPlusTree {
         drop(root);
         Ok(Self {
             pool,
-            root_page_id: AtomicU64::new(root_id),
+            root_page_id: AtomicU64::new(root_id.get()),
             inline_threshold,
             min_cells: DEFAULT_MIN_CELLS,
             retired: SyncMutex::new(Vec::new()),
@@ -169,7 +169,7 @@ impl BPlusTree {
     pub fn open(pool: Arc<BufferPool>, root_page_id: PageId, inline_threshold: usize) -> Self {
         Self {
             pool,
-            root_page_id: AtomicU64::new(root_page_id),
+            root_page_id: AtomicU64::new(root_page_id.get()),
             inline_threshold,
             min_cells: DEFAULT_MIN_CELLS,
             retired: SyncMutex::new(Vec::new()),
@@ -206,7 +206,7 @@ impl BPlusTree {
         drop(root);
         Ok(Self {
             pool,
-            root_page_id: AtomicU64::new(root_id),
+            root_page_id: AtomicU64::new(root_id.get()),
             inline_threshold,
             min_cells,
             retired: SyncMutex::new(Vec::new()),
@@ -384,7 +384,7 @@ impl BPlusTree {
         let record = Record {
             header: RecordHeader::new(
                 crate::wal::RecordType::SplitPage,
-                0,
+                NULL_TXN_ID,
                 NULL_LSN,
                 left.id,
                 page_lsn,
@@ -397,7 +397,7 @@ impl BPlusTree {
         };
         let lsn = match self.wal() {
             Some(wal) => wal.append(record)?,
-            None => 0,
+            None => NULL_LSN,
         };
         crate::wal::set_page_lsn(left, lsn)?;
         crate::wal::set_page_lsn(right, lsn)?;
@@ -409,16 +409,16 @@ impl BPlusTree {
         let record = Record {
             header: RecordHeader::new(
                 crate::wal::RecordType::SetRoot,
-                0,
+                NULL_TXN_ID,
                 NULL_LSN,
                 NULL_PAGE_ID,
-                0,
+                NULL_LSN,
             ),
             payload: RecordPayload::SetRoot { new_root_page_id },
         };
         match self.wal() {
             Some(wal) => wal.append(record),
-            None => Ok(0),
+            None => Ok(NULL_LSN),
         }
     }
 
@@ -434,7 +434,13 @@ impl BPlusTree {
         right_child: PageId,
     ) -> Result<Lsn> {
         let record = Record {
-            header: RecordHeader::new(crate::wal::RecordType::NewRoot, 0, NULL_LSN, new_root.id, 0),
+            header: RecordHeader::new(
+                crate::wal::RecordType::NewRoot,
+                NULL_TXN_ID,
+                NULL_LSN,
+                new_root.id,
+                NULL_LSN,
+            ),
             payload: RecordPayload::NewRoot {
                 new_root_page_id: new_root.id,
                 leftmost_child,
@@ -444,7 +450,7 @@ impl BPlusTree {
         };
         let lsn = match self.wal() {
             Some(wal) => wal.append(record)?,
-            None => 0,
+            None => NULL_LSN,
         };
         crate::wal::set_page_lsn(new_root, lsn)?;
         Ok(lsn)
@@ -466,7 +472,7 @@ impl BPlusTree {
         let record = Record {
             header: RecordHeader::new(
                 crate::wal::RecordType::MergePage,
-                0,
+                NULL_TXN_ID,
                 NULL_LSN,
                 survivor.id,
                 page_lsn,
@@ -480,7 +486,7 @@ impl BPlusTree {
         };
         let lsn = match self.wal() {
             Some(wal) => wal.append(record)?,
-            None => 0,
+            None => NULL_LSN,
         };
         crate::wal::set_page_lsn(survivor, lsn)?;
         Ok(lsn)
@@ -498,7 +504,7 @@ impl BPlusTree {
         let record = Record {
             header: RecordHeader::new(
                 crate::wal::RecordType::MoveRightmost,
-                0,
+                NULL_TXN_ID,
                 NULL_LSN,
                 page.id,
                 page_lsn,
@@ -510,7 +516,7 @@ impl BPlusTree {
         };
         let lsn = match self.wal() {
             Some(wal) => wal.append(record)?,
-            None => 0,
+            None => NULL_LSN,
         };
         crate::wal::set_page_lsn(page, lsn)?;
         Ok(lsn)
@@ -518,7 +524,15 @@ impl BPlusTree {
 
     /// Return the current root page id.
     pub fn root_page_id(&self) -> PageId {
-        self.root_page_id.load(Ordering::SeqCst)
+        PageId::new(self.root_page_id.load(Ordering::SeqCst))
+    }
+
+    fn load_root(&self) -> PageId {
+        PageId::new(self.root_page_id.load(Ordering::Acquire))
+    }
+
+    fn store_root(&self, id: PageId) {
+        self.root_page_id.store(id.get(), Ordering::SeqCst);
     }
 
     /// Return the current global timestamp.
@@ -693,7 +707,7 @@ impl BPlusTree {
 
         // A root split may have changed the root pointer since we started the
         // traversal.  If so, the captured path is stale and we must retry.
-        if self.root_page_id.load(Ordering::Acquire) != leaf.root_id {
+        if self.load_root() != leaf.root_id {
             return Ok(None);
         }
 
@@ -740,7 +754,7 @@ impl BPlusTree {
     /// contain `key`.  Returns `None` when a page version changes during the
     /// descent (caller retries).
     fn optimistic_leaf(&self, key: &[u8]) -> Result<Option<OptimisticLeaf>> {
-        let root_id = self.root_page_id.load(Ordering::Acquire);
+        let root_id = self.load_root();
         let mut path: Vec<(PageGuard, u64)> = Vec::new();
         let mut current_id = root_id;
 
@@ -834,7 +848,7 @@ impl BPlusTree {
 
         // A root split may have changed the root pointer since we started the
         // traversal.  If so, the captured path is stale and we must retry.
-        if self.root_page_id.load(Ordering::Acquire) != target.root_id {
+        if self.load_root() != target.root_id {
             return Ok(None);
         }
         // Validate the captured root-to-leaf path.
@@ -1043,7 +1057,7 @@ impl BPlusTree {
         self.pool.mark_dirty(new_root_arc.id)?;
 
         self.log_set_root(new_root_arc.id)?;
-        self.root_page_id.store(new_root_arc.id, Ordering::SeqCst);
+        self.store_root(new_root_arc.id);
         Ok(Some(old_cell.map(|c| c.value)))
     }
 
@@ -1096,7 +1110,7 @@ impl BPlusTree {
         self.pool.mark_dirty(new_root_arc.id)?;
 
         self.log_set_root(new_root_arc.id)?;
-        self.root_page_id.store(new_root_arc.id, Ordering::SeqCst);
+        self.store_root(new_root_arc.id);
         Ok(Some(old_cell.map(|c| c.value)))
     }
 
@@ -1104,7 +1118,7 @@ impl BPlusTree {
     /// contain `key`, keeping a pinned path of ancestors with their latch
     /// versions.  Returns `None` if a page changes during descent.
     fn optimistic_path_to_leaf(&self, key: &[u8]) -> Result<Option<OptimisticPath>> {
-        let root_id = self.root_page_id.load(Ordering::Acquire);
+        let root_id = self.load_root();
         let mut path: Vec<(PageGuard, Arc<crate::page::Page>, u64)> = Vec::new();
         let mut current_id = root_id;
 
@@ -1186,14 +1200,14 @@ impl BPlusTree {
         let (txn_id, read_ts) = self.txn_table.begin(isolation)?;
         let txn = Transaction::new(txn_id, read_ts, isolation);
         let record = Record {
-            header: RecordHeader::new(RecordType::Begin, txn_id, NULL_LSN, NULL_PAGE_ID, 0),
+            header: RecordHeader::new(RecordType::Begin, txn_id, NULL_LSN, NULL_PAGE_ID, NULL_LSN),
             payload: RecordPayload::Begin,
         };
         // Buffered append: the whole transaction (Begin + ops + Commit/Abort) is
         // synced together at commit/rollback time.
         let lsn = match self.wal() {
             Some(wal) => wal.append_buffered(record)?,
-            None => 0,
+            None => NULL_LSN,
         };
         txn.set_last_lsn(lsn);
         Ok(txn)
@@ -1208,7 +1222,7 @@ impl BPlusTree {
                 txn.txn_id,
                 txn.last_lsn(),
                 NULL_PAGE_ID,
-                0,
+                NULL_LSN,
             ),
             payload: RecordPayload::Commit { commit_ts },
         };
@@ -1229,7 +1243,13 @@ impl BPlusTree {
         let last_clr_lsn = self.undo_transaction(txn.txn_id, txn.last_lsn())?;
 
         let abort_record = Record {
-            header: RecordHeader::new(RecordType::Abort, txn.txn_id, last_clr_lsn, NULL_PAGE_ID, 0),
+            header: RecordHeader::new(
+                RecordType::Abort,
+                txn.txn_id,
+                last_clr_lsn,
+                NULL_PAGE_ID,
+                NULL_LSN,
+            ),
             payload: RecordPayload::Abort,
         };
         if let Some(wal) = self.wal() {
@@ -1326,7 +1346,7 @@ impl BPlusTree {
             None => return Ok(None),
         };
 
-        if self.root_page_id.load(Ordering::Acquire) != leaf.root_id {
+        if self.load_root() != leaf.root_id {
             return Ok(None);
         }
 
@@ -1464,7 +1484,7 @@ impl BPlusTree {
             None => return Ok(None),
         };
 
-        if self.root_page_id.load(Ordering::Acquire) != target.root_id {
+        if self.load_root() != target.root_id {
             return Ok(None);
         }
         if !target.path_valid(key) {
@@ -1661,7 +1681,7 @@ impl BPlusTree {
         self.pool.mark_dirty(new_root_arc.id)?;
 
         self.log_set_root(new_root_arc.id)?;
-        self.root_page_id.store(new_root_arc.id, Ordering::SeqCst);
+        self.store_root(new_root_arc.id);
         Ok(Some(old_cell.map(|c| c.value)))
     }
 
@@ -1683,7 +1703,7 @@ impl BPlusTree {
         let new_mvcc = MvccHeader {
             begin_ts: txn.txn_id,
             end_ts: NULL_TXN_ID,
-            prev_version_lsn: 0,
+            prev_version_lsn: NULL_LSN,
         };
 
         if let Some(old_cell) = existing {
@@ -1755,7 +1775,7 @@ impl BPlusTree {
         self.pool.mark_dirty(new_root_arc.id)?;
 
         self.log_set_root(new_root_arc.id)?;
-        self.root_page_id.store(new_root_arc.id, Ordering::SeqCst);
+        self.store_root(new_root_arc.id);
         Ok(Some(old_cell.map(|c| c.value)))
     }
 
@@ -1781,7 +1801,7 @@ impl BPlusTree {
             None => return Ok(None),
         };
 
-        if self.root_page_id.load(Ordering::Acquire) != target.root_id {
+        if self.load_root() != target.root_id {
             return Ok(None);
         }
         if !target.path_valid(key) {
@@ -1843,7 +1863,7 @@ impl BPlusTree {
 
         // A root split may have changed the root pointer since we started the
         // traversal.  If so, the captured path is stale and we must retry.
-        if self.root_page_id.load(Ordering::Acquire) != target.root_id {
+        if self.load_root() != target.root_id {
             return Ok(None);
         }
         // Validate the captured root-to-leaf path.
@@ -2162,7 +2182,7 @@ impl BPlusTree {
                     // before it can mutate the now-dead page.
                     self.log_set_root(new_root_id)?;
                     self.log_move_rightmost(locked[0].page(), new_root_id, NULL_PAGE_ID)?;
-                    self.root_page_id.store(new_root_id, Ordering::SeqCst);
+                    self.store_root(new_root_id);
                     locked[0].page().set_leftmost_child(NULL_PAGE_ID);
                     dead.push(node_id);
                 }
@@ -2852,6 +2872,7 @@ mod tests {
     use crate::disk::PagedFile;
     use crate::space::PageAllocator;
     use crate::sync::Mutex as SyncMutex;
+    use crate::txn::NULL_TS;
 
     #[cfg(not(miri))]
     use crate::checkpoint::{Checkpoint, Meta};
@@ -2859,7 +2880,7 @@ mod tests {
     fn make_tree(page_size: usize, min_cells: usize) -> (BPlusTree, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc).unwrap());
         let tree = BPlusTree::with_min_cells(pool, page_size / 4, min_cells).unwrap();
         (tree, dir)
@@ -2877,7 +2898,7 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
         let tree = BPlusTree::with_min_cells(pool.clone(), page_size / 4, min_cells)
@@ -2900,7 +2921,7 @@ mod tests {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
         let value_log = Arc::new(ValueLog::open(dir.path()).unwrap());
@@ -3016,11 +3037,11 @@ mod tests {
 
         // Reopen the pool and validate the tree still works.
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, 512, disk, alloc).unwrap());
         let tree2 = BPlusTree {
             pool: pool2,
-            root_page_id: AtomicU64::new(tree.root_page_id()),
+            root_page_id: AtomicU64::new(tree.root_page_id().get()),
             inline_threshold: 128,
             min_cells: 1,
             retired: SyncMutex::new(Vec::new()),
@@ -3277,7 +3298,11 @@ mod tests {
 
         tree.insert(b"hello", b"world").unwrap();
 
-        let records: Vec<_> = wal.iter(0).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let records: Vec<_> = wal
+            .iter(NULL_LSN)
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert!(
             records.iter().any(|(_lsn, r)| matches!(
                 r,
@@ -3303,7 +3328,7 @@ mod tests {
 
         // Reopen a fresh pool and replay the WAL.
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 4096).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, 4096, disk, alloc).unwrap());
         let fresh_root_guard = pool2.new_page().unwrap();
         let fresh_root = fresh_root_guard.page().id;
@@ -3312,7 +3337,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = crate::recovery::Recovery::new(pool2.clone(), wal, fresh_root);
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
         assert_eq!(root, fresh_root);
 
         // Recovery replayed cell-level records on the fresh root page.
@@ -3341,7 +3366,7 @@ mod tests {
 
         // Reopen a fresh pool and replay the WAL from an empty root.
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, 512, disk, alloc).unwrap());
         let fresh_root_guard = pool2.new_page().unwrap();
         let fresh_root = fresh_root_guard.page().id;
@@ -3350,7 +3375,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = crate::recovery::Recovery::new(pool2.clone(), wal, fresh_root);
-        let recovered_root = recovery.recover(0).unwrap();
+        let recovered_root = recovery.recover(NULL_LSN).unwrap();
 
         // The recovered root must match the original tree's root, and all keys
         // must be present.
@@ -3377,7 +3402,7 @@ mod tests {
         let original_root = tree.root_page_id();
         tree.check_integrity().unwrap();
 
-        let root_arc = Arc::new(std::sync::atomic::AtomicU64::new(original_root));
+        let root_arc = Arc::new(std::sync::atomic::AtomicU64::new(original_root.get()));
         let cp = Checkpoint::new(
             dir.path(),
             pool.clone(),
@@ -3386,7 +3411,7 @@ mod tests {
             alloc.clone(),
         );
         let meta = cp.run().unwrap();
-        assert!(meta.checkpoint_lsn > 0);
+        assert!(meta.checkpoint_lsn > NULL_LSN);
 
         // Delete most keys to trigger leaf merges, internal underflow, and
         // eventually a root shrink.
@@ -3448,7 +3473,7 @@ mod tests {
         drop(tree);
 
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, 512, disk, alloc).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -3461,7 +3486,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = crate::recovery::Recovery::new(pool2.clone(), wal2, fresh_root);
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
 
         let tree2 = BPlusTree::open(pool2, root, 512 / 4);
         assert_eq!(tree2.get(b"a").unwrap(), Some(b"1".to_vec()));
@@ -3481,7 +3506,7 @@ mod tests {
         let original_root = tree.root_page_id();
         tree.check_integrity().unwrap();
 
-        let root_arc = Arc::new(std::sync::atomic::AtomicU64::new(original_root));
+        let root_arc = Arc::new(std::sync::atomic::AtomicU64::new(original_root.get()));
         let cp = Checkpoint::new(
             dir.path(),
             pool.clone(),
@@ -3490,7 +3515,7 @@ mod tests {
             alloc.clone(),
         );
         let meta = cp.run().unwrap();
-        assert!(meta.checkpoint_lsn > 0);
+        assert!(meta.checkpoint_lsn > NULL_LSN);
 
         // These post-checkpoint inserts are only in the WAL (and buffer pool).
         let extra: Vec<String> = (40u64..50).map(|i| format!("{:08x}", i)).collect();
@@ -3537,7 +3562,7 @@ mod tests {
         drop(tree);
 
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, 512, disk, alloc).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -3548,8 +3573,8 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = crate::recovery::Recovery::new(pool2.clone(), wal2.clone(), fresh_root);
-        let root1 = recovery.recover(0).unwrap();
-        let root2 = recovery.recover(0).unwrap();
+        let root1 = recovery.recover(NULL_LSN).unwrap();
+        let root2 = recovery.recover(NULL_LSN).unwrap();
         assert_eq!(root1, root2);
 
         let tree2 = BPlusTree::open(pool2, root1, 512 / 4);
@@ -3562,7 +3587,7 @@ mod tests {
         let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
         tree.insert_txn(&txn, b"k", b"v").unwrap();
         let commit_ts = tree.commit_txn(&txn).unwrap();
-        assert!(commit_ts > 0);
+        assert!(commit_ts > NULL_TS);
 
         // A new transaction sees the committed value.
         let txn2 = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
@@ -3775,7 +3800,7 @@ mod tests {
         drop(tree);
 
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 4096).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, 4096, disk, alloc).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
         let value_log2 = Arc::new(ValueLog::open(dir.path()).unwrap());
@@ -3788,7 +3813,7 @@ mod tests {
 
         let recovery = crate::recovery::Recovery::new(pool2.clone(), wal2, fresh_root)
             .with_value_log(Arc::clone(&value_log2));
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
         let tree2 = BPlusTree::open(pool2, root, 4096 / 4).with_value_log(value_log2);
         assert_eq!(tree2.get(b"k").unwrap(), Some(big));
     }

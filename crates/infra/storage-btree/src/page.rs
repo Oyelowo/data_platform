@@ -17,6 +17,7 @@ use crate::error::{Error, Result};
 use crate::slot::{
     OwnedCell, SLOT_SIZE, Slot, ValueKind, cell_size_with_mvcc, parse_cell, write_cell_with_mvcc,
 };
+use crate::wal::{Lsn, NULL_LSN};
 
 /// Magic for the slotted-page format ("BTR2" little-endian).
 pub const PAGE_MAGIC: u32 = 0x32_52_54_42;
@@ -34,11 +35,44 @@ pub const HEADER_SIZE: usize = 56;
 pub const PAGE_FLAG_LEAF: u16 = 0x0001;
 pub const PAGE_FLAG_INTERNAL: u16 = 0x0002;
 
-/// Unique identifier for a page.
-pub type PageId = u64;
+/// Unique identifier for a slotted page on disk.
+///
+/// Page IDs are opaque 64-bit values.  ID 0 is reserved as `NULL_PAGE_ID`
+/// and means "no page".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct PageId(pub u64);
 
 /// Sentinel meaning "no page".
-pub const NULL_PAGE_ID: PageId = 0;
+pub const NULL_PAGE_ID: PageId = PageId(0);
+
+impl PageId {
+    /// Create a page id from its raw 64-bit value.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Return the raw 64-bit value.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Encode as little-endian bytes.
+    pub const fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    /// Decode from little-endian bytes.
+    pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
+        Self(u64::from_le_bytes(bytes))
+    }
+}
+
+impl std::fmt::Display for PageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// Fixed header stored at the start of every slotted page.
 ///
@@ -60,7 +94,7 @@ pub struct Header {
     /// Offset where the cell area begins (i.e. the lower bound of free space).
     pub cell_start: u16,
     /// LSN of the most recent WAL record applied to this page.
-    pub page_lsn: u64,
+    pub page_lsn: Lsn,
     /// Previous leaf page in the sibling chain (`NULL_PAGE_ID` if none).
     pub prev_page_id: PageId,
     /// Next leaf page in the sibling chain (`NULL_PAGE_ID` if none).
@@ -80,7 +114,7 @@ impl Default for Header {
             page_id: NULL_PAGE_ID,
             slot_count: 0,
             cell_start: 0,
-            page_lsn: 0,
+            page_lsn: NULL_LSN,
             prev_page_id: NULL_PAGE_ID,
             next_page_id: NULL_PAGE_ID,
             leftmost_child: NULL_PAGE_ID,
@@ -111,21 +145,21 @@ impl Header {
             version,
             flags: u16::from_le_bytes([data[6], data[7]]),
             latch_word: 0,
-            page_id: u64::from_le_bytes([
+            page_id: PageId::from_le_bytes([
                 data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
             ]),
             slot_count: u16::from_le_bytes([data[16], data[17]]),
             cell_start: u16::from_le_bytes([data[18], data[19]]),
-            page_lsn: u64::from_le_bytes([
+            page_lsn: Lsn::from_le_bytes([
                 data[20], data[21], data[22], data[23], data[24], data[25], data[26], data[27],
             ]),
-            prev_page_id: u64::from_le_bytes([
+            prev_page_id: PageId::from_le_bytes([
                 data[28], data[29], data[30], data[31], data[32], data[33], data[34], data[35],
             ]),
-            next_page_id: u64::from_le_bytes([
+            next_page_id: PageId::from_le_bytes([
                 data[36], data[37], data[38], data[39], data[40], data[41], data[42], data[43],
             ]),
-            leftmost_child: u64::from_le_bytes([
+            leftmost_child: PageId::from_le_bytes([
                 data[44], data[45], data[46], data[47], data[48], data[49], data[50], data[51],
             ]),
             checksum: u32::from_le_bytes([data[52], data[53], data[54], data[55]]),
@@ -971,18 +1005,18 @@ mod tests {
 
     #[test]
     fn empty_page_roundtrip() {
-        let page = Page::new(7, 4096).unwrap();
-        assert_eq!(page.id, 7);
+        let page = Page::new(PageId::new(7), 4096).unwrap();
+        assert_eq!(page.id, PageId::new(7));
         let bytes = page.into_vec();
         let page = Page::from_bytes(bytes).unwrap();
-        assert_eq!(page.id, 7);
+        assert_eq!(page.id, PageId::new(7));
         assert_eq!(page.slot_count().unwrap(), 0);
         assert_eq!(page.cell_start().unwrap(), 4096);
     }
 
     #[test]
     fn insert_and_get() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         page.insert(b"a", &ValueKind::Inline(b"1")).unwrap();
         page.insert(b"b", &ValueKind::Inline(b"2")).unwrap();
 
@@ -998,7 +1032,7 @@ mod tests {
 
     #[test]
     fn insert_maintains_order() {
-        let page = Page::new(1, 1024).unwrap();
+        let page = Page::new(PageId::new(1), 1024).unwrap();
         page.insert(b"z", &ValueKind::Inline(b"last")).unwrap();
         page.insert(b"a", &ValueKind::Inline(b"first")).unwrap();
         page.insert(b"m", &ValueKind::Inline(b"mid")).unwrap();
@@ -1009,7 +1043,7 @@ mod tests {
 
     #[test]
     fn duplicate_put_overwrites() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         page.insert(b"k", &ValueKind::Inline(b"v1")).unwrap();
         page.insert(b"k", &ValueKind::Inline(b"v2")).unwrap();
         let cell = page.get(b"k").unwrap().unwrap();
@@ -1018,7 +1052,7 @@ mod tests {
 
     #[test]
     fn delete_and_compact() {
-        let page = Page::new(1, 1024).unwrap();
+        let page = Page::new(PageId::new(1), 1024).unwrap();
         page.insert(b"a", &ValueKind::Inline(b"1")).unwrap();
         page.insert(b"b", &ValueKind::Inline(b"2")).unwrap();
         page.insert(b"c", &ValueKind::Inline(b"3")).unwrap();
@@ -1042,7 +1076,7 @@ mod tests {
 
     #[test]
     fn page_full_detected() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         // A 500-byte inline value plus overhead does not fit in a 512-byte page.
         let big_value = vec![0u8; 500];
         let result = page.insert(b"k", &ValueKind::Inline(&big_value));
@@ -1051,7 +1085,7 @@ mod tests {
 
     #[test]
     fn checksum_failure_detected() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         let mut bytes = page.into_vec();
         bytes[60] ^= 0xFF;
         assert!(Page::from_bytes(bytes).is_err());
@@ -1059,7 +1093,7 @@ mod tests {
 
     #[test]
     fn value_log_reference_roundtrip() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         page.insert(
             b"big",
             &ValueKind::ValueLog {
@@ -1080,7 +1114,7 @@ mod tests {
 
     #[test]
     fn optimistic_read_sees_stable_version() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         page.insert(b"k", &ValueKind::Inline(b"v")).unwrap();
         let guard = page.optimistic().unwrap();
         let value = guard
@@ -1091,7 +1125,7 @@ mod tests {
 
     #[test]
     fn optimistic_read_retries_after_write() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         page.insert(b"k", &ValueKind::Inline(b"v1")).unwrap();
         let guard = page.optimistic().unwrap();
 
@@ -1112,7 +1146,7 @@ mod tests {
 
     #[test]
     fn write_guard_bumps_version_on_drop() {
-        let page = Page::new(1, 512).unwrap();
+        let page = Page::new(PageId::new(1), 512).unwrap();
         let v0 = page.optimistic_version().unwrap();
         {
             let _w = page.try_write().unwrap();

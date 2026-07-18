@@ -17,7 +17,7 @@ impl PageAllocator {
     /// Create an allocator that will hand out IDs starting at `next`.
     pub fn new(next: PageId) -> Self {
         Self {
-            next: next.max(NULL_PAGE_ID + 1),
+            next: next.max(PageId::new(1)),
             freelist: Vec::new(),
         }
     }
@@ -29,7 +29,7 @@ impl PageAllocator {
             return id;
         }
         let id = self.next;
-        self.next += 1;
+        self.next = PageId::new(self.next.get().wrapping_add(1));
         id
     }
 
@@ -53,7 +53,7 @@ impl PageAllocator {
     /// Restore allocator state from a checkpoint.
     pub fn restore(&mut self, freelist: Vec<PageId>, next: PageId) {
         self.freelist = freelist;
-        self.next = next.max(NULL_PAGE_ID + 1);
+        self.next = next.max(PageId::new(1));
     }
 
     /// Number of ids currently available for reuse.
@@ -76,7 +76,7 @@ impl PageAllocator {
         }
         self.freelist.retain(|&x| x != id);
         if id >= self.next {
-            self.next = id + 1;
+            self.next = PageId::new(id.get().wrapping_add(1));
         }
     }
 }
@@ -87,38 +87,38 @@ mod tests {
 
     #[test]
     fn allocate_mints_ids_monotonically() {
-        let mut alloc = PageAllocator::new(1);
-        assert_eq!(alloc.allocate(), 1);
-        assert_eq!(alloc.allocate(), 2);
-        assert_eq!(alloc.allocate(), 3);
+        let mut alloc = PageAllocator::new(PageId::new(1));
+        assert_eq!(alloc.allocate(), PageId::new(1));
+        assert_eq!(alloc.allocate(), PageId::new(2));
+        assert_eq!(alloc.allocate(), PageId::new(3));
     }
 
     #[test]
     fn freed_ids_are_reused() {
-        let mut alloc = PageAllocator::new(1);
-        assert_eq!(alloc.allocate(), 1);
-        assert_eq!(alloc.allocate(), 2);
-        alloc.free(1);
-        assert_eq!(alloc.allocate(), 1);
-        assert_eq!(alloc.allocate(), 3);
+        let mut alloc = PageAllocator::new(PageId::new(1));
+        assert_eq!(alloc.allocate(), PageId::new(1));
+        assert_eq!(alloc.allocate(), PageId::new(2));
+        alloc.free(PageId::new(1));
+        assert_eq!(alloc.allocate(), PageId::new(1));
+        assert_eq!(alloc.allocate(), PageId::new(3));
     }
 
     #[test]
     fn null_id_is_never_allocated_or_freed() {
-        let mut alloc = PageAllocator::new(0);
-        assert_eq!(alloc.allocate(), 1);
+        let mut alloc = PageAllocator::new(PageId::new(0));
+        assert_eq!(alloc.allocate(), PageId::new(1));
         alloc.free(NULL_PAGE_ID);
         assert_eq!(alloc.reusable_count(), 0);
     }
 
     #[test]
     fn snapshot_roundtrip() {
-        let mut alloc = PageAllocator::new(1);
+        let mut alloc = PageAllocator::new(PageId::new(1));
         let _ = alloc.allocate();
         let _ = alloc.allocate();
-        alloc.free(1);
+        alloc.free(PageId::new(1));
         let (freelist, next) = alloc.snapshot();
-        let mut restored = PageAllocator::new(99);
+        let mut restored = PageAllocator::new(PageId::new(99));
         restored.restore(freelist, next);
         assert_eq!(restored, alloc);
     }

@@ -166,13 +166,14 @@ mod tests {
     use super::*;
     use crate::buffer::BufferPool;
     use crate::disk::PagedFile;
+    use crate::page::PageId;
     use crate::space::PageAllocator;
     use crate::sync::Mutex as SyncMutex;
 
     fn make_tree() -> (Arc<BPlusTree>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, 512, disk, alloc).unwrap());
         let wal = Arc::new(
             crate::wal::WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap(),

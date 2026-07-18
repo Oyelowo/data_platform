@@ -49,10 +49,10 @@ pub struct Meta {
 impl Default for Meta {
     fn default() -> Self {
         Self {
-            root_page_id: 1,
+            root_page_id: PageId::new(1),
             checkpoint_lsn: NULL_LSN,
             first_undo_lsn: NULL_LSN,
-            allocator: PageAllocator::new(1),
+            allocator: PageAllocator::new(PageId::new(1)),
         }
     }
 }
@@ -192,20 +192,20 @@ impl Meta {
                 "META version mismatch: expected {META_VERSION}, got {version}"
             )));
         }
-        let root_page_id = read_u64(buf, &mut off)?;
-        let checkpoint_lsn = read_u64(buf, &mut off)?;
-        let first_undo_lsn = read_u64(buf, &mut off)?;
-        let next = read_u64(buf, &mut off)?;
+        let root_page_id = PageId::new(read_u64(buf, &mut off)?);
+        let checkpoint_lsn = Lsn::new(read_u64(buf, &mut off)?);
+        let first_undo_lsn = Lsn::new(read_u64(buf, &mut off)?);
+        let next = PageId::new(read_u64(buf, &mut off)?);
         let freelist_len = read_u32(buf, &mut off)? as usize;
         if buf.len() < off + freelist_len * 8 + 4 {
             return Err(Error::Corruption("META freelist truncated".into()));
         }
         let mut freelist = Vec::with_capacity(freelist_len);
         for _ in 0..freelist_len {
-            freelist.push(read_u64(buf, &mut off)?);
+            freelist.push(PageId::new(read_u64(buf, &mut off)?));
         }
 
-        let mut allocator = PageAllocator::new(1);
+        let mut allocator = PageAllocator::new(PageId::new(1));
         allocator.restore(freelist, next);
 
         Ok(Self {
@@ -265,7 +265,7 @@ impl Checkpoint {
         allocator: Arc<SyncMutex<PageAllocator>>,
     ) -> Self {
         let root: Arc<dyn Fn() -> PageId + Send + Sync> =
-            Arc::new(move || root_page_id.load(Ordering::SeqCst));
+            Arc::new(move || PageId::new(root_page_id.load(Ordering::SeqCst)));
         Self {
             pool,
             wal,
@@ -325,7 +325,7 @@ impl Checkpoint {
             checkpoint_lsn,
             first_undo_lsn,
             allocator: {
-                let mut alloc = PageAllocator::new(1);
+                let mut alloc = PageAllocator::new(PageId::new(1));
                 alloc.restore(allocator_snapshot.0, allocator_snapshot.1);
                 alloc
             },
@@ -349,11 +349,11 @@ impl Checkpoint {
         let recovery = Recovery::new(self.pool.clone(), self.wal.clone(), (self.root)());
         let analysis = recovery.analyze(checkpoint_lsn)?;
         let mut oldest: Option<Lsn> = None;
-        for ActiveTxn { last_lsn } in analysis.active_txns.values() {
-            if *last_lsn == NULL_LSN {
+        for &ActiveTxn { last_lsn } in analysis.active_txns.values() {
+            if last_lsn == NULL_LSN {
                 continue;
             }
-            oldest = Some(oldest.map_or(*last_lsn, |o| o.min(*last_lsn)));
+            oldest = Some(oldest.map_or(last_lsn, |o| o.min(last_lsn)));
         }
         Ok(oldest)
     }
@@ -487,14 +487,14 @@ mod tests {
     #[test]
     fn meta_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let mut alloc = PageAllocator::new(1);
+        let mut alloc = PageAllocator::new(PageId::new(1));
         alloc.allocate();
         alloc.allocate();
-        alloc.free(1);
+        alloc.free(PageId::new(1));
         let meta = Meta {
-            root_page_id: 7,
-            checkpoint_lsn: 42,
-            first_undo_lsn: 10,
+            root_page_id: PageId::new(7),
+            checkpoint_lsn: Lsn::new(42),
+            first_undo_lsn: Lsn::new(10),
             allocator: alloc,
         };
         meta.write(dir.path()).unwrap();
@@ -506,7 +506,7 @@ mod tests {
     fn checkpoint_writes_meta_and_truncates_wal() {
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, 512, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -514,23 +514,23 @@ mod tests {
         wal.append(crate::wal::Record {
             header: crate::wal::RecordHeader::new(
                 crate::wal::RecordType::SetRoot,
-                0,
+                crate::txn::NULL_TXN_ID,
                 crate::wal::NULL_LSN,
                 crate::page::NULL_PAGE_ID,
-                0,
+                crate::wal::NULL_LSN,
             ),
             payload: crate::wal::RecordPayload::SetRoot {
-                new_root_page_id: 5,
+                new_root_page_id: PageId::new(5),
             },
         })
         .unwrap();
 
-        let root = Arc::new(std::sync::atomic::AtomicU64::new(5));
+        let root = Arc::new(std::sync::atomic::AtomicU64::new(PageId::new(5).get()));
         let cp = Checkpoint::new(dir.path(), pool, wal.clone(), root, alloc);
         let meta = cp.run().unwrap();
 
-        assert_eq!(meta.root_page_id, 5);
-        assert!(meta.checkpoint_lsn > 0);
+        assert_eq!(meta.root_page_id, PageId::new(5));
+        assert!(meta.checkpoint_lsn > NULL_LSN);
         let read = Meta::read(dir.path()).unwrap().unwrap();
         assert_eq!(read, meta);
 
@@ -538,7 +538,7 @@ mod tests {
         // records written before it (they are in the active segment).
         let recovery = Recovery::new(cp.pool, cp.wal, meta.root_page_id);
         let recovered_root = recovery.recover(meta.checkpoint_lsn).unwrap();
-        assert_eq!(recovered_root, 5);
+        assert_eq!(recovered_root, PageId::new(5));
     }
 
     #[test]
@@ -549,7 +549,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, 512, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
         let value_log = Arc::new(ValueLog::open(dir.path()).unwrap());
@@ -565,7 +565,7 @@ mod tests {
         tree.insert(b"aaa", &[1u8; 32]).unwrap();
         tree.insert(b"bbb", &[2u8; 32]).unwrap();
 
-        let root = Arc::new(std::sync::atomic::AtomicU64::new(tree.root_page_id()));
+        let root = Arc::new(std::sync::atomic::AtomicU64::new(tree.root_page_id().get()));
         let checkpoint = Checkpoint::new(dir.path(), pool, wal, root, alloc);
 
         let handle = CheckpointThread::spawn(

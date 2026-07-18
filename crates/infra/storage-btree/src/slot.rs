@@ -372,9 +372,9 @@ mod tests {
         let key = b"mvcc";
         let value = ValueKind::Inline(b"data");
         let header = MvccHeader {
-            begin_ts: 5,
-            end_ts: 7,
-            prev_version_lsn: 123,
+            begin_ts: crate::txn::TxnId::new(5),
+            end_ts: crate::txn::TxnId::new(7),
+            prev_version_lsn: crate::wal::Lsn::new(123),
         };
         let size = cell_size_with_mvcc(key.len(), &value, Some(&header));
         let mut buf = vec![0u8; size];

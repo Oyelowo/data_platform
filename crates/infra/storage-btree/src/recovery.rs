@@ -21,11 +21,11 @@ use crate::buffer::BufferPool;
 use crate::error::{Error, Result};
 use crate::page::{NULL_PAGE_ID, Page, PageId};
 use crate::slot::{OwnedCell, OwnedValue, ValueKind};
-use crate::txn::NULL_TXN_ID;
+use crate::txn::{NULL_TXN_ID, TxnId};
 use crate::undo;
 use crate::valuelog::ValueLog;
 use crate::version::MvccHeader;
-use crate::wal::{Lsn, NULL_LSN, Record, RecordPayload, RecordType, TxnId, WalLog, set_page_lsn};
+use crate::wal::{Lsn, NULL_LSN, Record, RecordPayload, RecordType, WalLog, set_page_lsn};
 
 /// Entry in the dirty-page table built by the analysis pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ impl Recovery {
         Self {
             pool,
             wal,
-            root_page_id: AtomicU64::new(root_page_id),
+            root_page_id: AtomicU64::new(root_page_id.get()),
             value_log: None,
         }
     }
@@ -82,15 +82,22 @@ impl Recovery {
     ///
     /// `checkpoint_lsn` is the LSN stored in `META`; recovery scans from there.
     /// Returns the recovered root page id.
+    fn root(&self) -> PageId {
+        PageId::new(self.root_page_id.load(Ordering::SeqCst))
+    }
+
+    fn set_root(&self, id: PageId) {
+        self.root_page_id.store(id.get(), Ordering::SeqCst);
+    }
+
     pub fn recover(&self, checkpoint_lsn: Lsn) -> Result<PageId> {
         let analysis = self.analyze(checkpoint_lsn)?;
         self.redo(&analysis, checkpoint_lsn)?;
         if self.value_log.is_some() {
-            let root = self.root_page_id.load(Ordering::SeqCst);
-            self.rebuild_value_log_refs(root)?;
+            self.rebuild_value_log_refs(self.root())?;
         }
         self.undo(&analysis)?;
-        Ok(self.root_page_id.load(Ordering::SeqCst))
+        Ok(self.root())
     }
 
     /// Rebuild value-log reference counts by scanning every live leaf cell
@@ -135,7 +142,7 @@ impl Recovery {
                 // CLRs redo a compensation but do not start or end transactions.
                 // They are recorded against the same page for redo purposes.
                 if let RecordPayload::Clr { undo_next_lsn, .. } = record.payload
-                    && record.header.transaction_id != 0
+                    && record.header.transaction_id != NULL_TXN_ID
                 {
                     // The transaction's next undo target moves backward.
                     result
@@ -165,7 +172,7 @@ impl Recovery {
                     rec_lsn: record.header.page_lsn,
                 });
 
-            if record.header.transaction_id == 0 {
+            if record.header.transaction_id == NULL_TXN_ID {
                 // Autocommit / structural record: no transaction state.
                 continue;
             }
@@ -213,7 +220,7 @@ impl Recovery {
         if page_id == NULL_PAGE_ID {
             // Records like SetRoot carry page_id 0; handle them specially.
             if let RecordPayload::SetRoot { new_root_page_id } = record.payload {
-                self.root_page_id.store(new_root_page_id, Ordering::SeqCst);
+                self.set_root(new_root_page_id);
             }
             return Ok(());
         }
@@ -249,7 +256,7 @@ impl Recovery {
                     page.insert_with_mvcc(&cell.key, &cell.value.as_value_kind(), Some(&mvcc))?;
             }
             RecordPayload::DeleteCell { key, .. } => {
-                if record.header.transaction_id == 0 {
+                if record.header.transaction_id == NULL_TXN_ID {
                     // Autocommit deletes are physical deletes.
                     let _ = page.delete(key)?;
                 } else {
@@ -402,7 +409,7 @@ impl Recovery {
                 set_page_lsn(page, new_lsn)?;
                 Ok(())
             })?;
-        self.root_page_id.store(new_root_page_id, Ordering::SeqCst);
+        self.set_root(new_root_page_id);
         Ok(())
     }
 
@@ -454,10 +461,10 @@ impl Recovery {
             let victim_next = victim.next_page_id()?;
             survivor.set_next_page_id(victim_next);
             if victim_next != NULL_PAGE_ID {
-                let _ = self.pool.with_page_mut(victim_next, |next| {
+                self.pool.with_page_mut(victim_next, |next| {
                     next.set_prev_page_id(survivor.id);
                     Ok(())
-                });
+                })?;
             }
         } else {
             // Victim is the left sibling: move all of its cells into the
@@ -474,10 +481,10 @@ impl Recovery {
             let victim_prev = victim.prev_page_id()?;
             survivor.set_prev_page_id(victim_prev);
             if victim_prev != NULL_PAGE_ID {
-                let _ = self.pool.with_page_mut(victim_prev, |prev| {
+                self.pool.with_page_mut(victim_prev, |prev| {
                     prev.set_next_page_id(survivor.id);
                     Ok(())
-                });
+                })?;
             }
         }
         Ok(())
@@ -619,7 +626,7 @@ mod tests {
     fn setup_pool(dir: &Path, page_size: usize) -> (Arc<BufferPool>, tempfile::TempDir) {
         let tmp = tempfile::tempdir_in(dir).unwrap();
         let disk = Arc::new(PagedFile::open(tmp.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc).unwrap());
         (pool, tmp)
     }
@@ -636,12 +643,24 @@ mod tests {
             mvcc: None,
         };
         wal.append(Record {
-            header: RecordHeader::new(RecordType::InsertCell, 0, NULL_LSN, 3, 0),
+            header: RecordHeader::new(
+                RecordType::InsertCell,
+                NULL_TXN_ID,
+                NULL_LSN,
+                PageId::new(3),
+                NULL_LSN,
+            ),
             payload: RecordPayload::InsertCell { cell: cell.clone() },
         })
         .unwrap();
         wal.append(Record {
-            header: RecordHeader::new(RecordType::DeleteCell, 0, NULL_LSN, 3, 5),
+            header: RecordHeader::new(
+                RecordType::DeleteCell,
+                NULL_TXN_ID,
+                NULL_LSN,
+                PageId::new(3),
+                Lsn::new(5),
+            ),
             payload: RecordPayload::DeleteCell {
                 key: b"k".to_vec(),
                 old_cell: None,
@@ -650,10 +669,10 @@ mod tests {
         })
         .unwrap();
 
-        let recovery = Recovery::new(pool, wal, 1);
-        let analysis = recovery.analyze(0).unwrap();
-        assert!(analysis.dirty_pages.contains_key(&3));
-        assert_eq!(analysis.dirty_pages[&3].rec_lsn, 0);
+        let recovery = Recovery::new(pool, wal, PageId::new(1));
+        let analysis = recovery.analyze(NULL_LSN).unwrap();
+        assert!(analysis.dirty_pages.contains_key(&PageId::new(3)));
+        assert_eq!(analysis.dirty_pages[&PageId::new(3)].rec_lsn, NULL_LSN);
         assert!(analysis.active_txns.is_empty());
     }
 
@@ -676,14 +695,20 @@ mod tests {
             mvcc: None,
         };
         wal.append(Record {
-            header: RecordHeader::new(RecordType::InsertCell, 0, NULL_LSN, page_id, 0),
+            header: RecordHeader::new(
+                RecordType::InsertCell,
+                NULL_TXN_ID,
+                NULL_LSN,
+                page_id,
+                NULL_LSN,
+            ),
             payload: RecordPayload::InsertCell { cell: cell.clone() },
         })
         .unwrap();
 
-        let recovery = Recovery::new(pool.clone(), wal.clone(), 1);
-        let analysis = recovery.analyze(0).unwrap();
-        recovery.redo(&analysis, 0).unwrap();
+        let recovery = Recovery::new(pool.clone(), wal.clone(), PageId::new(1));
+        let analysis = recovery.analyze(NULL_LSN).unwrap();
+        recovery.redo(&analysis, NULL_LSN).unwrap();
 
         let guard = pool.fetch_or_read(page_id).unwrap();
         let value = guard.page().get(b"k").unwrap().map(|c| match c.value {
@@ -698,7 +723,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let page_size = 512;
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -717,7 +742,7 @@ mod tests {
 
         // Recover from the WAL.
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, page_size, disk2, alloc2).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -728,7 +753,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = Recovery::new(pool2.clone(), wal2.clone(), fresh_root);
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
 
         let tree2 = crate::tree::BPlusTree::open(pool2, root, page_size / 4);
         assert_eq!(tree2.get(b"k").unwrap(), Some(b"old".to_vec()));
@@ -739,7 +764,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let page_size = 512;
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -757,7 +782,11 @@ mod tests {
         // Manually write a CLR that redoes the undo of the update.  This
         // simulates a crash after the CLR was written but before the Abort
         // marker or transaction-table update.
-        let records: Vec<_> = wal.iter(0).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let records: Vec<_> = wal
+            .iter(NULL_LSN)
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         let (update_lsn, update_record) = records
             .iter()
             .find(|(_lsn, r)| matches!(r.payload, RecordPayload::UpdateCell { .. }))
@@ -781,7 +810,7 @@ mod tests {
         // Recover: analysis must see the CLR, redo must apply it, and undo must
         // continue from undo_next_lsn (which is the Begin record's prev_lsn).
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, page_size, disk2, alloc2).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -792,7 +821,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = Recovery::new(pool2.clone(), wal2.clone(), fresh_root);
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
 
         let tree2 = crate::tree::BPlusTree::open(pool2, root, page_size / 4);
         assert_eq!(tree2.get(b"k").unwrap(), Some(b"old".to_vec()));
@@ -803,7 +832,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let page_size = 512;
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
         let tree = crate::tree::BPlusTree::new(pool.clone(), page_size / 4)
@@ -830,7 +859,7 @@ mod tests {
 
         // Recover and verify the tombstone still points to the old value.
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, page_size, disk2, alloc2).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -841,7 +870,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = Recovery::new(pool2.clone(), wal2.clone(), fresh_root);
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
 
         let tree2 = crate::tree::BPlusTree::open(pool2, root, page_size / 4).with_wal(wal2);
         let t3 = tree2
@@ -856,7 +885,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let page_size = 512;
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
         let tree = crate::tree::BPlusTree::new(pool.clone(), page_size / 4)
@@ -890,7 +919,7 @@ mod tests {
 
         // Recover and verify the older snapshot still sees the pre-split values.
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
-        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(1)));
+        let alloc2 = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool2 = Arc::new(BufferPool::new(64, page_size, disk2, alloc2).unwrap());
         let wal2 = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
 
@@ -901,7 +930,7 @@ mod tests {
         drop(fresh_root_guard);
 
         let recovery = Recovery::new(pool2.clone(), wal2.clone(), fresh_root);
-        let root = recovery.recover(0).unwrap();
+        let root = recovery.recover(NULL_LSN).unwrap();
 
         let tree2 = crate::tree::BPlusTree::open(pool2, root, page_size / 4).with_wal(wal2);
         let t3 = tree2

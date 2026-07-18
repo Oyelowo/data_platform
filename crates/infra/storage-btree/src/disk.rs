@@ -56,7 +56,7 @@ impl PagedFile {
     /// Read a whole page by id. Returns `Error::Corruption` if the file ends
     /// before the page is complete.
     pub fn read_page(&self, page_id: PageId) -> Result<Vec<u8>> {
-        let offset = page_id * self.page_size as u64;
+        let offset = page_id.get() * self.page_size as u64;
         let mut file = &self.file;
         file.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; self.page_size];
@@ -78,7 +78,7 @@ impl PagedFile {
                 data.len()
             )));
         }
-        let offset = page_id * self.page_size as u64;
+        let offset = page_id.get() * self.page_size as u64;
         let mut file = &self.file;
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(data)?;
@@ -113,9 +113,9 @@ mod tests {
 
         let mut page = vec![0u8; 4096];
         page[0..4].copy_from_slice(b"test");
-        file.write_page(3, &page).unwrap();
+        file.write_page(PageId::new(3), &page).unwrap();
 
-        let read = file.read_page(3).unwrap();
+        let read = file.read_page(PageId::new(3)).unwrap();
         assert_eq!(&read[0..4], b"test");
         assert_eq!(file.page_count().unwrap(), 4);
     }
@@ -124,7 +124,7 @@ mod tests {
     fn read_missing_page_is_corruption() {
         let dir = tempfile::tempdir().unwrap();
         let file = PagedFile::open(dir.path().join("pages.dat"), 512).unwrap();
-        assert!(file.read_page(5).is_err());
+        assert!(file.read_page(PageId::new(5)).is_err());
     }
 
     #[test]

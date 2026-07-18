@@ -13,12 +13,13 @@ use crate::cursor::BPlusTreeCursor;
 use crate::disk::PagedFile;
 use crate::error::{Error, Result};
 use crate::options::BtreeOptions;
+use crate::page::PageId;
 use crate::recovery::Recovery;
 use crate::space::PageAllocator;
 use crate::sync::Mutex as SyncMutex;
 use crate::transaction::BtreeTransaction;
 use crate::tree::BPlusTree;
-use crate::txn::{NULL_TXN_ID, Transaction as V2Transaction};
+use crate::txn::{NULL_TXN_ID, Timestamp, Transaction as V2Transaction};
 use crate::valuelog::ValueLog;
 use crate::wal::{NULL_LSN, WalLog};
 
@@ -43,7 +44,7 @@ impl BtreeEngine {
         let allocator = Arc::new(SyncMutex::new(if let Some(ref m) = meta {
             m.allocator.clone()
         } else {
-            PageAllocator::new(1)
+            PageAllocator::new(PageId::new(1))
         }));
 
         let pool = Arc::new(BufferPool::new(
@@ -208,7 +209,7 @@ impl storage_traits::Engine for BtreeEngine {
         // cursor only copies the timestamp and txn id, so the transient handle
         // can be dropped immediately.
         let ts = self.inner.tree.current_timestamp();
-        let read_ts = ts.saturating_sub(1);
+        let read_ts = Timestamp::new(ts.get().saturating_sub(1));
         let txn = V2Transaction::new(
             NULL_TXN_ID,
             read_ts,

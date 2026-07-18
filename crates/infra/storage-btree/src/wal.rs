@@ -8,18 +8,46 @@
 use crate::error::{Error, Result};
 use crate::page::PageId;
 use crate::slot::{OwnedCell, OwnedValue, parse_cell};
+use crate::txn::{NULL_TXN_ID, Timestamp, TxnId};
 
-/// Logical transaction identifier.  `0` means "no transaction" (used for
-/// structure modifications that are committed implicitly, e.g. single-key
-/// operations in autocommit mode).
-pub type TxnId = u64;
-
-/// Log sequence number.  Aliased from `storage_wal` semantics: monotonically
-/// increasing within a single WAL.
-pub type Lsn = u64;
+/// Log sequence number.
+///
+/// LSNs are opaque 64-bit values that increase monotonically within a single
+/// WAL.  `0` is reserved as `NULL_LSN` and means "no LSN".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct Lsn(pub u64);
 
 /// Sentinel LSN meaning "none".
-pub const NULL_LSN: Lsn = 0;
+pub const NULL_LSN: Lsn = Lsn(0);
+
+impl Lsn {
+    /// Create an LSN from its raw 64-bit value.
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Return the raw 64-bit value.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// Encode as little-endian bytes.
+    pub const fn to_le_bytes(self) -> [u8; 8] {
+        self.0.to_le_bytes()
+    }
+
+    /// Decode from little-endian bytes.
+    pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
+        Self(u64::from_le_bytes(bytes))
+    }
+}
+
+impl std::fmt::Display for Lsn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// Type tag for a physiological WAL record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,16 +148,16 @@ impl RecordHeader {
         }
         Ok(Self {
             record_type: RecordType::from_u8(buf[0])?,
-            transaction_id: u64::from_le_bytes([
+            transaction_id: TxnId::from_le_bytes([
                 buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8],
             ]),
-            prev_lsn: u64::from_le_bytes([
+            prev_lsn: Lsn::from_le_bytes([
                 buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15], buf[16],
             ]),
-            page_id: u64::from_le_bytes([
+            page_id: PageId::from_le_bytes([
                 buf[17], buf[18], buf[19], buf[20], buf[21], buf[22], buf[23], buf[24],
             ]),
-            page_lsn: u64::from_le_bytes([
+            page_lsn: Lsn::from_le_bytes([
                 buf[25], buf[26], buf[27], buf[28], buf[29], buf[30], buf[31], buf[32],
             ]),
         })
@@ -453,7 +481,7 @@ impl Record {
                 }
                 let separator = buf[off..off + sep_len].to_vec();
                 off += sep_len;
-                let right_page_id = u64::from_le_bytes([
+                let right_page_id = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -476,7 +504,7 @@ impl Record {
                 if buf.len() < off + 8 + 1 + 2 + 8 {
                     return Err(Error::Corruption("WAL MergePage payload truncated".into()));
                 }
-                let victim_page_id = u64::from_le_bytes([
+                let victim_page_id = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -498,7 +526,7 @@ impl Record {
                 }
                 let separator = buf[off..off + sep_len].to_vec();
                 off += sep_len;
-                let victim_leftmost = u64::from_le_bytes([
+                let victim_leftmost = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -522,7 +550,7 @@ impl Record {
                         "WAL MoveRightmost payload truncated".into(),
                     ));
                 }
-                let old_rightmost = u64::from_le_bytes([
+                let old_rightmost = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -533,7 +561,7 @@ impl Record {
                     buf[off + 7],
                 ]);
                 off += 8;
-                let new_rightmost = u64::from_le_bytes([
+                let new_rightmost = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -553,7 +581,7 @@ impl Record {
                 if buf.len() < off + 8 {
                     return Err(Error::Corruption("WAL SetRoot payload truncated".into()));
                 }
-                let new_root_page_id = u64::from_le_bytes([
+                let new_root_page_id = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -570,7 +598,7 @@ impl Record {
                 if buf.len() < off + 8 + 8 + 2 + 8 {
                     return Err(Error::Corruption("WAL NewRoot payload truncated".into()));
                 }
-                let new_root_page_id = u64::from_le_bytes([
+                let new_root_page_id = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -581,7 +609,7 @@ impl Record {
                     buf[off + 7],
                 ]);
                 off += 8;
-                let leftmost_child = u64::from_le_bytes([
+                let leftmost_child = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -599,7 +627,7 @@ impl Record {
                 }
                 let separator = buf[off..off + sep_len].to_vec();
                 off += sep_len;
-                let right_child = u64::from_le_bytes([
+                let right_child = PageId::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -622,7 +650,7 @@ impl Record {
                 if buf.len() < off + 8 {
                     return Err(Error::Corruption("WAL Commit payload truncated".into()));
                 }
-                let commit_ts = u64::from_le_bytes([
+                let commit_ts = Timestamp::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -640,7 +668,7 @@ impl Record {
                 if buf.len() < off + 8 {
                     return Err(Error::Corruption("WAL Clr payload truncated".into()));
                 }
-                let undo_next_lsn = u64::from_le_bytes([
+                let undo_next_lsn = Lsn::from_le_bytes([
                     buf[off],
                     buf[off + 1],
                     buf[off + 2],
@@ -862,6 +890,7 @@ impl WalLog {
                 durability,
             )
             .map_err(|e| Error::Io(std::io::Error::other(format!("WAL append failed: {e}"))))
+            .map(Lsn::new)
     }
 
     /// Force a flush of all buffered WAL records.  Blocks until durable.
@@ -875,7 +904,7 @@ impl WalLog {
     pub fn iter(&self, start_lsn: Lsn) -> Result<WalRecordIter> {
         let iter = self
             .inner
-            .iter(start_lsn)
+            .iter(start_lsn.get())
             .map_err(|e| Error::Io(map_wal_error(e)))?;
         Ok(WalRecordIter {
             inner: Box::new(iter),
@@ -887,6 +916,7 @@ impl WalLog {
         self.inner
             .checkpoint(payload)
             .map_err(|e| Error::Io(map_wal_error(e)))
+            .map(Lsn::new)
     }
 
     /// Truncate all WAL segments fully before the active segment.
@@ -938,7 +968,7 @@ impl Iterator for WalRecordIter {
             if rec.ty != storage_wal::RecordType::Put {
                 continue;
             }
-            let lsn = rec.lsn;
+            let lsn = Lsn::new(rec.lsn);
             match Record::decode(&rec.payload) {
                 Ok((record, consumed)) => {
                     debug_assert_eq!(consumed, rec.payload.len());
@@ -964,7 +994,7 @@ pub(crate) fn log_and_set_lsn(page: &Page, wal: Option<&WalLog>, record: Record)
     // pay one fsync per user-facing mutation instead of one per page change.
     let new_lsn = match wal {
         Some(w) => w.append_buffered(record)?,
-        None => 0,
+        None => NULL_LSN,
     };
     set_page_lsn(page, new_lsn)?;
     Ok(new_lsn)
@@ -993,7 +1023,13 @@ pub(crate) fn page_insert_logged(
         mvcc: None,
     };
     let record = Record {
-        header: RecordHeader::new(RecordType::InsertCell, 0, NULL_LSN, page.id, page_lsn),
+        header: RecordHeader::new(
+            RecordType::InsertCell,
+            NULL_TXN_ID,
+            NULL_LSN,
+            page.id,
+            page_lsn,
+        ),
         payload: RecordPayload::InsertCell { cell },
     };
     let idx = page.insert(key, value)?;
@@ -1006,7 +1042,13 @@ pub(crate) fn page_insert_logged(
 pub(crate) fn page_delete_logged(page: &Page, wal: Option<&WalLog>, key: &[u8]) -> Result<bool> {
     let page_lsn = page.header()?.page_lsn;
     let record = Record {
-        header: RecordHeader::new(RecordType::DeleteCell, 0, NULL_LSN, page.id, page_lsn),
+        header: RecordHeader::new(
+            RecordType::DeleteCell,
+            NULL_TXN_ID,
+            NULL_LSN,
+            page.id,
+            page_lsn,
+        ),
         payload: RecordPayload::DeleteCell {
             key: key.to_vec(),
             old_cell: None,
@@ -1099,7 +1141,7 @@ pub(crate) fn page_delete_txn_logged(
     let tombstone_mvcc = crate::version::MvccHeader {
         begin_ts: txn_id,
         end_ts: crate::txn::NULL_TXN_ID,
-        prev_version_lsn: 0,
+        prev_version_lsn: NULL_LSN,
     };
     let record = Record {
         header: RecordHeader::new(RecordType::DeleteCell, txn_id, prev_lsn, page.id, page_lsn),
@@ -1129,7 +1171,13 @@ pub(crate) fn page_move_cell_logged(
 ) -> Result<()> {
     let src_lsn = src.header()?.page_lsn;
     let del_record = Record {
-        header: RecordHeader::new(RecordType::DeleteCell, 0, NULL_LSN, src.id, src_lsn),
+        header: RecordHeader::new(
+            RecordType::DeleteCell,
+            NULL_TXN_ID,
+            NULL_LSN,
+            src.id,
+            src_lsn,
+        ),
         payload: RecordPayload::DeleteCell {
             key: cell.key.clone(),
             old_cell: None,
@@ -1138,19 +1186,25 @@ pub(crate) fn page_move_cell_logged(
     };
     let del_lsn = match wal {
         Some(w) => w.append(del_record)?,
-        None => 0,
+        None => NULL_LSN,
     };
     src.delete(&cell.key)?;
     set_page_lsn(src, del_lsn)?;
 
     let dst_lsn = dst.header()?.page_lsn;
     let ins_record = Record {
-        header: RecordHeader::new(RecordType::InsertCell, 0, NULL_LSN, dst.id, dst_lsn),
+        header: RecordHeader::new(
+            RecordType::InsertCell,
+            NULL_TXN_ID,
+            NULL_LSN,
+            dst.id,
+            dst_lsn,
+        ),
         payload: RecordPayload::InsertCell { cell: cell.clone() },
     };
     let ins_lsn = match wal {
         Some(w) => w.append(ins_record)?,
-        None => 0,
+        None => NULL_LSN,
     };
     dst.insert_with_mvcc(&cell.key, &cell.value.as_value_kind(), cell.mvcc.as_ref())?;
     set_page_lsn(dst, ins_lsn)?;
@@ -1169,7 +1223,13 @@ pub(crate) fn page_replace_key_logged(
 ) -> Result<()> {
     let page_lsn = page.header()?.page_lsn;
     let del_record = Record {
-        header: RecordHeader::new(RecordType::DeleteCell, 0, NULL_LSN, page.id, page_lsn),
+        header: RecordHeader::new(
+            RecordType::DeleteCell,
+            NULL_TXN_ID,
+            NULL_LSN,
+            page.id,
+            page_lsn,
+        ),
         payload: RecordPayload::DeleteCell {
             key: old_key.to_vec(),
             old_cell: None,
@@ -1178,7 +1238,7 @@ pub(crate) fn page_replace_key_logged(
     };
     let del_lsn = match wal {
         Some(w) => w.append(del_record)?,
-        None => 0,
+        None => NULL_LSN,
     };
     page.delete(old_key)?;
     set_page_lsn(page, del_lsn)?;
@@ -1190,12 +1250,18 @@ pub(crate) fn page_replace_key_logged(
         mvcc: None,
     };
     let ins_record = Record {
-        header: RecordHeader::new(RecordType::InsertCell, 0, NULL_LSN, page.id, page_lsn),
+        header: RecordHeader::new(
+            RecordType::InsertCell,
+            NULL_TXN_ID,
+            NULL_LSN,
+            page.id,
+            page_lsn,
+        ),
         payload: RecordPayload::InsertCell { cell },
     };
     let ins_lsn = match wal {
         Some(w) => w.append(ins_record)?,
-        None => 0,
+        None => NULL_LSN,
     };
     page.insert(new_key, value)?;
     set_page_lsn(page, ins_lsn)?;
@@ -1212,7 +1278,13 @@ pub(crate) fn page_set_leftmost_child_logged(
 ) -> Result<()> {
     let page_lsn = page.header()?.page_lsn;
     let record = Record {
-        header: RecordHeader::new(RecordType::MoveRightmost, 0, NULL_LSN, page.id, page_lsn),
+        header: RecordHeader::new(
+            RecordType::MoveRightmost,
+            NULL_TXN_ID,
+            NULL_LSN,
+            page.id,
+            page_lsn,
+        ),
         payload: RecordPayload::MoveRightmost {
             old_rightmost: old_leftmost,
             new_rightmost: new_leftmost,
@@ -1220,7 +1292,7 @@ pub(crate) fn page_set_leftmost_child_logged(
     };
     let lsn = match wal {
         Some(w) => w.append(record)?,
-        None => 0,
+        None => NULL_LSN,
     };
     page.set_leftmost_child(new_leftmost);
     set_page_lsn(page, lsn)?;
@@ -1230,6 +1302,7 @@ pub(crate) fn page_set_leftmost_child_logged(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page::NULL_PAGE_ID;
 
     fn roundtrip(record: &Record) {
         let mut buf = vec![0u8; record.encoded_size()];
@@ -1242,7 +1315,13 @@ mod tests {
     #[test]
     fn insert_cell_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::InsertCell, 1, 0, 3, 7),
+            header: RecordHeader::new(
+                RecordType::InsertCell,
+                TxnId::new(1),
+                NULL_LSN,
+                PageId::new(3),
+                Lsn::new(7),
+            ),
             payload: RecordPayload::InsertCell {
                 cell: OwnedCell {
                     key: b"hello".to_vec(),
@@ -1256,7 +1335,13 @@ mod tests {
     #[test]
     fn delete_cell_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::DeleteCell, 2, 5, 3, 7),
+            header: RecordHeader::new(
+                RecordType::DeleteCell,
+                TxnId::new(2),
+                Lsn::new(5),
+                PageId::new(3),
+                Lsn::new(7),
+            ),
             payload: RecordPayload::DeleteCell {
                 key: b"bye".to_vec(),
                 old_cell: None,
@@ -1269,7 +1354,13 @@ mod tests {
     fn delete_cell_with_undo_roundtrip() {
         use crate::version::MvccHeader;
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::DeleteCell, 2, 5, 3, 7),
+            header: RecordHeader::new(
+                RecordType::DeleteCell,
+                TxnId::new(2),
+                Lsn::new(5),
+                PageId::new(3),
+                Lsn::new(7),
+            ),
             payload: RecordPayload::DeleteCell {
                 key: b"bye".to_vec(),
                 old_cell: Some(OwnedCell {
@@ -1285,7 +1376,13 @@ mod tests {
     #[test]
     fn update_cell_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::UpdateCell, 1, 10, 3, 12),
+            header: RecordHeader::new(
+                RecordType::UpdateCell,
+                TxnId::new(1),
+                Lsn::new(10),
+                PageId::new(3),
+                Lsn::new(12),
+            ),
             payload: RecordPayload::UpdateCell {
                 cell: OwnedCell {
                     key: b"k".to_vec(),
@@ -1304,10 +1401,16 @@ mod tests {
     #[test]
     fn split_page_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::SplitPage, 0, 0, 5, 9),
+            header: RecordHeader::new(
+                RecordType::SplitPage,
+                NULL_TXN_ID,
+                NULL_LSN,
+                PageId::new(5),
+                Lsn::new(9),
+            ),
             payload: RecordPayload::SplitPage {
                 separator: b"sep".to_vec(),
-                right_page_id: 6,
+                right_page_id: PageId::new(6),
                 is_internal: true,
             },
         });
@@ -1316,12 +1419,18 @@ mod tests {
     #[test]
     fn merge_page_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::MergePage, 0, 0, 5, 9),
+            header: RecordHeader::new(
+                RecordType::MergePage,
+                NULL_TXN_ID,
+                NULL_LSN,
+                PageId::new(5),
+                Lsn::new(9),
+            ),
             payload: RecordPayload::MergePage {
-                victim_page_id: 6,
+                victim_page_id: PageId::new(6),
                 victim_is_left: false,
                 separator: b"sep".to_vec(),
-                victim_leftmost: 7,
+                victim_leftmost: PageId::new(7),
             },
         });
     }
@@ -1329,10 +1438,16 @@ mod tests {
     #[test]
     fn move_rightmost_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::MoveRightmost, 0, 0, 2, 4),
+            header: RecordHeader::new(
+                RecordType::MoveRightmost,
+                NULL_TXN_ID,
+                NULL_LSN,
+                PageId::new(2),
+                Lsn::new(4),
+            ),
             payload: RecordPayload::MoveRightmost {
-                old_rightmost: 10,
-                new_rightmost: 11,
+                old_rightmost: PageId::new(10),
+                new_rightmost: PageId::new(11),
             },
         });
     }
@@ -1340,9 +1455,15 @@ mod tests {
     #[test]
     fn set_root_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::SetRoot, 0, 0, 0, 0),
+            header: RecordHeader::new(
+                RecordType::SetRoot,
+                NULL_TXN_ID,
+                NULL_LSN,
+                NULL_PAGE_ID,
+                NULL_LSN,
+            ),
             payload: RecordPayload::SetRoot {
-                new_root_page_id: 42,
+                new_root_page_id: PageId::new(42),
             },
         });
     }
@@ -1350,12 +1471,18 @@ mod tests {
     #[test]
     fn new_root_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::NewRoot, 0, 0, 7, 0),
+            header: RecordHeader::new(
+                RecordType::NewRoot,
+                NULL_TXN_ID,
+                NULL_LSN,
+                PageId::new(7),
+                NULL_LSN,
+            ),
             payload: RecordPayload::NewRoot {
-                new_root_page_id: 7,
-                leftmost_child: 3,
+                new_root_page_id: PageId::new(7),
+                leftmost_child: PageId::new(3),
                 separator: b"sep".to_vec(),
-                right_child: 5,
+                right_child: PageId::new(5),
             },
         });
     }
@@ -1363,15 +1490,29 @@ mod tests {
     #[test]
     fn commit_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::Commit, 7, 99, 0, 100),
-            payload: RecordPayload::Commit { commit_ts: 101 },
+            header: RecordHeader::new(
+                RecordType::Commit,
+                TxnId::new(7),
+                Lsn::new(99),
+                NULL_PAGE_ID,
+                Lsn::new(100),
+            ),
+            payload: RecordPayload::Commit {
+                commit_ts: Timestamp::new(101),
+            },
         });
     }
 
     #[test]
     fn begin_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::Begin, 7, 0, 0, 0),
+            header: RecordHeader::new(
+                RecordType::Begin,
+                TxnId::new(7),
+                NULL_LSN,
+                NULL_PAGE_ID,
+                NULL_LSN,
+            ),
             payload: RecordPayload::Begin,
         });
     }
@@ -1379,7 +1520,13 @@ mod tests {
     #[test]
     fn abort_roundtrip() {
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::Abort, 7, 50, 0, 0),
+            header: RecordHeader::new(
+                RecordType::Abort,
+                TxnId::new(7),
+                Lsn::new(50),
+                NULL_PAGE_ID,
+                NULL_LSN,
+            ),
             payload: RecordPayload::Abort,
         });
     }
@@ -1387,7 +1534,13 @@ mod tests {
     #[test]
     fn clr_roundtrip() {
         let original = Record {
-            header: RecordHeader::new(RecordType::DeleteCell, 7, 50, 3, 60),
+            header: RecordHeader::new(
+                RecordType::DeleteCell,
+                TxnId::new(7),
+                Lsn::new(50),
+                PageId::new(3),
+                Lsn::new(60),
+            ),
             payload: RecordPayload::DeleteCell {
                 key: b"undo-me".to_vec(),
                 old_cell: None,
@@ -1395,9 +1548,15 @@ mod tests {
             },
         };
         roundtrip(&Record {
-            header: RecordHeader::new(RecordType::Clr, 7, 110, 3, 120),
+            header: RecordHeader::new(
+                RecordType::Clr,
+                TxnId::new(7),
+                Lsn::new(110),
+                PageId::new(3),
+                Lsn::new(120),
+            ),
             payload: RecordPayload::Clr {
-                undo_next_lsn: 50,
+                undo_next_lsn: Lsn::new(50),
                 original: Box::new(original),
             },
         });
@@ -1406,7 +1565,13 @@ mod tests {
     #[test]
     fn truncated_record_rejected() {
         let record = Record {
-            header: RecordHeader::new(RecordType::DeleteCell, 1, 0, 3, 7),
+            header: RecordHeader::new(
+                RecordType::DeleteCell,
+                TxnId::new(1),
+                NULL_LSN,
+                PageId::new(3),
+                Lsn::new(7),
+            ),
             payload: RecordPayload::DeleteCell {
                 key: b"key".to_vec(),
                 old_cell: None,
