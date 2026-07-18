@@ -8,8 +8,8 @@
 use yelang_arena::FxHashMap;
 use yelang_interner::Symbol;
 
-use crate::hir::Item;
-use crate::hir_item::{Item as HirItem, ItemKind};
+use crate::hir::core::Item;
+use crate::hir::item::{Item as HirItem, ItemKind};
 use crate::lowering::LoweringContext;
 
 mod clone;
@@ -127,12 +127,12 @@ pub fn expand_item_derives(
                     polarity: _,
                 } = &generated_item.kind
                 {
-                    ctx.crate_hir.impls.push(crate::hir::Impl {
+                    ctx.crate_hir.impls.push(crate::hir::core::Impl {
                         generics: generics.clone(),
                         self_ty: self_ty.clone(),
                         of_trait: of_trait.clone(),
                         items: items.clone(),
-                        polarity: crate::hir::ImplPolarity::Positive,
+                        polarity: crate::hir::core::ImplPolarity::Positive,
                         span: generated_item.span,
                     });
                 }

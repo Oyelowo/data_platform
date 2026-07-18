@@ -3,7 +3,7 @@
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
-use crate::hir::Lit;
+use crate::hir::core::Lit;
 use crate::ids::PatId;
 use crate::res::Res;
 
@@ -64,7 +64,7 @@ pub enum BindingMode {
 /// A field in a struct pattern.
 #[derive(Debug, Clone)]
 pub struct FieldPat {
-    pub ident: crate::hir::Ident,
+    pub ident: crate::hir::core::Ident,
     pub pat: PatId,
     pub is_shorthand: bool,
     pub span: Span,

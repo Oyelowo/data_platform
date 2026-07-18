@@ -2,8 +2,8 @@
 
 use yelang_ast::{AssignOpKind, Ident, Label};
 
-use crate::hir::{Arm, Block, CaptureClause, FieldExpr, Lit};
-use crate::hir_body::Param;
+use crate::hir::core::{Arm, Block, CaptureClause, FieldExpr, Lit};
+use crate::hir::body::Param;
 use crate::ids::{BodyId, ExprId, PatId, TyId};
 use crate::res::Res;
 

@@ -1,11 +1,11 @@
 //! Integration tests for built-in derive expansion.
 
-use crate::crate_hir::Crate;
-use crate::hir::ItemKind;
-use crate::hir_item::Item;
-use crate::hir_ty::Ty;
+use crate::crate_data::Crate;
+use crate::hir::core::{GenericParam, ItemKind};
+use crate::hir::item::Item;
+use crate::hir::ty::{GenericArg, Ty};
 use crate::lowering::{LoweringContext, lower_crate};
-use crate::lowering_err::LoweringError;
+use crate::lowering::err::LoweringError;
 use crate::res::ResolvedCrate;
 use yelang_interner::Interner;
 
@@ -28,7 +28,7 @@ fn collect_lowering_errors(
 ) -> Vec<LoweringError> {
     let mut ctx = LoweringContext::new(interner, resolved);
     for item in &program.items {
-        let _ = crate::lowering_item::lower_item(&mut ctx, item);
+        let _ = crate::lowering::item::lower_item(&mut ctx, item);
     }
     ctx.errors
 }
@@ -393,4 +393,181 @@ fn unknown_repr_errors() {
         !errors.is_empty(),
         "unknown @repr hint should emit an error"
     );
+}
+
+/// Helpers for generic-derive assertions.
+fn first_impl_for_type<'a>(
+    crate_hir: &'a Crate,
+    type_name: &str,
+    interner: &Interner,
+    resolved: &ResolvedCrate,
+) -> &'a Item {
+    let impls = find_impls_for_type(crate_hir, type_name, interner, resolved);
+    assert!(!impls.is_empty(), "expected at least one derived impl");
+    impls[0]
+}
+
+fn assert_generic_self_ty(
+    crate_hir: &Crate,
+    item: &Item,
+    expected_param_count: usize,
+) {
+    let ItemKind::Impl { self_ty, .. } = &item.kind else {
+        panic!("expected impl item");
+    };
+    let ty = crate_hir.tys.get(*self_ty).expect("self type");
+    let Ty::Path { args, .. } = ty else {
+        panic!("expected path self type, got {:?}", ty);
+    };
+    assert_eq!(
+        args.len(),
+        expected_param_count,
+        "expected {} generic argument(s) on self type",
+        expected_param_count
+    );
+    for arg in args {
+        assert!(
+            matches!(arg, GenericArg::Type(_)),
+            "expected type argument on generic self type"
+        );
+    }
+}
+
+fn assert_impl_has_bound(
+    item: &Item,
+    resolved: &ResolvedCrate,
+    interner: &Interner,
+    expected_trait: &str,
+) {
+    let ItemKind::Impl { generics, .. } = &item.kind else {
+        panic!("expected impl item");
+    };
+    let mut found = false;
+    for param in &generics.params {
+        if let GenericParam::Type { bounds, .. } = param {
+            for bound in bounds {
+                if let crate::res::Res::Def { def_id } = bound.path {
+                    if let Some(def) = resolved.definitions.get(def_id) {
+                        if interner.resolve(&def.name) == expected_trait {
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found,
+        "expected impl generics to contain a `{}` bound",
+        expected_trait
+    );
+}
+
+#[test]
+fn derive_clone_generic_struct() {
+    let src = r#"
+        @derive(Clone)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_generic_self_ty(&crate_hir, impl_item, 1);
+    assert_impl_has_bound(impl_item, &resolved, &interner, "Clone");
+}
+
+#[test]
+fn derive_copy_generic_struct() {
+    let src = r#"
+        @derive(Copy)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_generic_self_ty(&crate_hir, impl_item, 1);
+    assert_impl_has_bound(impl_item, &resolved, &interner, "Copy");
+}
+
+#[test]
+fn derive_partial_eq_generic_struct() {
+    let src = r#"
+        @derive(PartialEq)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_generic_self_ty(&crate_hir, impl_item, 1);
+    assert_impl_has_bound(impl_item, &resolved, &interner, "PartialEq");
+}
+
+#[test]
+fn derive_eq_generic_struct_requires_partial_eq() {
+    let src = r#"
+        @derive(Eq)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, _interner, _resolved, errors) = lower_with_derives(src);
+    assert!(
+        !errors.is_empty(),
+        "Eq derive without PartialEq should emit an error"
+    );
+    let impls: Vec<_> = crate_hir
+        .items
+        .values()
+        .filter_map(|opt| opt.as_ref())
+        .filter(|item| matches!(item.kind, ItemKind::Impl { .. }))
+        .collect();
+    assert!(impls.is_empty(), "Eq derive without PartialEq should not generate impls");
+}
+
+#[test]
+fn derive_eq_and_partial_eq_generic_struct() {
+    let src = r#"
+        @derive(PartialEq, Eq)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impls = find_impls_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_eq!(impls.len(), 2, "expected PartialEq and Eq impls");
+}
+
+#[test]
+fn derive_debug_generic_struct() {
+    let src = r#"
+        @derive(Debug)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_generic_self_ty(&crate_hir, impl_item, 1);
+    assert_impl_has_bound(impl_item, &resolved, &interner, "Debug");
+}
+
+#[test]
+fn derive_clone_generic_enum() {
+    let src = r#"
+        @derive(Clone)
+        enum E<T> { A(T), B }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "E", &interner, &resolved);
+    assert_generic_self_ty(&crate_hir, impl_item, 1);
+    assert_impl_has_bound(impl_item, &resolved, &interner, "Clone");
+}
+
+#[test]
+fn derive_all_mvp_generic_together() {
+    let src = r#"
+        @derive(Copy, Clone, PartialEq, Eq, Debug)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impls = find_impls_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_eq!(impls.len(), 5, "expected five derived impls");
 }

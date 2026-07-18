@@ -38,6 +38,10 @@ pub struct Resolver<'a> {
     pub lang_items: LangItems,
     /// Maps enum DefId to a map of (variant_name -> variant DefId).
     pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
+    /// Maps a generic parameter's source span to its `DefId`.
+    pub generic_param_defs: FxHashMap<Span, DefId>,
+    /// Maps a parent item's `DefId` to the ordered list of its generic param `DefId`s.
+    pub generic_params: FxHashMap<DefId, Vec<DefId>>,
     /// Maps path spans to resolved DefIds for non-local paths.
     /// Populated during late resolution and consumed by HIR lowering.
     pub def_resolutions: FxHashMap<Span, DefId>,
@@ -69,6 +73,8 @@ impl<'a> Resolver<'a> {
             prelude,
             lang_items,
             enum_variants,
+            generic_param_defs: FxHashMap::default(),
+            generic_params: FxHashMap::default(),
             def_resolutions: FxHashMap::default(),
         }
     }

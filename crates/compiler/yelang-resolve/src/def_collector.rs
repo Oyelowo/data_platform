@@ -19,6 +19,8 @@ pub enum DefKind {
     Field,
     Local,
     Param,
+    TypeParam,
+    ConstParam,
 }
 
 #[derive(Debug, Clone)]
@@ -43,10 +45,14 @@ impl Definition {
             | DefKind::Enum
             | DefKind::EnumVariant
             | DefKind::TypeAlias
-            | DefKind::Trait => Some(Namespace::Type),
-            DefKind::Fn | DefKind::Const | DefKind::Static | DefKind::Local | DefKind::Param => {
-                Some(Namespace::Value)
-            }
+            | DefKind::Trait
+            | DefKind::TypeParam => Some(Namespace::Type),
+            DefKind::Fn
+            | DefKind::Const
+            | DefKind::Static
+            | DefKind::Local
+            | DefKind::Param
+            | DefKind::ConstParam => Some(Namespace::Value),
             DefKind::Impl | DefKind::Use | DefKind::Field => None,
         }
     }
@@ -81,6 +87,10 @@ pub struct DefCollector<'a> {
     /// Maps enum DefId to a map of (variant_name -> variant DefId).
     /// Used for resolving `MyEnum::Variant` paths.
     pub enum_variants: FxHashMap<DefId, FxHashMap<Symbol, DefId>>,
+    /// Maps a generic parameter's source span to its `DefId`.
+    pub generic_param_defs: FxHashMap<Span, DefId>,
+    /// Maps a parent item's `DefId` to the ordered list of its generic param `DefId`s.
+    pub generic_params: FxHashMap<DefId, Vec<DefId>>,
 }
 
 impl<'a> DefCollector<'a> {
@@ -124,6 +134,8 @@ impl<'a> DefCollector<'a> {
             prelude,
             lang_items,
             enum_variants,
+            generic_param_defs: FxHashMap::default(),
+            generic_params: FxHashMap::default(),
         };
         collector.seed_primitives();
         collector
@@ -232,9 +244,10 @@ impl<'a> DefCollector<'a> {
             func.name.symbol,
             span,
             DefKind::Fn,
-            visibility,
+            visibility.clone(),
             lang_item,
         );
+        self.collect_generic_params(def_id, &func.generics, visibility.clone());
         self.add_to_module(crate::namespaces::Namespace::Value, func.name.symbol, def_id, span);
     }
 
@@ -252,6 +265,7 @@ impl<'a> DefCollector<'a> {
             visibility.clone(),
             lang_item,
         );
+        self.collect_generic_params(def_id, &s.generics, visibility.clone());
         self.add_to_module(crate::namespaces::Namespace::Type, s.name.symbol, def_id, span);
 
         // Collect struct fields as definitions with their own visibility
@@ -282,6 +296,7 @@ impl<'a> DefCollector<'a> {
             visibility.clone(),
             lang_item,
         );
+        self.collect_generic_params(def_id, &e.generics, visibility.clone());
         self.add_to_module(crate::namespaces::Namespace::Type, e.name.symbol, def_id, span);
 
         // Variants are definitions in both the type and value namespaces.
@@ -323,9 +338,10 @@ impl<'a> DefCollector<'a> {
             ta.name.symbol,
             span,
             DefKind::TypeAlias,
-            visibility,
+            visibility.clone(),
             lang_item,
         );
+        self.collect_generic_params(def_id, &ta.generics, visibility);
         self.add_to_module(crate::namespaces::Namespace::Type, ta.name.symbol, def_id, span);
     }
 
@@ -340,9 +356,10 @@ impl<'a> DefCollector<'a> {
             t.name.symbol,
             span,
             DefKind::Trait,
-            visibility,
+            visibility.clone(),
             lang_item,
         );
+        self.collect_generic_params(def_id, &t.generics, visibility);
         self.add_to_module(crate::namespaces::Namespace::Type, t.name.symbol, def_id, span);
     }
 
@@ -419,7 +436,8 @@ impl<'a> DefCollector<'a> {
     fn collect_impl(&mut self, i: &Impl, span: Span, visibility: Visibility) {
         // Impl blocks don't have a single name; use a synthetic name.
         let name = self.interner.get_or_intern("<impl>");
-        let def_id = self.add_def(name, span, DefKind::Impl, visibility);
+        let def_id = self.add_def(name, span, DefKind::Impl, visibility.clone());
+        self.collect_generic_params(def_id, &i.generics, visibility);
 
         // Extract type name from self_ty
         let type_name = Self::extract_type_name(&i.self_ty);
@@ -464,6 +482,13 @@ impl<'a> DefCollector<'a> {
                 item_kind,
                 item.visibility.clone(),
             );
+            if let ImplItemKind::Method(fn_def) = &item.item {
+                self.collect_generic_params(
+                    item_def_id,
+                    &fn_def.generics,
+                    item.visibility.clone(),
+                );
+            }
             item_names.insert(item_name, item_def_id);
         }
         self.impl_item_names.insert(def_id, item_names);
@@ -527,6 +552,60 @@ impl<'a> DefCollector<'a> {
             }
         }
         def_id
+    }
+
+    fn add_child_def(
+        &mut self,
+        name: Symbol,
+        span: Span,
+        kind: DefKind,
+        visibility: Visibility,
+        parent: DefId,
+    ) -> DefId {
+        let def_id = self.definitions.push(Definition {
+            def_id: DefId::new(1),
+            name,
+            span,
+            kind,
+            parent: Some(parent),
+            visibility,
+            lang_item: None,
+        });
+        self.definitions[def_id].def_id = def_id;
+        def_id
+    }
+
+    fn collect_generic_params(
+        &mut self,
+        parent: DefId,
+        generics: &yelang_ast::Generics,
+        visibility: Visibility,
+    ) {
+        let mut ids = Vec::with_capacity(generics.params.len());
+        for param in &generics.params {
+            let (name, span, kind) = match param {
+                yelang_ast::GenericParam::Type(tp) => {
+                    (tp.name.symbol, tp.name.span(), DefKind::TypeParam)
+                }
+                yelang_ast::GenericParam::Const(cp) => {
+                    (cp.name.symbol, cp.name.span(), DefKind::ConstParam)
+                }
+            };
+            // Generic parameters are logically children of `parent`, but for
+            // privacy checking their containing module is the current module
+            // (the module that owns the item). The `generic_params` map still
+            // records the item -> params relationship.
+            let def_id = self.add_child_def(
+                name,
+                span,
+                kind,
+                visibility.clone(),
+                self.current_module,
+            );
+            self.generic_param_defs.insert(span, def_id);
+            ids.push(def_id);
+        }
+        self.generic_params.insert(parent, ids);
     }
 
     fn add_to_module(

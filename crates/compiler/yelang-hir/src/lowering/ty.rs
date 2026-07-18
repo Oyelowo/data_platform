@@ -2,8 +2,8 @@
 
 use yelang_ast::Type as AstType;
 
-use crate::hir::{GenericParam, TraitBound};
-use crate::hir_ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};
+use crate::hir::core::TraitBound;
+use crate::hir::ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};
 use crate::ids::TyId;
 use crate::lowering::LoweringContext;
 
@@ -50,7 +50,7 @@ pub(crate) fn lower_const_expr(
     expr: &yelang_ast::Expr,
     span: yelang_lexer::Span,
 ) -> Const {
-    let body = crate::lowering_body::lower_expr_as_body(ctx, expr);
+    let body = crate::lowering::body::lower_expr_as_body(ctx, expr);
     Const {
         kind: ConstKind::Expr { body },
         span,
@@ -63,7 +63,7 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> TyId {
     let span = ty.span;
     let kind = match &ty.kind {
         yelang_ast::TypeKind::Named(path) => {
-            let res = crate::lowering_expr::resolve_ast_path(ctx, path);
+            let res = crate::lowering::expr::resolve_ast_path(ctx, path);
             let args = lower_generic_args_from_path(ctx, path);
             Ty::Path { res, args }
         }
@@ -94,7 +94,7 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> TyId {
             ty: lower_ty(ctx, inner),
         },
         yelang_ast::TypeKind::Function(fn_ty) => Ty::FnPtr {
-            sig: Box::new(crate::hir::FnSig {
+            sig: Box::new(crate::hir::core::FnSig {
                 inputs: fn_ty.params.iter().map(|p| lower_ty(ctx, p)).collect(),
                 output: lower_ty(ctx, &fn_ty.return_type),
                 is_async: fn_ty.is_async,
@@ -128,10 +128,10 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> TyId {
         },
         yelang_ast::TypeKind::Operator(op) => lower_type_operator(ctx, op, span),
         yelang_ast::TypeKind::ImplTrait(path) => Ty::ImplTrait {
-            path: crate::lowering_expr::resolve_ast_path(ctx, path),
+            path: crate::lowering::expr::resolve_ast_path(ctx, path),
         },
         yelang_ast::TypeKind::DynTrait(path) => Ty::DynTrait {
-            path: crate::lowering_expr::resolve_ast_path(ctx, path),
+            path: crate::lowering::expr::resolve_ast_path(ctx, path),
         },
         yelang_ast::TypeKind::Infer => Ty::Infer,
         yelang_ast::TypeKind::Never => Ty::Never,
@@ -141,31 +141,31 @@ pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> TyId {
     ctx.crate_hir.alloc_ty(kind, span)
 }
 
-/// Lower `TypeBinderParams` (from `for<T>`) into item-level `GenericParam`s.
+/// Lower `TypeBinderParams` (from `for<T>`) into `BinderParam`s.
 ///
-/// HRTB binders do not support defaults, so `default` is always `None`.
+/// HRTB binders are not item-level generic parameters, so they do not carry
+/// `DefId`s and do not support defaults.
 pub(crate) fn lower_type_binder_params(
     ctx: &mut LoweringContext,
     params: &yelang_ast::item::TypeBinderParams,
-) -> Vec<GenericParam> {
+) -> Vec<crate::hir::core::BinderParam> {
+    use crate::hir::core::BinderParam;
     params
         .params
         .iter()
         .map(|p| match p {
-            yelang_ast::item::TypeBinderParam::Type(tp) => GenericParam::Type {
+            yelang_ast::item::TypeBinderParam::Type(tp) => BinderParam::Type {
                 name: tp.name,
                 bounds: tp
                     .bounds
                     .iter()
                     .map(|b| lower_trait_bound(ctx, b))
                     .collect(),
-                default: None,
                 span: tp.span,
             },
-            yelang_ast::item::TypeBinderParam::Const(cp) => GenericParam::Const {
+            yelang_ast::item::TypeBinderParam::Const(cp) => BinderParam::Const {
                 name: cp.name,
                 ty: lower_ty(ctx, &cp.ty),
-                default: None,
                 span: cp.span,
             },
         })
@@ -178,7 +178,7 @@ pub(crate) fn lower_trait_bound(
     bound: &yelang_ast::TraitBound,
 ) -> TraitBound {
     TraitBound {
-        path: crate::lowering_expr::resolve_ast_path(ctx, &bound.path),
+        path: crate::lowering::expr::resolve_ast_path(ctx, &bound.path),
         span: bound.span,
     }
 }
@@ -194,7 +194,7 @@ fn lower_type_operator(
             // `typeof expr` evaluates to the type of the expression at
             // type-check time. The expression is lowered and stored directly
             // so the type checker can query its type.
-            let expr_id = crate::lowering_expr::lower_expr(ctx, expr);
+            let expr_id = crate::lowering::expr::lower_expr(ctx, expr);
             Ty::TypeOf { expr: expr_id }
         }
         yelang_ast::TypeOperator::ReturnType(ty) => Ty::Utility {

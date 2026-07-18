@@ -5,13 +5,13 @@ use yelang_interner::Symbol;
 
 use crate::derive::context::{AdtInfo, AdtShape, DeriveContext};
 use crate::derive::helpers::{
-    access_field, arm, bin_op_expr, binding_pat, bool_expr, expr, fn_sig, impl_item, iter_fields,
-    make_body, match_expr, method_impl_item, other_param, path_pat, self_expr, self_param,
-    struct_pat, tuple_struct_pat, wildcard_false_arm,
+    access_field, arm, bin_op_expr, binding_pat, bool_expr, derive_generics, expr, fn_sig,
+    impl_item, iter_fields, make_body, match_expr, method_impl_item, other_param, path_pat,
+    self_expr, self_param, struct_pat, tuple_struct_pat, wildcard_false_arm,
 };
-use crate::hir::{Arm, Expr, ImplItem, Item};
+use crate::hir::core::{Arm, Expr, ImplItem, Item};
 use crate::ids::{ExprId, PatId, TyId};
-use crate::hir_struct::VariantData;
+use crate::hir::adt::VariantData;
 
 /// Expand `#[derive(PartialEq)]` for a struct or enum.
 pub fn derive_partial_eq(
@@ -36,7 +36,7 @@ pub fn derive_partial_eq(
 
     let self_ty = adt.self_ty(ctx);
     let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir_ty::Ty::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: self_ty,
         },
@@ -44,8 +44,9 @@ pub fn derive_partial_eq(
     );
 
     let eq_method = eq_method(ctx, adt.def_id, &adt, ref_self_ty);
+    let generics = derive_generics(ctx, adt.generics, partial_eq_trait);
 
-    Some(impl_item(ctx, partial_eq_trait, self_ty, vec![eq_method]))
+    Some(impl_item(ctx, partial_eq_trait, self_ty, generics, vec![eq_method]))
 }
 
 fn eq_method(
@@ -57,7 +58,7 @@ fn eq_method(
     let self_param = self_param(ctx, ref_self_ty);
     let other_param = other_param(ctx, self_def_id);
     let bool_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir_ty::Ty::Path {
+        crate::hir::ty::Ty::Path {
             res: crate::res::Res::PrimTy {
                 ty: crate::res::PrimTy::Bool,
             },
@@ -111,7 +112,7 @@ fn eq_enum_expression(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     enum_def_id: DefId,
-    def: &crate::hir::EnumDef,
+    def: &crate::hir::core::EnumDef,
 ) -> ExprId {
     let self_recv = self_expr(ctx, self_def_id);
     let other_recv = expr_other(ctx);
@@ -133,7 +134,7 @@ fn eq_enum_expression(
             let (left_pat, right_pat, bindings) =
                 variant_eq_patterns(ctx, variant_def_id, &variant.data);
             let tuple_pat = ctx.ctx.crate_hir.alloc_pat(
-                crate::hir_pat::Pat::Tuple {
+                crate::hir::pat::Pat::Tuple {
                     pats: vec![left_pat, right_pat],
                 },
                 ctx.derive_span,

@@ -3,7 +3,7 @@
 use yelang_ast::Ident;
 use yelang_lexer::Span;
 
-use crate::hir::{
+use crate::hir::core::{
     EnumDef, FnSig, Generics, Mutability, UseKind, UsePath, VariantData,
     Visibility,
 };
@@ -16,7 +16,7 @@ pub struct Item {
     pub ident: Ident,
     pub kind: ItemKind,
     pub vis: Visibility,
-    pub attrs: Vec<crate::hir::Attribute>,
+    pub attrs: Vec<crate::hir::core::Attribute>,
     pub span: Span,
 }
 
@@ -38,17 +38,17 @@ pub enum ItemKind {
     Enum { def: EnumDef, generics: Generics },
     /// Trait definition.
     Trait {
-        items: Vec<crate::hir::TraitItem>,
+        items: Vec<crate::hir::core::TraitItem>,
         generics: Generics,
-        super_traits: Vec<crate::hir::TraitRef>,
+        super_traits: Vec<crate::hir::core::TraitRef>,
     },
     /// Impl block.
     Impl {
-        items: Vec<crate::hir::ImplItem>,
+        items: Vec<crate::hir::core::ImplItem>,
         generics: Generics,
         self_ty: TyId,
-        of_trait: Option<crate::hir::TraitRef>,
-        polarity: crate::hir::ImplPolarity,
+        of_trait: Option<crate::hir::core::TraitRef>,
+        polarity: crate::hir::core::ImplPolarity,
     },
     /// Type alias.
     TyAlias { ty: TyId, generics: Generics },

@@ -4,8 +4,8 @@ use yelang_arena::DefId;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
-use crate::hir::{EnumDef, Generics, ItemKind, VariantData};
-use crate::hir_item::Item as HirItem;
+use crate::hir::core::{EnumDef, Generics, ItemKind, VariantData};
+use crate::hir::item::Item as HirItem;
 use crate::ids::TyId;
 use crate::lowering::LoweringContext;
 use crate::res::Res;
@@ -37,18 +37,38 @@ pub enum AdtShape<'a> {
 impl<'a> AdtInfo<'a> {
     /// Build `Self` as a HIR type reference.
     ///
-    /// For now this produces a monomorphic reference (`Point`) because HIR does
-    /// not yet assign `DefId`s to generic type parameters. Once parameter
-    /// references are represented in HIR, this will be extended to
-    /// `Point<T, U>`.
+    /// For a generic ADT such as `struct Point<T>`, this produces `Point<T>`
+    /// using the ADT's own type parameters as arguments.
     pub fn self_ty(&self, ctx: &mut DeriveContext<'_, '_>) -> TyId {
         let span = self.ident.span();
+        let args = self
+            .generics
+            .params
+            .iter()
+            .filter_map(|p| match p {
+                crate::hir::core::GenericParam::Type { def_id, .. } => {
+                    Some(crate::hir::ty::GenericArg::Type(ctx.ctx.crate_hir.alloc_ty(
+                        crate::hir::ty::Ty::Path {
+                            res: Res::Def { def_id: *def_id },
+                            args: vec![],
+                        },
+                        span,
+                    )))
+                }
+                crate::hir::core::GenericParam::Const { .. } => {
+                    Some(crate::hir::ty::GenericArg::Const(crate::hir::ty::Const {
+                        kind: crate::hir::ty::ConstKind::Err,
+                        span,
+                    }))
+                }
+            })
+            .collect();
         ctx.ctx.crate_hir.alloc_ty(
-            crate::hir_ty::Ty::Path {
+            crate::hir::ty::Ty::Path {
                 res: Res::Def {
                     def_id: self.def_id,
                 },
-                args: vec![],
+                args,
             },
             span,
         )

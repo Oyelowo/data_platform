@@ -3,7 +3,7 @@
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
-use crate::lowering_err::LoweringError;
+use crate::lowering::err::LoweringError;
 
 /// Errors that can occur while expanding a built-in derive or attribute.
 #[derive(Debug, Clone)]

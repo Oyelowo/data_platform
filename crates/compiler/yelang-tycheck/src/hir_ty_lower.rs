@@ -4,7 +4,7 @@
  * This module converts them to the interned type representation.
  */
 
-use yelang_hir::hir_ty::{GenericArg as HirGenericArg, Ty as HirTy, UtilityKind as HirUtilityKind};
+use yelang_hir::hir::ty::{GenericArg as HirGenericArg, Ty as HirTy, UtilityKind as HirUtilityKind};
 use yelang_hir::res::{FloatTy as HirFloatTy, IntTy as HirIntTy, PrimTy, Res};
 use yelang_ty::generic::GenericArg;
 use yelang_ty::primitive::{FloatTy, IntTy, UintTy};
@@ -157,11 +157,11 @@ fn lower_hir_ty_value<'tcx>(ty: &HirTy, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
 }
 
 fn lower_hir_const<'tcx>(
-    konst: &yelang_hir::hir_ty::Const,
+    konst: &yelang_hir::hir::ty::Const,
     ty: Ty<'tcx>,
     _fcx: &mut FnCtxt<'tcx>,
 ) -> yelang_ty::ty::Const<'tcx> {
-    use yelang_hir::hir_ty::ConstKind as HirConstKind;
+    use yelang_hir::hir::ty::ConstKind as HirConstKind;
     use yelang_ty::ty::{ConstKind, ConstValue};
 
     let kind = match &konst.kind {

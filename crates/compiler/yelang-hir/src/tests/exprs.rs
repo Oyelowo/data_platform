@@ -1,10 +1,10 @@
 //! Exhaustive tests for AST expression -> HIR expression lowering.
 
-use crate::hir::{Expr, ItemKind, Stmt};
+use crate::hir::core::{Expr, ItemKind, Stmt};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
-fn get_body_expr(crate_hir: &crate::Crate) -> &crate::hir::Expr {
+fn get_body_expr(crate_hir: &crate::Crate) -> &crate::hir::core::Expr {
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")

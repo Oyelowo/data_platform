@@ -6,12 +6,12 @@
 pub use yelang_ast::{Attribute, Ident, Label, Mutability, Visibility};
 use yelang_lexer::Span;
 
-pub use crate::hir_body::{Body, Param};
-pub use crate::hir_expr::Expr;
-pub use crate::hir_item::{Item, ItemKind};
-pub use crate::hir_pat::Pat;
-pub use crate::hir_struct::{FieldDef, StructField, VariantData};
-pub use crate::hir_ty::Ty;
+pub use crate::hir::body::{Body, Param};
+pub use crate::hir::expr::Expr;
+pub use crate::hir::item::{Item, ItemKind};
+pub use crate::hir::pat::Pat;
+pub use crate::hir::adt::{FieldDef, StructField, VariantData};
+pub use crate::hir::ty::Ty;
 
 use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use crate::res::Res;
@@ -107,19 +107,38 @@ pub struct Generics {
     pub span: Span,
 }
 
-/// A generic parameter.
+/// A generic parameter declared on an item (function, struct, trait, impl, ...).
 #[derive(Debug, Clone)]
 pub enum GenericParam {
     Type {
+        def_id: yelang_arena::DefId,
         name: Ident,
         bounds: Vec<TraitBound>,
         default: Option<TyId>,
         span: Span,
     },
     Const {
+        def_id: yelang_arena::DefId,
         name: Ident,
         ty: TyId,
         default: Option<ExprId>,
+        span: Span,
+    },
+}
+
+/// A bound variable introduced by a higher-ranked type binder (`for<T>`).
+/// Unlike item-level `GenericParam`s, binder variables are not definitions and
+/// therefore do not carry a `DefId`.
+#[derive(Debug, Clone)]
+pub enum BinderParam {
+    Type {
+        name: Ident,
+        bounds: Vec<TraitBound>,
+        span: Span,
+    },
+    Const {
+        name: Ident,
+        ty: TyId,
         span: Span,
     },
 }
@@ -161,7 +180,7 @@ pub struct EnumDef {
 pub struct VariantDef {
     pub ident: Ident,
     pub data: VariantData,
-    pub discriminant: Option<crate::hir_ty::Const>,
+    pub discriminant: Option<crate::hir::ty::Const>,
     pub attrs: Vec<Attribute>,
     pub span: Span,
 }

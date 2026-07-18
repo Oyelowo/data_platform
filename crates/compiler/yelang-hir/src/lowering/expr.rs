@@ -9,12 +9,12 @@ use yelang_lexer::Span;
 
 use yelang_arena::DefId;
 
-use crate::hir::{Arm, Block, CaptureClause, Expr, FieldExpr, Stmt};
-use crate::hir_expr::{ComprehensionKind, DocumentProjection, GeneratorKind};
-use crate::hir_item::Item;
+use crate::hir::core::{Arm, Block, CaptureClause, Expr, FieldExpr, Stmt};
+use crate::hir::expr::{ComprehensionKind, DocumentProjection, GeneratorKind};
+use crate::hir::item::Item;
 use crate::ids::{ExprId, PatId};
 use crate::lowering::LoweringContext;
-use crate::lowering_err::LoweringError;
+use crate::lowering::err::LoweringError;
 use crate::res::Res;
 
 /// Lower an AST expression into a HIR expression ID.
@@ -92,7 +92,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
         },
         AstExprKind::TypeCast(cast) => Expr::Cast {
             expr: lower_expr(ctx, &cast.base),
-            ty: crate::lowering_ty::lower_ty(ctx, &cast.ty),
+            ty: crate::lowering::ty::lower_ty(ctx, &cast.ty),
         },
         AstExprKind::MemberAccess(access) => Expr::Field {
             expr: lower_expr(ctx, access.base()),
@@ -120,7 +120,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
         },
         AstExprKind::Lambda(lambda) => lower_lambda_expr(ctx, lambda),
         AstExprKind::Let(let_expr) => Expr::Let {
-            pat: crate::lowering_pat::lower_pat(ctx, &let_expr.pattern),
+            pat: crate::lowering::pat::lower_pat(ctx, &let_expr.pattern),
             expr: lower_expr(ctx, &let_expr.expr),
         },
         AstExprKind::MethodCall(method) => Expr::MethodCall {
@@ -146,7 +146,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             let body = lower_block(ctx, &async_expr.block);
             let body_expr = ctx.crate_hir.alloc_expr(Expr::Block { block: body }, span);
             let body_id = ctx.crate_hir.alloc_body(
-                crate::hir_body::Body {
+                crate::hir::body::Body {
                     params: vec![],
                     value: body_expr,
                     span,
@@ -158,7 +158,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
         AstExprKind::Gen(gen_expr) => {
             let body_expr = lower_expr(ctx, gen_expr);
             let body_id = ctx.crate_hir.alloc_body(
-                crate::hir_body::Body {
+                crate::hir::body::Body {
                     params: vec![],
                     value: body_expr,
                     span,
@@ -178,11 +178,11 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
         AstExprKind::Grouped(grouped) => return lower_expr(ctx, &grouped.expr),
         AstExprKind::TypeAscription(asc) => Expr::TypeAscription {
             expr: lower_expr(ctx, &asc.expr),
-            ty: crate::lowering_ty::lower_ty(ctx, &asc.ty),
+            ty: crate::lowering::ty::lower_ty(ctx, &asc.ty),
         },
         AstExprKind::IsType(is_type) => Expr::IsType {
             expr: lower_expr(ctx, &is_type.expr),
-            ty: crate::lowering_ty::lower_ty(ctx, &is_type.ty),
+            ty: crate::lowering::ty::lower_ty(ctx, &is_type.ty),
         },
         AstExprKind::AssignOp(assign) => Expr::AssignOp {
             op: assign.op.clone(),
@@ -452,12 +452,12 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
             let ty = let_stmt
                 .ty
                 .as_ref()
-                .map(|ty| crate::lowering_ty::lower_ty(ctx, ty));
-            let pat = crate::lowering_pat::lower_pat(ctx, &let_stmt.pattern);
+                .map(|ty| crate::lowering::ty::lower_ty(ctx, ty));
+            let pat = crate::lowering::pat::lower_pat(ctx, &let_stmt.pattern);
             Stmt::Let { pat, ty, init }
         }
         yelang_ast::StmtKind::Item(item) => {
-            let def_id = crate::lowering_item::lower_item(ctx, item);
+            let def_id = crate::lowering::item::lower_item(ctx, item);
             // Nested items are placed into the crate map; the statement
             // just keeps a reference so the visitor can reach it.
             let def_id = match def_id {
@@ -474,7 +474,7 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                         def_id,
                         ident: yelang_ast::Ident::new(yelang_interner::Symbol::from(0u32), span),
                         attrs: vec![],
-                        kind: crate::hir::ItemKind::Mod { items: vec![] },
+                        kind: crate::hir::core::ItemKind::Mod { items: vec![] },
                         vis: yelang_ast::Visibility::Private,
                         span,
                     }),
@@ -542,8 +542,8 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
 
     // Build a fake `let _iter = iter` binding and wrap in a block.
     let iter_pat = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::Binding {
-            mode: crate::hir_pat::BindingMode::ByValue,
+        crate::hir::pat::Pat::Binding {
+            mode: crate::hir::pat::BindingMode::ByValue,
             name: yelang_interner::Symbol::from(0u32),
             subpat: None,
         },
@@ -560,9 +560,9 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
     );
 
     // Build match arms: Some(pat) => body, None => break
-    let some_inner = crate::lowering_pat::lower_pat(ctx, &for_expr.pat);
+    let some_inner = crate::lowering::pat::lower_pat(ctx, &for_expr.pat);
     let some_pat = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::TupleStruct {
+        crate::hir::pat::Pat::TupleStruct {
             res: Res::Err,
             pats: vec![some_inner],
         },
@@ -579,7 +579,7 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
     );
 
     let none_pat = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::Path { res: Res::Err },
+        crate::hir::pat::Pat::Path { res: Res::Err },
         for_expr.pat.span,
     );
 
@@ -666,7 +666,7 @@ fn lower_match_expr(ctx: &mut LoweringContext, match_expr: &MatchExpr) -> Expr {
         .arms
         .iter()
         .map(|arm| Arm {
-            pat: crate::lowering_pat::lower_pat(ctx, &arm.pattern),
+            pat: crate::lowering::pat::lower_pat(ctx, &arm.pattern),
             guard: arm.guard.as_ref().map(|g| lower_expr(ctx, g)),
             body: lower_expr(ctx, &arm.body),
             span: arm.span,
@@ -700,19 +700,19 @@ fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> Exp
 
 fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr) -> Expr {
     // Lower parameters and body into a synthetic Body.
-    let params: Vec<crate::hir_body::Param> = lambda
+    let params: Vec<crate::hir::body::Param> = lambda
         .fn_sig
         .params
         .iter()
-        .map(|p| crate::hir_body::Param {
-            pat: crate::lowering_pat::lower_pat(ctx, &p.pattern),
-            ty: crate::lowering_ty::lower_ty(ctx, &p.ty),
+        .map(|p| crate::hir::body::Param {
+            pat: crate::lowering::pat::lower_pat(ctx, &p.pattern),
+            ty: crate::lowering::ty::lower_ty(ctx, &p.ty),
             span: p.span,
         })
         .collect();
 
     let body_expr = lower_expr(ctx, &lambda.body);
-    let body = crate::hir_body::Body {
+    let body = crate::hir::body::Body {
         params,
         value: body_expr,
         span: lambda.header_span,
@@ -733,7 +733,7 @@ fn lower_destructure_assign_expr(
     assign: &yelang_ast::DestructureAssignExpr,
     _span: Span,
 ) -> Expr {
-    let pat = crate::lowering_pat::lower_pat(ctx, &assign.pattern);
+    let pat = crate::lowering::pat::lower_pat(ctx, &assign.pattern);
     let value = lower_expr(ctx, &assign.value);
     Expr::DestructureAssign { pat, value }
 }
@@ -749,7 +749,7 @@ fn lower_comprehension_expr(
         .variables
         .iter()
         .map(|v| {
-            let pat = crate::lowering_pat::lower_pat(ctx, &v.pattern);
+            let pat = crate::lowering::pat::lower_pat(ctx, &v.pattern);
             let source = lower_expr(ctx, &v.source);
             (pat, source)
         })

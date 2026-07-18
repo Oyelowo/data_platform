@@ -4,11 +4,11 @@ use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
 
-use crate::crate_hir::Crate;
-use crate::hir::Expr;
+use crate::crate_data::Crate;
+use crate::hir::core::Expr;
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
-use crate::visitor::{Visitor, walk_crate};
+use crate::hir::visitor::{Visitor, walk_crate};
 
 struct ExprCounter<'hir> {
     count: usize,
@@ -51,6 +51,8 @@ fn stub_resolved() -> ResolvedCrate {
         def_resolutions: yelang_arena::FxHashMap::default(),
         enum_variants: yelang_arena::FxHashMap::default(),
         prelude: None,
+        generic_param_defs: yelang_arena::FxHashMap::default(),
+        generic_params: yelang_arena::FxHashMap::default(),
     }
 }
 

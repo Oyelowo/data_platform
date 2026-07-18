@@ -1,11 +1,11 @@
 //! Exhaustive tests for AST type -> HIR type lowering.
 
-use crate::hir::ItemKind;
-use crate::hir_ty::{Ty, UtilityKind};
+use crate::hir::core::ItemKind;
+use crate::hir::ty::{Ty, UtilityKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 
-fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::FnSig {
+fn get_fn_sig(crate_hir: &crate::Crate) -> &crate::hir::core::FnSig {
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
     let ItemKind::Fn { sig, .. } = &item.kind else {
         panic!("expected fn")
@@ -408,7 +408,7 @@ fn lower_hrtb_where_predicate() {
         .expect("expected where clause");
     let pred = wc.predicates.first().expect("expected predicate");
     match pred {
-        crate::hir::WherePredicate::TraitBound { ty, .. } => {
+        crate::hir::core::WherePredicate::TraitBound { ty, .. } => {
             let ty_node = crate_hir.tys.get(*ty).unwrap();
             assert!(matches!(ty_node, Ty::ForAll { .. }));
         }

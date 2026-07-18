@@ -2,9 +2,9 @@
 
 use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
-use crate::derive::helpers::{FieldView, impl_item, iter_fields};
-use crate::hir::Item;
-use crate::hir_ty::Ty;
+use crate::derive::helpers::{derive_generics, FieldView, impl_item, iter_fields};
+use crate::hir::core::Item;
+use crate::hir::ty::Ty;
 use yelang_resolve::lang_items::LangItem;
 
 /// Expand `#[derive(Eq)]` for a struct or enum.
@@ -62,7 +62,8 @@ pub fn derive_eq(
     }
 
     let self_ty = adt.self_ty(ctx);
-    Some(impl_item(ctx, eq_trait, self_ty, vec![]))
+    let generics = derive_generics(ctx, adt.generics, eq_trait);
+    Some(impl_item(ctx, eq_trait, self_ty, generics, vec![]))
 }
 
 fn find_float_field(ctx: &DeriveContext<'_, '_>) -> Option<yelang_interner::Symbol> {

@@ -4,7 +4,7 @@
  * bound variable types.
  */
 
-use yelang_hir::hir_pat::Pat;
+use yelang_hir::hir::pat::Pat;
 use yelang_hir::ids::PatId;
 use yelang_ty::ty::Ty;
 

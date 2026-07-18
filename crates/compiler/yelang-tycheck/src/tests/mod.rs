@@ -9,10 +9,10 @@
 use yelang_arena::{DefId, index_vec as iv};
 use yelang_ast::{BinaryOp, UnaryOp};
 use yelang_hir::Crate as HirCrate;
-use yelang_hir::hir::{Arm, Block, Expr, FieldExpr, Stmt};
-use yelang_hir::hir_body::{Body, Param};
-use yelang_hir::hir_pat::{BindingMode, Pat};
-use yelang_hir::hir_ty::Ty as HirTy;
+use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
+use yelang_hir::hir::body::{Body, Param};
+use yelang_hir::hir::pat::{BindingMode, Pat};
+use yelang_hir::hir::ty::Ty as HirTy;
 use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use yelang_hir::res::Res;
 use yelang_interner::Symbol;
@@ -1519,7 +1519,7 @@ fn body_check_params_and_expr() {
                 args: vec![],
             },);
     let _expr2 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
-    let param = yelang_hir::hir_body::Param {
+    let param = yelang_hir::hir::body::Param {
         pat: _pat1,
         ty: _ty1,
         span: dummy_span(),

@@ -3,9 +3,9 @@
 use yelang_ast::{BlockExpr, Expr as AstExpr};
 use yelang_lexer::Span;
 
-use crate::hir::Expr;
-use crate::hir_body::Body;
-use crate::hir_pat::{BindingMode, Pat};
+use crate::hir::core::Expr;
+use crate::hir::body::Body;
+use crate::hir::pat::{BindingMode, Pat};
 use crate::ids::{BodyId, TyId};
 use crate::lowering::LoweringContext;
 
@@ -16,7 +16,7 @@ pub fn lower_block_as_body(
     param_tys: &[TyId],
 ) -> BodyId {
     // Build synthetic patterns for each parameter type so we have PatIds.
-    let params: Vec<crate::hir_body::Param> = param_tys
+    let params: Vec<crate::hir::body::Param> = param_tys
         .iter()
         .enumerate()
         .map(|(i, ty)| {
@@ -35,7 +35,7 @@ pub fn lower_block_as_body(
                 ty_node_span(ctx, *ty),
             );
             ctx.push_local(name, pat_id);
-            crate::hir_body::Param {
+            crate::hir::body::Param {
                 pat: pat_id,
                 ty: *ty,
                 span: ty_node_span(ctx, *ty),
@@ -43,7 +43,7 @@ pub fn lower_block_as_body(
         })
         .collect();
 
-    let block = crate::lowering_expr::lower_block(ctx, block);
+    let block = crate::lowering::expr::lower_block(ctx, block);
     let block_span = block.span;
     let value = ctx
         .crate_hir
@@ -61,7 +61,7 @@ pub fn lower_block_as_body(
 /// Lower a single AST expression into a standalone `Body`.
 /// Used for const/static initializers and other expression bodies.
 pub fn lower_expr_as_body(ctx: &mut LoweringContext, expr: &AstExpr) -> BodyId {
-    let value = crate::lowering_expr::lower_expr(ctx, expr);
+    let value = crate::lowering::expr::lower_expr(ctx, expr);
     let body = Body {
         params: vec![],
         value,

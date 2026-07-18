@@ -1,6 +1,6 @@
 //! Tests for path resolution during HIR lowering.
 
-use crate::hir::{Expr, ItemKind};
+use crate::hir::core::{Expr, ItemKind};
 use crate::lowering::lower_crate;
 use crate::tests::common::{parse_program, stub_resolved};
 

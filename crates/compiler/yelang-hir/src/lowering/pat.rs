@@ -2,7 +2,7 @@
 
 use yelang_ast::{Expr as AstExpr, ExprKind as AstExprKind, Pattern as AstPat};
 
-use crate::hir_pat::{BindingMode, FieldPat, Pat};
+use crate::hir::pat::{BindingMode, FieldPat, Pat};
 use crate::ids::PatId;
 use crate::lowering::LoweringContext;
 
@@ -31,7 +31,7 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
             pats: patterns.iter().map(|p| lower_pat(ctx, p)).collect(),
         },
         yelang_ast::PatternKind::Struct { path, fields, rest } => Pat::Struct {
-            res: crate::lowering_expr::resolve_ast_path(ctx, path),
+            res: crate::lowering::expr::resolve_ast_path(ctx, path),
             fields: fields
                 .iter()
                 .map(|f| FieldPat {
@@ -57,11 +57,11 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
             rest: *rest,
         },
         yelang_ast::PatternKind::Path(path) => Pat::Path {
-            res: crate::lowering_expr::resolve_ast_path(ctx, path),
+            res: crate::lowering::expr::resolve_ast_path(ctx, path),
         },
         yelang_ast::PatternKind::Literal(lit) => Pat::Lit { lit: lit.clone() },
         yelang_ast::PatternKind::TupleStruct { path, patterns } => Pat::TupleStruct {
-            res: crate::lowering_expr::resolve_ast_path(ctx, path),
+            res: crate::lowering::expr::resolve_ast_path(ctx, path),
             pats: patterns.iter().map(|p| lower_pat(ctx, p)).collect(),
         },
         yelang_ast::PatternKind::Slice { patterns } => {
@@ -108,14 +108,14 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
         },
         yelang_ast::PatternKind::Grouped(inner) => return lower_pat(ctx, inner),
         yelang_ast::PatternKind::Rest { .. } => {
-            ctx.error(crate::lowering_err::LoweringError::UnsupportedAst {
+            ctx.error(crate::lowering::err::LoweringError::UnsupportedAst {
                 kind: "rest pattern `..` outside of a slice pattern".to_string(),
                 span,
             });
             Pat::Err
         }
         yelang_ast::PatternKind::Absent => {
-            ctx.error(crate::lowering_err::LoweringError::UnsupportedAst {
+            ctx.error(crate::lowering::err::LoweringError::UnsupportedAst {
                 kind: "absent pattern".to_string(),
                 span,
             });
@@ -147,7 +147,7 @@ fn lower_slice_pat(
     for (i, p) in patterns.iter().enumerate() {
         if matches!(p.pattern, yelang_ast::PatternKind::Rest { .. }) {
             if rest_idx.is_some() {
-                ctx.error(crate::lowering_err::LoweringError::UnsupportedAst {
+                ctx.error(crate::lowering::err::LoweringError::UnsupportedAst {
                     kind: "multiple rest patterns `..` in a single slice pattern".to_string(),
                     span,
                 });
@@ -204,10 +204,10 @@ fn lower_range_bound_pat(ctx: &mut LoweringContext, expr: &AstExpr) -> PatId {
     let kind = match &expr.kind {
         AstExprKind::Literal(lit) => Pat::Lit { lit: lit.clone() },
         AstExprKind::Path(path) => Pat::Path {
-            res: crate::lowering_expr::resolve_ast_path(ctx, path),
+            res: crate::lowering::expr::resolve_ast_path(ctx, path),
         },
         _ => {
-            ctx.error(crate::lowering_err::LoweringError::UnsupportedAst {
+            ctx.error(crate::lowering::err::LoweringError::UnsupportedAst {
                 kind: "range pattern bound that is not a literal or path".to_string(),
                 span,
             });

@@ -2,7 +2,7 @@
 
 use yelang_arena::IndexVec;
 
-use crate::hir::ItemKind;
+use crate::hir::core::ItemKind;
 use crate::lowering::lower_crate;
 
 #[test]

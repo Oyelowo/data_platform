@@ -3,8 +3,8 @@
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
-use crate::hir::FnSig;
-use crate::hir::Lit;
+use crate::hir::core::FnSig;
+use crate::hir::core::Lit;
 use crate::ids::{BodyId, ExprId, TyId};
 use crate::res::Res;
 use yelang_ast::Ident;
@@ -46,7 +46,7 @@ pub enum Ty {
     },
     /// Higher-ranked type: `for<T> fn(T) -> T`
     ForAll {
-        params: Vec<crate::hir::GenericParam>,
+        params: Vec<crate::hir::core::BinderParam>,
         ty: TyId,
     },
     /// Union type: `i32 | string | bool`

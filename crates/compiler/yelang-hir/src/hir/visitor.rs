@@ -1,14 +1,14 @@
 //! HIR visitor trait with default `walk_*` implementations.
 
-use crate::crate_hir::Crate;
-use crate::hir::{
-    Arm, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, Item, ItemKind, Stmt,
-    StructField, Trait, TraitBound, TraitRef, Ty, UsePath, VariantData, VariantDef, WhereClause,
-    WherePredicate,
+use crate::crate_data::Crate;
+use crate::hir::core::{
+    Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
+    VariantDef, WhereClause, WherePredicate,
 };
-use crate::hir_body::Body;
-use crate::hir_pat::Pat;
-use crate::hir_ty::{Const, ConstKind, GenericArg};
+use crate::hir::body::Body;
+use crate::hir::pat::Pat;
+use crate::hir::ty::{Const, ConstKind, GenericArg};
 use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use crate::res::Res;
 
@@ -67,8 +67,16 @@ pub trait Visitor<'hir>: Sized {
         walk_impl(self, impl_)
     }
 
+    fn visit_impl_item(&mut self, item: &'hir ImplItem) {
+        walk_impl_item(self, item)
+    }
+
     fn visit_trait(&mut self, trait_: &'hir Trait) {
         walk_trait(self, trait_)
+    }
+
+    fn visit_trait_item(&mut self, item: &'hir TraitItem) {
+        walk_trait_item(self, item)
     }
 
     fn visit_variant_def(&mut self, variant: &'hir VariantDef) {
@@ -91,6 +99,10 @@ pub trait Visitor<'hir>: Sized {
         walk_generic_param(self, param)
     }
 
+    fn visit_binder_param(&mut self, param: &'hir BinderParam) {
+        walk_binder_param(self, param)
+    }
+
     fn visit_where_clause(&mut self, clause: &'hir WhereClause) {
         walk_where_clause(self, clause)
     }
@@ -109,6 +121,55 @@ pub trait Visitor<'hir>: Sized {
 
     fn visit_use_path(&mut self, path: &'hir UsePath) {
         walk_use_path(self, path)
+    }
+
+    // -------------------------------------------------------------------------
+    // ID-based lookup helpers
+    // -------------------------------------------------------------------------
+    /// Visit an expression by its arena ID. The default implementation looks up
+    /// the node in [`crate_hir`](Visitor::crate_hir) and calls [`visit_expr`].
+    fn visit_expr_by_id(&mut self, id: ExprId) {
+        if let Some(crate_hir) = self.crate_hir() {
+            if let Some(expr) = crate_hir.exprs.get(id) {
+                self.visit_expr(expr);
+            }
+        }
+    }
+
+    /// Visit a pattern by its arena ID.
+    fn visit_pat_by_id(&mut self, id: PatId) {
+        if let Some(crate_hir) = self.crate_hir() {
+            if let Some(pat) = crate_hir.pats.get(id) {
+                self.visit_pat(pat);
+            }
+        }
+    }
+
+    /// Visit a statement by its arena ID.
+    fn visit_stmt_by_id(&mut self, id: StmtId) {
+        if let Some(crate_hir) = self.crate_hir() {
+            if let Some(stmt) = crate_hir.stmts.get(id) {
+                self.visit_stmt(stmt);
+            }
+        }
+    }
+
+    /// Visit a type by its arena ID.
+    fn visit_ty_by_id(&mut self, id: TyId) {
+        if let Some(crate_hir) = self.crate_hir() {
+            if let Some(ty) = crate_hir.tys.get(id) {
+                self.visit_ty(ty);
+            }
+        }
+    }
+
+    /// Visit a body by its arena ID.
+    fn visit_body_by_id(&mut self, id: BodyId) {
+        if let Some(crate_hir) = self.crate_hir() {
+            if let Some(body) = crate_hir.bodies.get(id) {
+                self.visit_body(body);
+            }
+        }
     }
 }
 
@@ -156,19 +217,19 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
             }
             for trait_item in items {
                 match &trait_item.kind {
-                    crate::hir::TraitItemKind::Fn { sig, default } => {
+                    crate::hir::core::TraitItemKind::Fn { sig, default } => {
                         walk_fn_sig(visitor, sig);
                         if let Some(body) = *default {
                             visitor.visit_body_by_id(body);
                         }
                     }
-                    crate::hir::TraitItemKind::Const { ty, body } => {
+                    crate::hir::core::TraitItemKind::Const { ty, body } => {
                         visitor.visit_ty_by_id(*ty);
                         if let Some(body) = *body {
                             visitor.visit_body_by_id(body);
                         }
                     }
-                    crate::hir::TraitItemKind::Type { bounds, default } => {
+                    crate::hir::core::TraitItemKind::Type { bounds, default } => {
                         for bound in bounds {
                             visitor.visit_trait_bound(bound);
                         }
@@ -193,15 +254,15 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
             }
             for impl_item in items {
                 match &impl_item.kind {
-                    crate::hir::ImplItemKind::Fn { sig, body } => {
+                    crate::hir::core::ImplItemKind::Fn { sig, body } => {
                         walk_fn_sig(visitor, sig);
                         visitor.visit_body_by_id(*body);
                     }
-                    crate::hir::ImplItemKind::Const { ty, body } => {
+                    crate::hir::core::ImplItemKind::Const { ty, body } => {
                         visitor.visit_ty_by_id(*ty);
                         visitor.visit_body_by_id(*body);
                     }
-                    crate::hir::ImplItemKind::Type { ty } => {
+                    crate::hir::core::ImplItemKind::Type { ty } => {
                         visitor.visit_ty_by_id(*ty);
                     }
                 }
@@ -363,12 +424,12 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &'hir Expr) {
             visitor.visit_expr_by_id(*base);
             for proj in projection {
                 match proj {
-                    crate::hir_expr::DocumentProjection::Field { value, .. } => {
+                    crate::hir::expr::DocumentProjection::Field { value, .. } => {
                         if let Some(e) = value {
                             visitor.visit_expr_by_id(*e);
                         }
                     }
-                    crate::hir_expr::DocumentProjection::Spread(e) => visitor.visit_expr_by_id(*e),
+                    crate::hir::expr::DocumentProjection::Spread(e) => visitor.visit_expr_by_id(*e),
                 }
             }
         }
@@ -473,7 +534,7 @@ pub fn walk_ty<'hir, V: Visitor<'hir>>(visitor: &mut V, ty: &'hir Ty) {
         }
         Ty::ForAll { params, ty: inner } => {
             for param in params {
-                visitor.visit_generic_param(param);
+                visitor.visit_binder_param(param);
             }
             visitor.visit_ty_by_id(*inner);
         }
@@ -594,6 +655,19 @@ pub fn walk_generic_param<'hir, V: Visitor<'hir>>(visitor: &mut V, param: &'hir 
     }
 }
 
+pub fn walk_binder_param<'hir, V: Visitor<'hir>>(visitor: &mut V, param: &'hir BinderParam) {
+    match param {
+        BinderParam::Type { bounds, .. } => {
+            for bound in bounds {
+                visitor.visit_trait_bound(bound);
+            }
+        }
+        BinderParam::Const { ty, .. } => {
+            visitor.visit_ty_by_id(*ty);
+        }
+    }
+}
+
 pub fn walk_where_clause<'hir, V: Visitor<'hir>>(visitor: &mut V, clause: &'hir WhereClause) {
     for predicate in &clause.predicates {
         visitor.visit_where_predicate(predicate);
@@ -683,18 +757,22 @@ pub fn walk_impl<'hir, V: Visitor<'hir>>(visitor: &mut V, impl_: &'hir Impl) {
         visitor.visit_trait_ref(trait_ref);
     }
     for item in &impl_.items {
-        match &item.kind {
-            crate::hir::ImplItemKind::Fn { sig, body } => {
-                walk_fn_sig(visitor, sig);
-                visitor.visit_body_by_id(*body);
-            }
-            crate::hir::ImplItemKind::Const { ty, body } => {
-                visitor.visit_ty_by_id(*ty);
-                visitor.visit_body_by_id(*body);
-            }
-            crate::hir::ImplItemKind::Type { ty } => {
-                visitor.visit_ty_by_id(*ty);
-            }
+        visitor.visit_impl_item(item);
+    }
+}
+
+pub fn walk_impl_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir ImplItem) {
+    match &item.kind {
+        crate::hir::core::ImplItemKind::Fn { sig, body } => {
+            walk_fn_sig(visitor, sig);
+            visitor.visit_body_by_id(*body);
+        }
+        crate::hir::core::ImplItemKind::Const { ty, body } => {
+            visitor.visit_ty_by_id(*ty);
+            visitor.visit_body_by_id(*body);
+        }
+        crate::hir::core::ImplItemKind::Type { ty } => {
+            visitor.visit_ty_by_id(*ty);
         }
     }
 }
@@ -705,80 +783,33 @@ pub fn walk_trait<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_: &'hir Trait) 
         visitor.visit_trait_ref(super_trait);
     }
     for item in &trait_.items {
-        match &item.kind {
-            crate::hir::TraitItemKind::Fn { sig, default } => {
-                walk_fn_sig(visitor, sig);
-                if let Some(body) = *default {
-                    visitor.visit_body_by_id(body);
-                }
+        visitor.visit_trait_item(item);
+    }
+}
+
+pub fn walk_trait_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir TraitItem) {
+    match &item.kind {
+        crate::hir::core::TraitItemKind::Fn { sig, default } => {
+            walk_fn_sig(visitor, sig);
+            if let Some(body) = *default {
+                visitor.visit_body_by_id(body);
             }
-            crate::hir::TraitItemKind::Const { ty, body } => {
+        }
+        crate::hir::core::TraitItemKind::Const { ty, body } => {
+            visitor.visit_ty_by_id(*ty);
+            if let Some(body) = *body {
+                visitor.visit_body_by_id(body);
+            }
+        }
+        crate::hir::core::TraitItemKind::Type { bounds, default } => {
+            for bound in bounds {
+                visitor.visit_trait_bound(bound);
+            }
+            if let Some(ty) = default {
                 visitor.visit_ty_by_id(*ty);
-                if let Some(body) = *body {
-                    visitor.visit_body_by_id(body);
-                }
-            }
-            crate::hir::TraitItemKind::Type { bounds, default } => {
-                for bound in bounds {
-                    visitor.visit_trait_bound(bound);
-                }
-                if let Some(ty) = default {
-                    visitor.visit_ty_by_id(*ty);
-                }
             }
         }
     }
 }
 
-// -----------------------------------------------------------------------------
-// ID-based visitor helpers
-// -----------------------------------------------------------------------------
 
-/// Extension trait that adds ID-based lookup helpers to any visitor.
-///
-/// The default implementations look up the node in [`crate_hir`](Visitor::crate_hir)
-/// and call the corresponding reference-based visitor hook. Visitors that do
-/// not provide a crate simply skip the subtree.
-pub trait VisitorExt<'hir>: Visitor<'hir> {
-    fn visit_expr_by_id(&mut self, id: ExprId) {
-        if let Some(crate_hir) = self.crate_hir() {
-            if let Some(expr) = crate_hir.exprs.get(id) {
-                self.visit_expr(expr);
-            }
-        }
-    }
-
-    fn visit_pat_by_id(&mut self, id: PatId) {
-        if let Some(crate_hir) = self.crate_hir() {
-            if let Some(pat) = crate_hir.pats.get(id) {
-                self.visit_pat(pat);
-            }
-        }
-    }
-
-    fn visit_stmt_by_id(&mut self, id: StmtId) {
-        if let Some(crate_hir) = self.crate_hir() {
-            if let Some(stmt) = crate_hir.stmts.get(id) {
-                self.visit_stmt(stmt);
-            }
-        }
-    }
-
-    fn visit_ty_by_id(&mut self, id: TyId) {
-        if let Some(crate_hir) = self.crate_hir() {
-            if let Some(ty) = crate_hir.tys.get(id) {
-                self.visit_ty(ty);
-            }
-        }
-    }
-
-    fn visit_body_by_id(&mut self, id: BodyId) {
-        if let Some(crate_hir) = self.crate_hir() {
-            if let Some(body) = crate_hir.bodies.get(id) {
-                self.visit_body(body);
-            }
-        }
-    }
-}
-
-impl<'hir, T: Visitor<'hir>> VisitorExt<'hir> for T {}

@@ -8,14 +8,14 @@ use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
 use crate::derive::context::DeriveContext;
-use crate::hir::{
+use crate::hir::core::{
     Arm, Block, Expr, FieldExpr, FnSig, ImplItem, ImplItemKind, Item, ItemKind, Lit,
     Param, Stmt, TraitRef,
 };
-use crate::hir_body::Body;
-use crate::hir_pat::{BindingMode, FieldPat, Pat};
-use crate::hir_struct::VariantData;
-use crate::hir_ty::Ty;
+use crate::hir::body::Body;
+use crate::hir::pat::{BindingMode, FieldPat, Pat};
+use crate::hir::adt::VariantData;
+use crate::hir::ty::Ty;
 use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use crate::res::Res;
 
@@ -36,6 +36,74 @@ pub fn path_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> TyId {
         args: vec![],
     };
     ctx.ctx.crate_hir.alloc_ty(ty, ctx.derive_span)
+}
+
+/// Build a type reference to a type parameter by its `DefId`.
+pub fn type_param_ty(ctx: &mut DeriveContext<'_, '_>, def_id: DefId) -> TyId {
+    let ty = Ty::Path {
+        res: Res::Def { def_id },
+        args: vec![],
+    };
+    ctx.ctx.crate_hir.alloc_ty(ty, ctx.derive_span)
+}
+
+/// Build a `Generics` block for a derived impl.
+///
+/// The ADT's own type parameters are preserved, and each type parameter gets
+/// an additional bound on `trait_def_id` (e.g. `T: Clone`). Const parameters are
+/// copied unchanged.
+pub fn derive_generics(
+    _ctx: &mut DeriveContext<'_, '_>,
+    adt_generics: &crate::hir::core::Generics,
+    trait_def_id: DefId,
+) -> crate::hir::core::Generics {
+    use crate::hir::core::{GenericParam, TraitBound};
+    let params = adt_generics
+        .params
+        .iter()
+        .map(|p| match p {
+            GenericParam::Type {
+                def_id,
+                name,
+                bounds,
+                default,
+                span,
+            } => {
+                let mut new_bounds = bounds.clone();
+                new_bounds.push(TraitBound {
+                    path: Res::Def {
+                        def_id: trait_def_id,
+                    },
+                    span: *span,
+                });
+                GenericParam::Type {
+                    def_id: *def_id,
+                    name: *name,
+                    bounds: new_bounds,
+                    default: *default,
+                    span: *span,
+                }
+            }
+            GenericParam::Const {
+                def_id,
+                name,
+                ty,
+                default,
+                span,
+            } => GenericParam::Const {
+                def_id: *def_id,
+                name: *name,
+                ty: *ty,
+                default: *default,
+                span: *span,
+            },
+        })
+        .collect();
+    crate::hir::core::Generics {
+        params,
+        where_clause: adt_generics.where_clause.clone(),
+        span: adt_generics.span,
+    }
 }
 
 /// Build a `Self` type.
@@ -349,15 +417,20 @@ pub fn method_impl_item(
         kind: ImplItemKind::Fn { sig, body: body_id },
         attrs: vec![],
         span: ctx.derive_span,
-        defaultness: crate::hir::Defaultness::Final,
+        defaultness: crate::hir::core::Defaultness::Final,
     }
 }
 
 /// Build an impl block item for a trait and type.
+///
+/// `generics` are the impl-level generic parameters (copied from the ADT),
+/// and `bounds` are the per-parameter trait bounds required by the derive
+/// (e.g. `T: Clone` for `#[derive(Clone)]`).
 pub fn impl_item(
     ctx: &mut DeriveContext<'_, '_>,
     trait_def_id: DefId,
     self_ty: TyId,
+    generics: crate::hir::core::Generics,
     items: Vec<ImplItem>,
 ) -> Item {
     let def_id = ctx.next_synthetic_def_id();
@@ -367,13 +440,9 @@ pub fn impl_item(
         attrs: vec![],
         kind: ItemKind::Impl {
             items,
-            generics: crate::hir::Generics {
-                params: vec![],
-                where_clause: None,
-                span: ctx.derive_span,
-            },
+            generics,
             self_ty,
-            polarity: crate::hir::ImplPolarity::Positive,
+            polarity: crate::hir::core::ImplPolarity::Positive,
             of_trait: Some(TraitRef {
                 path: Res::Def {
                     def_id: trait_def_id,

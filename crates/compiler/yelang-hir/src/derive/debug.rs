@@ -15,13 +15,13 @@ use yelang_interner::Symbol;
 use crate::derive::context::{AdtInfo, AdtShape, DeriveContext};
 use crate::derive::error::DeriveError;
 use crate::derive::helpers::{
-    FieldView, access_field, arm, binding_pat, enum_variant_literal, expr, fn_sig, formatter_param,
-    impl_item, make_body, match_expr, method_call_expr, method_impl_item, path_pat, self_expr,
-    self_param, string_expr, struct_pat, tuple_field_expr, tuple_struct_pat,
+    FieldView, access_field, arm, binding_pat, derive_generics, enum_variant_literal, expr, fn_sig,
+    formatter_param, impl_item, make_body, match_expr, method_call_expr, method_impl_item, path_pat,
+    self_expr, self_param, string_expr, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
-use crate::hir::{Arm, Expr, ImplItem, Item};
+use crate::hir::core::{Arm, Expr, ImplItem, Item};
 use crate::ids::{ExprId, PatId, TyId};
-use crate::hir_struct::VariantData;
+use crate::hir::adt::VariantData;
 
 /// Expand `#[derive(Debug)]` for a struct or enum.
 pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]) -> Option<Item> {
@@ -67,7 +67,7 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
 
     let self_ty = adt.self_ty(ctx);
     let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir_ty::Ty::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: self_ty,
         },
@@ -75,7 +75,7 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
     let formatter_ty = crate::derive::helpers::path_ty(ctx, formatter_def_id);
     let ref_formatter_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir_ty::Ty::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Mutable,
             ty: formatter_ty,
         },
@@ -95,7 +95,8 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
 
     let debug_self_ty = adt.self_ty(ctx);
-    Some(impl_item(ctx, debug_trait, debug_self_ty, vec![fmt_method]))
+    let generics = derive_generics(ctx, adt.generics, debug_trait);
+    Some(impl_item(ctx, debug_trait, debug_self_ty, generics, vec![fmt_method]))
 }
 
 fn look_up_formatter(ctx: &DeriveContext<'_, '_>) -> Option<DefId> {
@@ -206,7 +207,7 @@ fn debug_struct_like(
             expr(
                 ctx,
                 Expr::Block {
-                    block: crate::hir::Block {
+                    block: crate::hir::core::Block {
                         stmts: vec![call],
                         expr: Some(tail),
                         span: ctx.derive_span,
@@ -264,7 +265,7 @@ fn debug_enum(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     enum_def_id: DefId,
-    def: &crate::hir::EnumDef,
+    def: &crate::hir::core::EnumDef,
     formatter_local: Symbol,
     result_def_id: DefId,
 ) -> ExprId {
@@ -382,7 +383,7 @@ fn debug_variant(
             expr(
                 ctx,
                 Expr::Block {
-                    block: crate::hir::Block {
+                    block: crate::hir::core::Block {
                         stmts: vec![call],
                         expr: Some(tail),
                         span: ctx.derive_span,
@@ -454,7 +455,7 @@ fn block_expr_with_tail(
     expr(
         ctx,
         Expr::Block {
-            block: crate::hir::Block {
+            block: crate::hir::core::Block {
                 stmts,
                 expr: Some(tail),
                 span: ctx.derive_span,

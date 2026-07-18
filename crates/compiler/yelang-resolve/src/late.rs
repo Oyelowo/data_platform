@@ -63,17 +63,35 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     }
 
     /// Add generic parameters (both type and const) to the appropriate rib stacks.
+    /// Uses the `DefId`s pre-allocated during def collection so that uses of a
+    /// generic parameter name resolve to a real definition.
     fn resolve_generic_params(&mut self, params: &[yelang_ast::GenericParam]) {
         for param in params {
-            match param {
+            let (name, span, ns) = match param {
                 yelang_ast::GenericParam::Type(tp) => {
-                    self.add_type_binding(tp.name.symbol, tp.name.span);
+                    (tp.name.symbol, tp.name.span, Namespace::Type)
                 }
                 yelang_ast::GenericParam::Const(cp) => {
-                    // Const params are values (they can be used in expressions).
-                    self.add_value_binding(cp.name.symbol, cp.name.span);
-                    // Resolve the type annotation of the const param.
+                    // Resolve the type annotation of the const param first so its
+                    // own name is not yet in scope.
                     self.resolve_type(&cp.ty);
+                    (cp.name.symbol, cp.name.span, Namespace::Value)
+                }
+            };
+            if let Some(def_id) = self.resolver.generic_param_defs.get(&span).copied() {
+                if let Some(rib) = match ns {
+                    Namespace::Value => self.resolver.value_ribs.last_mut(),
+                    Namespace::Type => self.resolver.type_ribs.last_mut(),
+                } {
+                    rib.insert(ns, name, Resolution::Def { def_id }, span);
+                }
+            } else {
+                // Fallback: allocate a local binding if the generic param was not
+                // collected. This keeps resolution working even for uncollected
+                // params (e.g. trait-method generics).
+                match ns {
+                    Namespace::Value => self.add_value_binding(name, span),
+                    Namespace::Type => self.add_type_binding(name, span),
                 }
             }
         }

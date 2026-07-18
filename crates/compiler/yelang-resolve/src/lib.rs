@@ -48,6 +48,10 @@ pub struct ResolvedCrate {
     /// built-in derive expansion) can look up prelude types and traits directly
     /// without relying on them being present in any module's namespace table.
     pub prelude: Option<crate::prelude::Prelude>,
+    /// Maps a generic parameter's source span to its `DefId`.
+    pub generic_param_defs: FxHashMap<yelang_lexer::Span, DefId>,
+    /// Maps a parent item's `DefId` to the ordered list of its generic param `DefId`s.
+    pub generic_params: FxHashMap<DefId, Vec<DefId>>,
 }
 
 /// The main entry point for name resolution.
@@ -63,10 +67,12 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         collector.enum_variants,
     );
     resolver.errors = collector.errors;
-    // Transfer impl indexes from collector to resolver
+    // Transfer impl indexes and generic param maps from collector to resolver
     resolver.inherent_impls = collector.inherent_impls;
     resolver.trait_impls = collector.trait_impls;
     resolver.impl_item_names = collector.impl_item_names;
+    resolver.generic_param_defs = collector.generic_param_defs;
+    resolver.generic_params = collector.generic_params;
 
     let early = early::EarlyResolver::new(&mut resolver);
     early.resolve(ast);
@@ -81,5 +87,7 @@ pub fn resolve_crate(ast: &yelang_ast::Program, interner: &Interner) -> Resolved
         def_resolutions: resolver.def_resolutions,
         enum_variants: resolver.enum_variants,
         prelude: resolver.prelude,
+        generic_param_defs: resolver.generic_param_defs,
+        generic_params: resolver.generic_params,
     }
 }

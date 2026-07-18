@@ -4,7 +4,7 @@ use yelang_arena::DefId;
 use yelang_ast::Program;
 use yelang_interner::Interner;
 
-use crate::hir::{Expr, ItemKind};
+use crate::hir::core::{Expr, ItemKind};
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
 
@@ -34,6 +34,8 @@ fn stub_resolved() -> ResolvedCrate {
         def_resolutions: yelang_arena::FxHashMap::default(),
         enum_variants: yelang_arena::FxHashMap::default(),
         prelude: None,
+        generic_param_defs: yelang_arena::FxHashMap::default(),
+        generic_params: yelang_arena::FxHashMap::default(),
     }
 }
 

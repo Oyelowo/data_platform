@@ -4,9 +4,9 @@ use yelang_arena::DefId;
 use yelang_ast::{Item as AstItem, ItemKind as AstItemKind, Program};
 use yelang_interner::{Interner, Symbol};
 
-use crate::crate_hir::Crate;
+use crate::crate_data::Crate;
 use crate::ids::PatId;
-use crate::lowering_err::LoweringError;
+use crate::lowering::err::LoweringError;
 use crate::res::ResolvedCrate;
 
 /// Context that drives AST -> HIR lowering.
@@ -77,7 +77,7 @@ pub fn lower_crate(program: &Program, resolved: &ResolvedCrate, interner: &Inter
     let mut ctx = LoweringContext::new(interner, resolved);
 
     for item in &program.items {
-        let _ = crate::lowering_item::lower_item(&mut ctx, item);
+        let _ = crate::lowering::item::lower_item(&mut ctx, item);
     }
 
     ctx.crate_hir

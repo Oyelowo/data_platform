@@ -5,7 +5,7 @@ use yelang_ast::Program;
 use yelang_interner::Interner;
 use yelang_lexer::Span;
 
-use crate::hir::{Expr, ItemKind};
+use crate::hir::core::{Expr, ItemKind};
 use crate::lowering::lower_crate;
 use crate::res::ResolvedCrate;
 
@@ -36,6 +36,8 @@ fn stub_resolved() -> ResolvedCrate {
         def_resolutions: FxHashMap::default(),
         enum_variants: FxHashMap::default(),
         prelude: None,
+        generic_param_defs: FxHashMap::default(),
+        generic_params: FxHashMap::default(),
     }
 }
 

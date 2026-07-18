@@ -5,13 +5,13 @@ use yelang_interner::Symbol;
 
 use crate::derive::context::{AdtInfo, AdtShape, DeriveContext};
 use crate::derive::helpers::{
-    FieldView, access_field, arm, binding_pat, enum_variant_literal, expr, fn_sig, impl_item,
-    make_body, match_expr, method_call_expr, method_impl_item, path_pat, self_expr, self_param,
-    struct_literal, struct_pat, tuple_field_expr, tuple_struct_pat,
+    FieldView, access_field, arm, binding_pat, derive_generics, enum_variant_literal, expr, fn_sig,
+    impl_item, make_body, match_expr, method_call_expr, method_impl_item, path_pat, self_expr,
+    self_param, struct_literal, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
-use crate::hir::{Arm, Expr, ImplItem, Item};
+use crate::hir::core::{Arm, Expr, ImplItem, Item};
 use crate::ids::{ExprId, PatId, TyId};
-use crate::hir_struct::VariantData;
+use crate::hir::adt::VariantData;
 
 /// Expand `#[derive(Clone)]` for a struct or enum.
 pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]) -> Option<Item> {
@@ -33,7 +33,7 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
 
     let self_ty = adt.self_ty(ctx);
     let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir_ty::Ty::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: self_ty,
         },
@@ -41,8 +41,9 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
 
     let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty);
+    let generics = derive_generics(ctx, adt.generics, clone_trait);
 
-    Some(impl_item(ctx, clone_trait, self_ty, vec![clone_method]))
+    Some(impl_item(ctx, clone_trait, self_ty, generics, vec![clone_method]))
 }
 
 fn clone_method(
@@ -143,7 +144,7 @@ fn clone_enum_expr(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     enum_def_id: DefId,
-    def: &crate::hir::EnumDef,
+    def: &crate::hir::core::EnumDef,
 ) -> ExprId {
     let scrutinee = self_expr(ctx, self_def_id);
     let arms: Vec<Arm> = def

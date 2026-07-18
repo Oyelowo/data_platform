@@ -5,7 +5,7 @@ use yelang_ast::{
     FnDef as AstFnDef, FnRefType, Item as AstItem, ItemKind as AstItemKind,
 };
 
-use crate::hir::{
+use crate::hir::core::{
     EnumDef, FieldDef, FnSig, GenericParam, Generics, ImplPolarity, Item, ItemKind, StructField,
     UseKind, UsePath, VariantData, VariantDef, Visibility, WhereClause, WherePredicate,
 };
@@ -16,7 +16,8 @@ use crate::lowering::LoweringContext;
 pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
     // Try to reuse the DefId assigned during name resolution.
     let def_id =
-        crate::lowering::lookup_item_def_id(ctx, item).unwrap_or_else(|| ctx.next_synthetic_def_id());
+        crate::lowering::context::lookup_item_def_id(ctx, item)
+            .unwrap_or_else(|| ctx.next_synthetic_def_id());
     let prev_owner = ctx.current_owner;
     let prev_module = ctx.current_module;
     ctx.current_owner = def_id;
@@ -68,7 +69,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
 
 fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> ItemKind {
     let sig = lower_fn_sig(ctx, &f.sig, f.is_const);
-    let body_id = crate::lowering_body::lower_block_as_body(ctx, &f.body, &sig.inputs);
+    let body_id = crate::lowering::body::lower_block_as_body(ctx, &f.body, &sig.inputs);
 
     ItemKind::Fn {
         sig,
@@ -81,13 +82,13 @@ fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bo
     let inputs: Vec<TyId> = sig
         .params
         .iter()
-        .map(|p| crate::lowering_ty::lower_ty(ctx, &p.ty))
+        .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
         .collect();
 
     let output = match &sig.return_type {
-        FnRefType::Type(ty) => crate::lowering_ty::lower_ty(ctx, ty),
+        FnRefType::Type(ty) => crate::lowering::ty::lower_ty(ctx, ty),
         FnRefType::Default(span) => {
-            ctx.crate_hir.alloc_ty(crate::hir_ty::Ty::Tuple { tys: vec![] }, *span)
+            ctx.crate_hir.alloc_ty(crate::hir::ty::Ty::Tuple { tys: vec![] }, *span)
         }
     };
 
@@ -109,7 +110,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
                 .iter()
                 .map(|f| FieldDef {
                     ident: f.name,
-                    ty: crate::lowering_ty::lower_ty(ctx, &f.ty),
+                    ty: crate::lowering::ty::lower_ty(ctx, &f.ty),
                     span: f.span,
                     vis: f.visibility.clone(),
                     attrs: f.attributes.clone(),
@@ -120,7 +121,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
             fields: tys
                 .iter()
                 .map(|ty| StructField {
-                    ty: crate::lowering_ty::lower_ty(ctx, ty),
+                    ty: crate::lowering::ty::lower_ty(ctx, ty),
                     span: ty.span,
                     vis: Visibility::Private,
                     attrs: vec![],
@@ -148,7 +149,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                     fields: tys
                         .iter()
                         .map(|ty| StructField {
-                            ty: crate::lowering_ty::lower_ty(ctx, ty),
+                            ty: crate::lowering::ty::lower_ty(ctx, ty),
                             span: ty.span,
                             vis: Visibility::Private,
                             attrs: vec![],
@@ -160,7 +161,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                         .iter()
                         .map(|f| FieldDef {
                             ident: f.name,
-                            ty: crate::lowering_ty::lower_ty(ctx, &f.ty),
+                            ty: crate::lowering::ty::lower_ty(ctx, &f.ty),
                             span: f.span,
                             vis: f.visibility.clone(),
                             attrs: f.attributes.clone(),
@@ -173,7 +174,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                     next_discriminant = explicit_discriminant_value(ctx, expr)
                         .map(|v| v.saturating_add(1))
                         .unwrap_or(0);
-                    crate::lowering_ty::lower_const_expr(ctx, expr, expr.span)
+                    crate::lowering::ty::lower_const_expr(ctx, expr, expr.span)
                 }
                 None => make_implicit_discriminant(ctx, v.span, &mut next_discriminant),
             };
@@ -216,12 +217,12 @@ fn make_implicit_discriminant(
     ctx: &mut LoweringContext,
     span: yelang_lexer::Span,
     next: &mut u128,
-) -> crate::hir_ty::Const {
+) -> crate::hir::ty::Const {
     let value = *next;
     *next = next.saturating_add(1);
     let sym = ctx.interner.get_or_intern(&value.to_string());
-    crate::hir_ty::Const {
-        kind: crate::hir_ty::ConstKind::Lit {
+    crate::hir::ty::Const {
+        kind: crate::hir::ty::ConstKind::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
                 value: sym,
                 suffix: None,
@@ -239,35 +240,35 @@ fn lower_trait_item(
     let prev_self_type = ctx.self_type;
     ctx.self_type = Some(def_id);
 
-    let items: Vec<crate::hir::TraitItem> = t
+    let items: Vec<crate::hir::core::TraitItem> = t
         .items
         .iter()
         .map(|item| {
             let kind = match &item.item {
-                yelang_ast::TraitItemKind::Method(m) => crate::hir::TraitItemKind::Fn {
+                yelang_ast::TraitItemKind::Method(m) => crate::hir::core::TraitItemKind::Fn {
                     sig: lower_fn_sig(ctx, &m.sig, m.is_const),
                     default: m
                         .body
                         .as_ref()
-                        .map(|body| crate::lowering_body::lower_block_as_body(ctx, body, &[])),
+                        .map(|body| crate::lowering::body::lower_block_as_body(ctx, body, &[])),
                 },
-                yelang_ast::TraitItemKind::Constant(c) => crate::hir::TraitItemKind::Const {
-                    ty: crate::lowering_ty::lower_ty(ctx, &c.ty),
+                yelang_ast::TraitItemKind::Constant(c) => crate::hir::core::TraitItemKind::Const {
+                    ty: crate::lowering::ty::lower_ty(ctx, &c.ty),
                     body: c
                         .value
                         .as_ref()
-                        .map(|v| crate::lowering_body::lower_expr_as_body(ctx, v)),
+                        .map(|v| crate::lowering::body::lower_expr_as_body(ctx, v)),
                 },
-                yelang_ast::TraitItemKind::AssociatedType(ty) => crate::hir::TraitItemKind::Type {
+                yelang_ast::TraitItemKind::AssociatedType(ty) => crate::hir::core::TraitItemKind::Type {
                     bounds: ty
                         .bounds
                         .iter()
-                        .map(|b| crate::lowering_ty::lower_trait_bound(ctx, b))
+                        .map(|b| crate::lowering::ty::lower_trait_bound(ctx, b))
                         .collect(),
                     default: ty
                         .default
                         .as_ref()
-                        .map(|ty| crate::lowering_ty::lower_ty(ctx, ty)),
+                        .map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
                 },
             };
             let ident = match &item.item {
@@ -275,7 +276,7 @@ fn lower_trait_item(
                 yelang_ast::TraitItemKind::Constant(c) => c.name,
                 yelang_ast::TraitItemKind::AssociatedType(t) => t.name,
             };
-            crate::hir::TraitItem {
+            crate::hir::core::TraitItem {
                 ident,
                 kind,
                 attrs: item.attributes.clone(),
@@ -287,18 +288,18 @@ fn lower_trait_item(
     ctx.self_type = prev_self_type;
 
     let generics = lower_generics(ctx, &t.generics);
-    let super_traits: Vec<crate::hir::TraitRef> = t
+    let super_traits: Vec<crate::hir::core::TraitRef> = t
         .super_traits
         .iter()
-        .map(|b| crate::hir::TraitRef {
-            path: crate::lowering_ty::lower_trait_bound(ctx, b).path,
+        .map(|b| crate::hir::core::TraitRef {
+            path: crate::lowering::ty::lower_trait_bound(ctx, b).path,
             span: b.span,
         })
         .collect();
 
     ctx.crate_hir.traits.insert(
         def_id,
-        Some(crate::hir::Trait {
+        Some(crate::hir::core::Trait {
             name: t.name,
             generics: generics.clone(),
             super_traits: super_traits.clone(),
@@ -319,13 +320,13 @@ fn lower_impl_item(
     i: &yelang_ast::item::Impl,
     _def_id: DefId,
 ) -> ItemKind {
-    let self_ty = crate::lowering_ty::lower_ty(ctx, &i.self_ty);
+    let self_ty = crate::lowering::ty::lower_ty(ctx, &i.self_ty);
     let self_ty_def_id = ctx
         .crate_hir
         .tys
         .get(self_ty)
         .and_then(|ty| match ty {
-            crate::hir_ty::Ty::Path {
+            crate::hir::ty::Ty::Path {
                 res: crate::res::Res::Def { def_id },
                 ..
             } => Some(*def_id),
@@ -334,12 +335,12 @@ fn lower_impl_item(
     let prev_self_type = ctx.self_type;
     ctx.self_type = self_ty_def_id;
 
-    let of_trait = i.trait_impl.as_ref().map(|path| crate::hir::TraitRef {
-        path: crate::lowering_expr::resolve_ast_path(ctx, path),
+    let of_trait = i.trait_impl.as_ref().map(|path| crate::hir::core::TraitRef {
+        path: crate::lowering::expr::resolve_ast_path(ctx, path),
         span: path.span,
     });
 
-    let items: Vec<crate::hir::ImplItem> = i
+    let items: Vec<crate::hir::core::ImplItem> = i
         .items
         .iter()
         .map(|item| {
@@ -347,27 +348,27 @@ fn lower_impl_item(
                 yelang_ast::ImplItemKind::Method(m) => {
                     let sig = lower_fn_sig(ctx, &m.sig, m.is_const);
                     let body_id =
-                        crate::lowering_body::lower_block_as_body(ctx, &m.body, &sig.inputs);
-                    crate::hir::ImplItemKind::Fn { sig, body: body_id }
+                        crate::lowering::body::lower_block_as_body(ctx, &m.body, &sig.inputs);
+                    crate::hir::core::ImplItemKind::Fn { sig, body: body_id }
                 }
-                yelang_ast::ImplItemKind::AssociatedType(at) => crate::hir::ImplItemKind::Type {
-                    ty: crate::lowering_ty::lower_ty(ctx, &at.ty),
+                yelang_ast::ImplItemKind::AssociatedType(at) => crate::hir::core::ImplItemKind::Type {
+                    ty: crate::lowering::ty::lower_ty(ctx, &at.ty),
                 },
                 yelang_ast::ImplItemKind::Constant(c) => {
-                    let ty = crate::lowering_ty::lower_ty(ctx, &c.ty);
+                    let ty = crate::lowering::ty::lower_ty(ctx, &c.ty);
                     let body_id = c
                         .value
                         .as_ref()
-                        .map(|v| crate::lowering_body::lower_expr_as_body(ctx, v))
+                        .map(|v| crate::lowering::body::lower_expr_as_body(ctx, v))
                         .unwrap_or_else(|| {
                             // No value provided: use unit as placeholder.
                             let unit_expr = yelang_ast::Expr {
                                 kind: yelang_ast::ExprKind::Tuple(vec![]),
                                 span: c.span,
                             };
-                            crate::lowering_body::lower_expr_as_body(ctx, &unit_expr)
+                            crate::lowering::body::lower_expr_as_body(ctx, &unit_expr)
                         });
-                    crate::hir::ImplItemKind::Const { ty, body: body_id }
+                    crate::hir::core::ImplItemKind::Const { ty, body: body_id }
                 }
             };
             let ident = match &item.item {
@@ -375,14 +376,14 @@ fn lower_impl_item(
                 yelang_ast::ImplItemKind::AssociatedType(at) => at.name,
                 yelang_ast::ImplItemKind::Constant(c) => c.name,
             };
-            crate::hir::ImplItem {
+            crate::hir::core::ImplItem {
                 ident,
                 kind,
                 attrs: item.attributes.clone(),
                 span: item.span,
                 defaultness: match item.defaultness {
-                    yelang_ast::item::Defaultness::Default => crate::hir::Defaultness::Default,
-                    yelang_ast::item::Defaultness::Final => crate::hir::Defaultness::Final,
+                    yelang_ast::item::Defaultness::Default => crate::hir::core::Defaultness::Default,
+                    yelang_ast::item::Defaultness::Final => crate::hir::core::Defaultness::Final,
                 },
             }
         })
@@ -394,7 +395,7 @@ fn lower_impl_item(
         ImplPolarity::Positive
     };
 
-    let impl_block = crate::hir::Impl {
+    let impl_block = crate::hir::core::Impl {
         generics: lower_generics(ctx, &i.generics),
         self_ty,
         of_trait,
@@ -420,7 +421,7 @@ fn lower_type_alias_item(
     _def_id: DefId,
 ) -> ItemKind {
     ItemKind::TyAlias {
-        ty: crate::lowering_ty::lower_ty(ctx, &ta.target),
+        ty: crate::lowering::ty::lower_ty(ctx, &ta.target),
         generics: lower_generics(ctx, &ta.generics),
     }
 }
@@ -430,8 +431,8 @@ fn lower_const_item(
     c: &yelang_ast::item::Const,
     _def_id: DefId,
 ) -> ItemKind {
-    let ty = crate::lowering_ty::lower_ty(ctx, &c.ty);
-    let body_id = crate::lowering_body::lower_expr_as_body(ctx, &c.value);
+    let ty = crate::lowering::ty::lower_ty(ctx, &c.ty);
+    let body_id = crate::lowering::body::lower_expr_as_body(ctx, &c.value);
     ItemKind::Const { ty, body: body_id }
 }
 
@@ -440,8 +441,8 @@ fn lower_static_item(
     s: &yelang_ast::item::Static,
     _def_id: DefId,
 ) -> ItemKind {
-    let ty = crate::lowering_ty::lower_ty(ctx, &s.ty);
-    let body_id = crate::lowering_body::lower_expr_as_body(ctx, &s.value);
+    let ty = crate::lowering::ty::lower_ty(ctx, &s.ty);
+    let body_id = crate::lowering::body::lower_expr_as_body(ctx, &s.value);
     ItemKind::Static {
         ty,
         mutability: if s.mutability {
@@ -466,7 +467,7 @@ fn lower_module_item(ctx: &mut LoweringContext, m: &yelang_ast::ModDef, def_id: 
             }
         }
         yelang_ast::ModKind::External => {
-            ctx.error(crate::lowering_err::LoweringError::UnsupportedAst {
+            ctx.error(crate::lowering::err::LoweringError::UnsupportedAst {
                 kind: "external module (mod name;)".to_string(),
                 span: m.name.span,
             });
@@ -564,7 +565,7 @@ fn make_use_path(
     rename: Option<yelang_ast::Ident>,
 ) -> UsePath {
     UsePath {
-        res: crate::lowering_expr::resolve_ast_path(ctx, path),
+        res: crate::lowering::expr::resolve_ast_path(ctx, path),
         span,
         rename,
     }
@@ -599,28 +600,48 @@ fn lower_generic_param(
     param: &yelang_ast::GenericParam,
 ) -> GenericParam {
     match param {
-        yelang_ast::GenericParam::Type(tp) => GenericParam::Type {
-            name: tp.name,
-            bounds: tp
-                .bounds
-                .iter()
-                .map(|b| crate::lowering_ty::lower_trait_bound(ctx, b))
-                .collect(),
-            default: tp
-                .default
-                .as_ref()
-                .map(|ty| crate::lowering_ty::lower_ty(ctx, ty)),
-            span: tp.name.span(),
-        },
-        yelang_ast::GenericParam::Const(cp) => GenericParam::Const {
-            name: cp.name,
-            ty: crate::lowering_ty::lower_ty(ctx, &cp.ty),
-            default: cp
-                .default
-                .as_ref()
-                .map(|expr| crate::lowering_expr::lower_expr(ctx, expr)),
-            span: cp.name.span(),
-        },
+        yelang_ast::GenericParam::Type(tp) => {
+            let span = tp.name.span();
+            let def_id = ctx
+                .resolved
+                .generic_param_defs
+                .get(&span)
+                .copied()
+                .unwrap_or_else(|| ctx.next_synthetic_def_id());
+            GenericParam::Type {
+                def_id,
+                name: tp.name,
+                bounds: tp
+                    .bounds
+                    .iter()
+                    .map(|b| crate::lowering::ty::lower_trait_bound(ctx, b))
+                    .collect(),
+                default: tp
+                    .default
+                    .as_ref()
+                    .map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
+                span,
+            }
+        }
+        yelang_ast::GenericParam::Const(cp) => {
+            let span = cp.name.span();
+            let def_id = ctx
+                .resolved
+                .generic_param_defs
+                .get(&span)
+                .copied()
+                .unwrap_or_else(|| ctx.next_synthetic_def_id());
+            GenericParam::Const {
+                def_id,
+                name: cp.name,
+                ty: crate::lowering::ty::lower_ty(ctx, &cp.ty),
+                default: cp
+                    .default
+                    .as_ref()
+                    .map(|expr| crate::lowering::expr::lower_expr(ctx, expr)),
+                span,
+            }
+        }
     }
 }
 
@@ -641,15 +662,15 @@ fn lower_where_predicate(
 ) -> WherePredicate {
     match pred {
         yelang_ast::WherePredicate::TraitBound { ty, bounds } => WherePredicate::TraitBound {
-            ty: crate::lowering_ty::lower_ty(ctx, ty),
+            ty: crate::lowering::ty::lower_ty(ctx, ty),
             bounds: bounds
                 .iter()
-                .map(|b| crate::lowering_ty::lower_trait_bound(ctx, b))
+                .map(|b| crate::lowering::ty::lower_trait_bound(ctx, b))
                 .collect(),
         },
         yelang_ast::WherePredicate::TypeEq { lhs, rhs } => WherePredicate::TypeEq {
-            lhs: crate::lowering_ty::lower_ty(ctx, lhs),
-            rhs: crate::lowering_ty::lower_ty(ctx, rhs),
+            lhs: crate::lowering::ty::lower_ty(ctx, lhs),
+            rhs: crate::lowering::ty::lower_ty(ctx, rhs),
         },
         yelang_ast::WherePredicate::ForAll {
             params,
@@ -659,11 +680,11 @@ fn lower_where_predicate(
             // HRTB: `for<T> T: Clone` becomes a TraitBound with bound vars.
             // We lower the binder params into the type's generic params and
             // then lower the inner predicate.
-            let bound_vars = crate::lowering_ty::lower_type_binder_params(ctx, params);
+            let bound_vars = crate::lowering::ty::lower_type_binder_params(ctx, params);
             match lower_where_predicate(ctx, predicate) {
                 WherePredicate::TraitBound { ty, bounds } => {
                     let forall_ty = ctx.crate_hir.alloc_ty(
-                        crate::hir_ty::Ty::ForAll {
+                        crate::hir::ty::Ty::ForAll {
                             params: bound_vars,
                             ty,
                         },

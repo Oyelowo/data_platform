@@ -4,9 +4,9 @@ use yelang_interner::Symbol;
 
 use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
-use crate::derive::helpers::{FieldView, impl_item, iter_fields};
-use crate::hir::Item;
-use crate::hir_ty::Ty;
+use crate::derive::helpers::{derive_generics, FieldView, impl_item, iter_fields};
+use crate::hir::core::Item;
+use crate::hir::ty::Ty;
 
 /// Expand `#[derive(Copy)]` for a struct or enum.
 pub fn derive_copy(
@@ -46,7 +46,8 @@ pub fn derive_copy(
     }
 
     let self_ty = adt.self_ty(ctx);
-    Some(impl_item(ctx, copy_trait, self_ty, vec![]))
+    let generics = derive_generics(ctx, adt.generics, copy_trait);
+    Some(impl_item(ctx, copy_trait, self_ty, generics, vec![]))
 }
 
 /// Returns the name of the first field whose type is definitely not `Copy`.

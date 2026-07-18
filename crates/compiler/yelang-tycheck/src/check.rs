@@ -5,7 +5,7 @@
  */
 
 use yelang_ast::{AssignOpKind, BinaryOp};
-use yelang_hir::hir::{Arm, Block, Expr, FieldExpr, Stmt};
+use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
 use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use yelang_hir::res::Res;
 use yelang_ty::generic::GenericArg;
@@ -126,12 +126,12 @@ fn check_expr_value<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, _expr_id: ExprId)
             check_expr(fcx, *base);
             for proj in projection {
                 match proj {
-                    yelang_hir::hir_expr::DocumentProjection::Field { value, .. } => {
+                    yelang_hir::hir::expr::DocumentProjection::Field { value, .. } => {
                         if let Some(e) = value {
                             check_expr(fcx, *e);
                         }
                     }
-                    yelang_hir::hir_expr::DocumentProjection::Spread(e) => {
+                    yelang_hir::hir::expr::DocumentProjection::Spread(e) => {
                         check_expr(fcx, *e);
                     }
                 }
@@ -161,13 +161,13 @@ fn check_expr_value<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, _expr_id: ExprId)
 // Literal checking
 // ---------------------------------------------------------------------------
 
-fn check_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, lit: &yelang_hir::hir::Lit) -> Ty<'tcx> {
+fn check_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, lit: &yelang_hir::hir::core::Lit) -> Ty<'tcx> {
     match lit {
-        yelang_hir::hir::Lit::Int(_) => fcx.new_int_var(),
-        yelang_hir::hir::Lit::Float(_) => fcx.new_float_var(),
-        yelang_hir::hir::Lit::Bool(_) => fcx.mk_bool(),
-        yelang_hir::hir::Lit::Char(_) => fcx.mk_char(),
-        yelang_hir::hir::Lit::Str(_) => fcx.mk_str(),
+        yelang_hir::hir::core::Lit::Int(_) => fcx.new_int_var(),
+        yelang_hir::hir::core::Lit::Float(_) => fcx.new_float_var(),
+        yelang_hir::hir::core::Lit::Bool(_) => fcx.mk_bool(),
+        yelang_hir::hir::core::Lit::Char(_) => fcx.mk_char(),
+        yelang_hir::hir::core::Lit::Str(_) => fcx.mk_str(),
         _ => {
             // TODO: define types for these literals
             fcx.new_ty_var()
@@ -666,7 +666,7 @@ fn check_let_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, pat: PatId, expr: ExprId) -> Ty<
 
 fn check_closure<'tcx>(
     fcx: &mut FnCtxt<'tcx>,
-    params: &[yelang_hir::hir_body::Param],
+    params: &[yelang_hir::hir::body::Param],
     body_id: BodyId,
 ) -> Ty<'tcx> {
     let _ = (params, body_id);

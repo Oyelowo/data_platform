@@ -1,10 +1,10 @@
 //! HIR node lookup map (like rustc's `hir::map`).
 
-use crate::crate_hir::Crate;
-use crate::hir::{Expr, Item, Stmt};
-use crate::hir_body::Body;
-use crate::hir_pat::Pat;
-use crate::hir_ty::Ty;
+use crate::crate_data::Crate;
+use crate::hir::core::{Expr, Item, Stmt};
+use crate::hir::body::Body;
+use crate::hir::pat::Pat;
+use crate::hir::ty::Ty;
 use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, TyId};
 
 /// Provides O(1) lookup from HIR ids to HIR nodes.
