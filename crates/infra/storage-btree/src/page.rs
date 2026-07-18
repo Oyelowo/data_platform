@@ -376,80 +376,88 @@ impl Page {
         unsafe { (*self.data.get()).len }
     }
 
+    fn check_range(&self, off: usize, len: usize) -> Result<()> {
+        let end = off.checked_add(len).ok_or_else(|| {
+            Error::Corruption(format!(
+                "page {} byte range overflow: off={off}, len={len}",
+                self.id
+            ))
+        })?;
+        if end > self.page_size() {
+            return Err(Error::Corruption(format!(
+                "page {} read/write out of bounds: off={off}, len={len}, page_size={}",
+                self.id,
+                self.page_size()
+            )));
+        }
+        Ok(())
+    }
+
     /// Copy `len` bytes starting at `off` into a fresh `Vec`.
     ///
-    /// # Safety
-    ///
-    /// The caller must ensure `off + len` does not exceed `page_size()` and that
-    /// no concurrent writer is mutating the source region.
-    unsafe fn read_bytes(&self, off: usize, len: usize) -> Vec<u8> {
-        debug_assert!(off + len <= self.page_size());
-        // SAFETY: the bounds are checked by the caller and the buffer pointer
-        // is valid for the lifetime of the page.
+    /// Bounds are checked; concurrency safety (no concurrent writer) is still the
+    /// caller's responsibility.
+    fn read_bytes(&self, off: usize, len: usize) -> Result<Vec<u8>> {
+        self.check_range(off, len)?;
+        // SAFETY: bounds were just checked and the buffer pointer is valid for
+        // the lifetime of the page.
         unsafe {
             let ptr = self.buf_ptr().add(off);
             let mut v = Vec::with_capacity(len);
             std::ptr::copy_nonoverlapping(ptr, v.as_mut_ptr(), len);
             v.set_len(len);
-            v
+            Ok(v)
         }
     }
 
     /// Copy `src` into the page buffer starting at `off`.
     ///
-    /// # Safety
-    ///
-    /// The caller must ensure `off + src.len()` does not exceed `page_size()`
-    /// and that the caller holds exclusive access to the page (e.g. the OLC
-    /// write latch).
-    unsafe fn write_bytes(&self, off: usize, src: &[u8]) {
-        debug_assert!(off + src.len() <= self.page_size());
-        // SAFETY: the bounds are checked by the caller and the buffer pointer
-        // is valid for the lifetime of the page.
+    /// Bounds are checked; exclusive access is still the caller's responsibility.
+    fn write_bytes(&self, off: usize, src: &[u8]) -> Result<()> {
+        self.check_range(off, src.len())?;
+        // SAFETY: bounds were just checked and the buffer pointer is valid for
+        // the lifetime of the page.
         unsafe {
             let ptr = self.buf_ptr().add(off);
             std::ptr::copy_nonoverlapping(src.as_ptr(), ptr, src.len());
         }
+        Ok(())
     }
 
     /// Fill `len` bytes starting at `off` with `val`.
     ///
-    /// # Safety
-    ///
-    /// The caller must ensure `off + len` does not exceed `page_size()` and
-    /// holds exclusive access to the page.
-    unsafe fn fill_bytes(&self, off: usize, len: usize, val: u8) {
-        debug_assert!(off + len <= self.page_size());
-        // SAFETY: the bounds are checked by the caller and the buffer pointer
-        // is valid for the lifetime of the page.
+    /// Bounds are checked; exclusive access is still the caller's responsibility.
+    fn fill_bytes(&self, off: usize, len: usize, val: u8) -> Result<()> {
+        self.check_range(off, len)?;
+        // SAFETY: bounds were just checked and the buffer pointer is valid for
+        // the lifetime of the page.
         unsafe {
             let ptr = self.buf_ptr().add(off);
             std::ptr::write_bytes(ptr, val, len);
         }
+        Ok(())
     }
 
     /// Copy `len` bytes from buffer offset `src` to offset `dst`.
     ///
-    /// The regions may overlap.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure both regions lie inside the page and holds
-    /// exclusive access to the page.
-    unsafe fn copy_within(&self, src: usize, dst: usize, len: usize) {
-        debug_assert!(src + len <= self.page_size());
-        debug_assert!(dst + len <= self.page_size());
-        // SAFETY: the bounds are checked by the caller and the buffer pointer
-        // is valid for the lifetime of the page.
+    /// The regions may overlap. Bounds are checked; exclusive access is still the
+    /// caller's responsibility.
+    fn copy_within(&self, src: usize, dst: usize, len: usize) -> Result<()> {
+        self.check_range(src, len)?;
+        self.check_range(dst, len)?;
+        // SAFETY: bounds were just checked and the buffer pointer is valid for
+        // the lifetime of the page.
         unsafe {
             let ptr = self.buf_ptr();
             std::ptr::copy(ptr.add(src), ptr.add(dst), len);
         }
+        Ok(())
     }
 
     /// Return an owned copy of the raw page bytes.
     pub fn data(&self) -> Vec<u8> {
-        unsafe { self.read_bytes(0, self.page_size()) }
+        self.read_bytes(0, self.page_size())
+            .expect("full-page read is always in bounds")
     }
 
     /// Consume the page and return the raw bytes.
@@ -459,7 +467,7 @@ impl Page {
 
     /// Return the parsed header.
     pub fn header(&self) -> Result<Header> {
-        let bytes = unsafe { self.read_bytes(0, HEADER_SIZE) };
+        let bytes = self.read_bytes(0, HEADER_SIZE)?;
         let mut header = Header::decode(&bytes)?;
         header.latch_word = self.latch.load(Ordering::Acquire);
         Ok(header)
@@ -469,14 +477,14 @@ impl Page {
     pub fn set_header(&self, header: &Header) {
         let mut buf = [0u8; HEADER_SIZE];
         header.encode(&mut buf);
-        unsafe {
-            self.write_bytes(0, &buf);
-        }
-        let page_bytes = unsafe { self.read_bytes(0, self.page_size()) };
+        self.write_bytes(0, &buf)
+            .expect("header write at offset 0 is always in bounds");
+        let page_bytes = self
+            .read_bytes(0, self.page_size())
+            .expect("full-page read is always in bounds");
         let sum = Self::compute_checksum(&page_bytes);
-        unsafe {
-            self.write_bytes(52, &sum.to_le_bytes());
-        }
+        self.write_bytes(52, &sum.to_le_bytes())
+            .expect("checksum write at offset 52 is always in bounds");
     }
 
     // ------------------------------------------------------------------
@@ -555,15 +563,14 @@ impl Page {
         if off + SLOT_SIZE > self.page_size() {
             return Err(Error::Corruption("slot index out of bounds".into()));
         }
-        let bytes = unsafe { self.read_bytes(off, SLOT_SIZE) };
+        let bytes = self.read_bytes(off, SLOT_SIZE)?;
         Ok(Slot::decode(&bytes))
     }
 
     pub(crate) fn write_slot(&self, idx: usize, slot: Slot) {
         let off = Self::slot_offset(idx);
-        unsafe {
-            self.write_bytes(off, &slot.encode());
-        }
+        self.write_bytes(off, &slot.encode())
+            .expect("slot write bounds checked above");
     }
 
     /// Number of slots (including deleted ones) currently in the directory.
@@ -625,9 +632,7 @@ impl Page {
         let cell_off = new_cell_start as usize;
         let mut cell_buf = vec![0u8; needed];
         write_cell_with_mvcc(&mut cell_buf, key, value, mvcc)?;
-        unsafe {
-            self.write_bytes(cell_off, &cell_buf);
-        }
+        self.write_bytes(cell_off, &cell_buf)?;
 
         // Shift slot directory to make room for the new slot.
         let slot_off = Self::slot_offset(idx);
@@ -635,9 +640,7 @@ impl Page {
         if shift_len > 0 {
             let src = slot_off;
             let dst = slot_off + SLOT_SIZE;
-            unsafe {
-                self.copy_within(src, dst, shift_len);
-            }
+            self.copy_within(src, dst, shift_len)?;
         }
         self.write_slot(
             idx,
@@ -703,7 +706,7 @@ impl Page {
         if off + len > self.page_size() {
             return Err(Error::Corruption("slot points past page end".into()));
         }
-        let bytes = unsafe { self.read_bytes(off, len) };
+        let bytes = self.read_bytes(off, len)?;
         let cell = parse_cell(&bytes)?;
         Ok(OwnedCell {
             key: cell.key.to_vec(),
@@ -745,7 +748,7 @@ impl Page {
             if !slot.is_deleted() {
                 let off = slot.offset as usize;
                 let len = slot.len as usize;
-                live.push((idx, unsafe { self.read_bytes(off, len) }));
+                live.push((idx, self.read_bytes(off, len)?));
             }
         }
 
@@ -759,17 +762,13 @@ impl Page {
         // Clear slot directory area (not strictly required, but makes torn
         // pages easier to detect).
         let slot_dir_end = HEADER_SIZE + new_header.slot_count as usize * SLOT_SIZE;
-        unsafe {
-            self.fill_bytes(HEADER_SIZE, slot_dir_end - HEADER_SIZE, 0);
-        }
+        self.fill_bytes(HEADER_SIZE, slot_dir_end - HEADER_SIZE, 0)?;
 
         for (new_idx, (_old_idx, cell_bytes)) in live.iter().enumerate().rev() {
             let len = cell_bytes.len();
             new_header.cell_start -= len as u16;
             let off = new_header.cell_start as usize;
-            unsafe {
-                self.write_bytes(off, cell_bytes);
-            }
+            self.write_bytes(off, cell_bytes)?;
             self.write_slot(
                 new_idx,
                 Slot {

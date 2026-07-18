@@ -56,6 +56,10 @@ pub enum Error {
     /// A transactional write conflicted with another committed writer.
     #[error("write conflict")]
     Conflict,
+
+    /// A lock or latch could not be acquired because of contention.
+    #[error("contention: {0}")]
+    Contention(String),
 }
 
 /// The kind of size bound that was violated.

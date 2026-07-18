@@ -103,6 +103,35 @@ impl PageGuard {
             .dirty
             .load(Ordering::Relaxed)
     }
+
+    /// Run a read-only closure on the pinned page and release the pin.
+    ///
+    /// This is the preferred pattern for short reads: the frame pin is held only
+    /// for the duration of `f`, so the page cannot be evicted while the closure
+    /// runs, but the pin is released immediately afterwards.
+    pub fn with<R>(&self, f: impl FnOnce(&Page) -> R) -> R {
+        f(self.page())
+    }
+
+    /// Run a mutating closure on the pinned page while holding its OLC write
+    /// latch, then mark the frame dirty and release the latch.
+    ///
+    /// This helper prevents the common mistake of acquiring a write guard and
+    /// forgetting to mark the frame dirty.  The closure receives a `&Page`:
+    /// `Page`'s mutation methods are `&self` and rely on the exclusive latch
+    /// held by this guard for serialisation.
+    pub fn with_mut<R>(&self, f: impl FnOnce(&Page) -> Result<R>) -> Result<R> {
+        let guard = self
+            .page
+            .try_write()
+            .ok_or_else(|| Error::Contention("could not acquire page write latch".into()))?;
+        let result = f(guard.page());
+        if result.is_ok() {
+            self.mark_dirty();
+        }
+        // `guard` is dropped here, releasing the OLC lock and bumping the version.
+        result
+    }
 }
 
 impl Drop for PageGuard {
@@ -235,6 +264,50 @@ impl BufferPool {
         self.allocator
             .with_mut(|alloc| alloc.allocate_specific(page_id));
         self.install_new_page(page_id)
+    }
+
+    /// Allocate a new page and run a read-only closure on it.
+    ///
+    /// The page pin is released as soon as the closure returns.
+    pub fn with_new_page<R>(self: &Arc<Self>, f: impl FnOnce(&Page) -> R) -> Result<R> {
+        let guard = self.new_page()?;
+        Ok(guard.with(f))
+    }
+
+    /// Allocate a new page and run a mutating closure with the OLC write latch
+    /// held.  The frame is marked dirty automatically on success.
+    pub fn with_new_page_mut<R>(self: &Arc<Self>, f: impl FnOnce(&Page) -> Result<R>) -> Result<R> {
+        let guard = self.new_page()?;
+        guard.with_mut(f)
+    }
+
+    /// Fetch or read an existing page and run a read-only closure on it.
+    ///
+    /// The frame pin is released as soon as the closure returns, so this helper
+    /// should be used for short, single-page reads where the caller does not
+    /// need to keep the page resident.
+    pub fn with_page<R>(
+        self: &Arc<Self>,
+        page_id: PageId,
+        f: impl FnOnce(&Page) -> R,
+    ) -> Result<R> {
+        let guard = self.fetch_or_read(page_id)?;
+        Ok(guard.with(f))
+    }
+
+    /// Fetch or read an existing page and run a mutating closure with the OLC
+    /// write latch held.  The frame is marked dirty automatically on success.
+    ///
+    /// This is the preferred pattern for single-page writes: it bundles pin
+    /// acquisition, exclusive latching, dirty marking, and latch release into
+    /// one call, eliminating several classes of deadlocks and TOCTOU bugs.
+    pub fn with_page_mut<R>(
+        self: &Arc<Self>,
+        page_id: PageId,
+        f: impl FnOnce(&Page) -> Result<R>,
+    ) -> Result<R> {
+        let guard = self.fetch_or_read(page_id)?;
+        guard.with_mut(f)
     }
 
     fn install_new_page(self: &Arc<Self>, page_id: PageId) -> Result<PageGuard> {
@@ -514,5 +587,90 @@ mod tests {
             cell.value.as_value_kind(),
             crate::slot::ValueKind::Inline(b"v")
         );
+    }
+
+    #[test]
+    fn with_page_reads_and_releases_pin() {
+        let (pool, _dir) = make_pool(2);
+        let id = pool
+            .with_new_page_mut(|page| {
+                page.insert(b"k", &crate::slot::ValueKind::Inline(b"v"))?;
+                Ok(page.id)
+            })
+            .unwrap();
+
+        // The pin from with_new_page_mut should be released, so the frame is
+        // evictable.  Reading back through with_page should still work.
+        let value = pool
+            .with_page(id, |page| {
+                page.get(b"k")
+                    .unwrap()
+                    .map(|c| c.value.as_value_kind().into_owned())
+            })
+            .unwrap();
+        assert_eq!(value, Some(crate::slot::OwnedValue::Inline(b"v".to_vec())));
+    }
+
+    #[test]
+    fn with_page_mut_marks_dirty_and_writes() {
+        let (pool, _dir) = make_pool(4);
+        let id = pool
+            .with_new_page_mut(|page| {
+                page.insert(b"k", &crate::slot::ValueKind::Inline(b"v1"))?;
+                Ok(page.id)
+            })
+            .unwrap();
+
+        pool.with_page_mut(id, |page| {
+            page.insert(b"k", &crate::slot::ValueKind::Inline(b"v2"))?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(pool.is_frame_dirty(id).unwrap());
+        let value = pool
+            .with_page(id, |page| {
+                page.get(b"k")
+                    .unwrap()
+                    .map(|c| c.value.as_value_kind().into_owned())
+            })
+            .unwrap();
+        assert_eq!(value, Some(crate::slot::OwnedValue::Inline(b"v2".to_vec())));
+    }
+
+    #[test]
+    fn with_page_mut_does_not_mark_dirty_on_error() {
+        let (pool, _dir) = make_pool(4);
+        let id = pool
+            .with_new_page_mut(|page| {
+                page.insert(b"k", &crate::slot::ValueKind::Inline(b"v"))?;
+                Ok(page.id)
+            })
+            .unwrap();
+
+        // Flush the page so it is clean.
+        pool.flush_all().unwrap();
+        assert!(!pool.is_frame_dirty(id).unwrap());
+
+        // Return an error from the closure: the frame should stay clean.
+        let result: Result<()> = pool.with_page_mut(id, |_page| {
+            Err(Error::Corruption("intentional test error".into()))
+        });
+        assert!(result.is_err());
+        assert!(!pool.is_frame_dirty(id).unwrap());
+    }
+
+    #[test]
+    fn guard_with_mut_marks_dirty_on_success() {
+        let (pool, _dir) = make_pool(4);
+        let guard = pool.new_page().unwrap();
+        let id = guard.page().id;
+        guard
+            .with_mut(|page| {
+                page.insert(b"k", &crate::slot::ValueKind::Inline(b"v"))?;
+                Ok(())
+            })
+            .unwrap();
+        assert!(pool.is_frame_dirty(id).unwrap());
     }
 }
