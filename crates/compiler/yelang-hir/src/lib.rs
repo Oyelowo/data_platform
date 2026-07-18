@@ -17,6 +17,7 @@ pub mod lowering;
 pub mod lowering_err;
 pub mod map;
 pub mod res;
+pub mod validate;
 pub mod visitor;
 
 pub mod lowering_body;

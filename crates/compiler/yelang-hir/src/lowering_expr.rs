@@ -10,8 +10,9 @@ use yelang_lexer::Span;
 use yelang_arena::DefId;
 
 use crate::hir::{Arm, Block, CaptureClause, Expr, FieldExpr, Stmt};
+use crate::hir_expr::{ComprehensionKind, DocumentProjection, GeneratorKind};
 use crate::hir_item::Item;
-use crate::ids::{ExprId};
+use crate::ids::{ExprId, PatId};
 use crate::lowering::LoweringContext;
 use crate::lowering_err::LoweringError;
 use crate::res::Res;
@@ -135,22 +136,15 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
                 .collect(),
             trait_def_id: None,
         },
-        AstExprKind::Try(try_expr) => {
-            // Desugar `expr?` -> match expr { Ok(v) => v, Err(e) => return Err(e) }
-            lower_try_expr(ctx, try_expr, span)
-        }
-        AstExprKind::Await(await_expr) => {
-            // Desugar `expr.await` -> match expr { Ready(v) => v, Pending => return Pending }
-            // For now, lower to a field access on the future (simplified).
-            lower_await_expr(ctx, await_expr, span)
-        }
+        AstExprKind::Try(try_expr) => Expr::Try {
+            expr: lower_expr(ctx, &try_expr.base),
+        },
+        AstExprKind::Await(await_expr) => Expr::Await {
+            expr: lower_expr(ctx, await_expr),
+        },
         AstExprKind::Async(async_expr) => {
-            // Lower async block to a closure that returns a future.
             let body = lower_block(ctx, &async_expr.block);
-            let body_expr = ctx.crate_hir.alloc_expr(
-                Expr::Block { block: body },
-                span,
-            );
+            let body_expr = ctx.crate_hir.alloc_expr(Expr::Block { block: body }, span);
             let body_id = ctx.crate_hir.alloc_body(
                 crate::hir_body::Body {
                     params: vec![],
@@ -159,15 +153,22 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
                 },
                 span,
             );
-            Expr::Closure {
-                params: vec![],
-                body: body_id,
-                capture_clause: CaptureClause::Ref,
-            }
+            Expr::Async { body: body_id }
         }
         AstExprKind::Gen(gen_expr) => {
-            let inner = lower_expr(ctx, gen_expr);
-            return inner;
+            let body_expr = lower_expr(ctx, gen_expr);
+            let body_id = ctx.crate_hir.alloc_body(
+                crate::hir_body::Body {
+                    params: vec![],
+                    value: body_expr,
+                    span,
+                },
+                span,
+            );
+            Expr::Gen {
+                kind: GeneratorKind::Gen,
+                body: body_id,
+            }
         }
         AstExprKind::Ternary(ternary) => Expr::If {
             cond: lower_expr(ctx, &ternary.condition),
@@ -175,73 +176,28 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             else_branch: Some(lower_expr(ctx, &ternary.if_false)),
         },
         AstExprKind::Grouped(grouped) => return lower_expr(ctx, &grouped.expr),
-        AstExprKind::TypeAscription(asc) => {
-            // Type ascription is a no-op in HIR; just lower the expression.
-            return lower_expr(ctx, &asc.expr);
-        }
-        AstExprKind::IsType(is_type) => {
-            // `expr is Type` -> desugar to a type check intrinsic.
-            // For now, lower as a call to a builtin.
-            let func = ctx.crate_hir.alloc_expr(
-                Expr::Path { res: Res::Err },
-                span,
-            );
-            Expr::Call {
-                func,
-                args: vec![lower_expr(ctx, &is_type.expr)],
-            }
-        }
-        AstExprKind::AssignOp(assign) => {
-            // Desugar `a += b` -> `a = a + b`
-            let bin_op = assign_op_kind_to_bin_op(&assign.op);
-            let target = lower_expr(ctx, &assign.target);
-            let value = lower_expr(ctx, &assign.value);
-            let bin_expr = ctx.crate_hir.alloc_expr(
-                Expr::Binary {
-                    op: bin_op,
-                    left: target,
-                    right: value,
-                },
-                span,
-            );
-            Expr::Assign {
-                left: target,
-                right: bin_expr,
-            }
-        }
+        AstExprKind::TypeAscription(asc) => Expr::TypeAscription {
+            expr: lower_expr(ctx, &asc.expr),
+            ty: crate::lowering_ty::lower_ty(ctx, &asc.ty),
+        },
+        AstExprKind::IsType(is_type) => Expr::IsType {
+            expr: lower_expr(ctx, &is_type.expr),
+            ty: crate::lowering_ty::lower_ty(ctx, &is_type.ty),
+        },
+        AstExprKind::AssignOp(assign) => Expr::AssignOp {
+            op: assign.op.clone(),
+            left: lower_expr(ctx, &assign.target),
+            right: lower_expr(ctx, &assign.value),
+        },
         AstExprKind::DestructureAssign(assign) => {
-            // Desugar destructuring assignment into a let + assign.
-            // For now, lower as a simple assignment (best effort).
-            let left = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
-            Expr::Assign {
-                left,
-                right: lower_expr(ctx, &assign.value),
-            }
+            lower_destructure_assign_expr(ctx, assign, span)
         }
-        AstExprKind::Range(range) => {
-            // Desugar range to a call to a synthetic range constructor.
-            let func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
-            let start = range
-                .start
-                .as_ref()
-                .map(|e| lower_expr(ctx, e))
-                .unwrap_or_else(|| {
-                    ctx.crate_hir.alloc_expr(Expr::Tuple { exprs: vec![] }, span)
-                });
-            let end = range
-                .end
-                .as_ref()
-                .map(|e| lower_expr(ctx, e))
-                .unwrap_or_else(|| {
-                    ctx.crate_hir.alloc_expr(Expr::Tuple { exprs: vec![] }, span)
-                });
-            Expr::Call {
-                func,
-                args: vec![start, end],
-            }
-        }
+        AstExprKind::Range(range) => Expr::Range {
+            start: range.start.as_ref().map(|e| lower_expr(ctx, e)),
+            end: range.end.as_ref().map(|e| lower_expr(ctx, e)),
+            inclusive: range.op.is_inclusive(),
+        },
         AstExprKind::Object(obj) => {
-            // Lower object literal to a struct literal with an anonymous type.
             let fields: Vec<FieldExpr> = obj
                 .fields()
                 .iter()
@@ -251,26 +207,35 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
                     span: f.value().span,
                 })
                 .collect();
-            Expr::Struct {
-                path: Res::Err,
-                fields,
-                rest: None,
-            }
+            Expr::Object { fields }
         }
         AstExprKind::DocumentAccess(doc) => {
-            // Lower to a call expression.
-            let func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
-            Expr::Call {
-                func,
-                args: vec![lower_expr(ctx, doc.base())],
+            let projection = doc
+                .fields()
+                .iter()
+                .map(|f| match f {
+                    yelang_ast::DocumentField::KeyOnly(ko) => DocumentProjection::Field {
+                        name: ko.key,
+                        value: None,
+                    },
+                    yelang_ast::DocumentField::KeyVal(kv) => DocumentProjection::Field {
+                        name: kv.key,
+                        value: Some(lower_expr(ctx, &kv.value)),
+                    },
+                    yelang_ast::DocumentField::Spread(s) => DocumentProjection::Spread(lower_expr(ctx, &s.expr)),
+                })
+                .collect();
+            Expr::DocumentAccess {
+                base: lower_expr(ctx, doc.base()),
+                projection,
             }
         }
-        AstExprKind::BindAt(bind) => {
-            // Lower to a field access.
-            Expr::Field {
-                expr: lower_expr(ctx, &bind.base),
-                field: bind.at.clone(),
-            }
+        AstExprKind::BindAt(_bind) => {
+            ctx.error(LoweringError::UnsupportedAst {
+                kind: "bind-at expression (use it in pattern position instead)".to_string(),
+                span,
+            });
+            Expr::Err
         }
         AstExprKind::Query(_query) => {
             ctx.error(LoweringError::UnsupportedAst {
@@ -280,18 +245,24 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             Expr::Err
         }
         AstExprKind::Comprehension(comp) => {
-            // Lower list comprehension to a desugared loop.
             lower_comprehension_expr(ctx, comp, span)
         }
-        AstExprKind::Err => Expr::Err,
-        AstExprKind::Dummy => Expr::Err,
-        _ => {
+        AstExprKind::InterpolatedString(_parts) => {
             ctx.error(LoweringError::UnsupportedAst {
-                kind: format!("expression kind {:?}", std::mem::discriminant(&expr.kind)),
+                kind: "interpolated string".to_string(),
                 span,
             });
             Expr::Err
         }
+        AstExprKind::Underscore => {
+            ctx.error(LoweringError::UnsupportedAst {
+                kind: "underscore expression".to_string(),
+                span,
+            });
+            Expr::Err
+        }
+        AstExprKind::Err => Expr::Err,
+        AstExprKind::Dummy => Expr::Err,
     };
 
     ctx.crate_hir.alloc_expr(kind, span)
@@ -323,6 +294,13 @@ pub(crate) fn resolve_ast_path(ctx: &mut LoweringContext, path: &yelang_ast::Pat
         return Res::Def { def_id };
     }
 
+    ctx.error(LoweringError::UnresolvedName {
+        name: path
+            .standalone_ident()
+            .map(|i| i.symbol)
+            .unwrap_or_else(|| yelang_interner::Symbol::from(0u32)),
+        span: path.span,
+    });
     Res::Err
 }
 
@@ -495,6 +473,7 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                     .unwrap_or_else(|| Item {
                         def_id,
                         ident: yelang_ast::Ident::new(yelang_interner::Symbol::from(0u32), span),
+                        attrs: vec![],
                         kind: crate::hir::ItemKind::Mod { items: vec![] },
                         vis: yelang_ast::Visibility::Private,
                         span,
@@ -748,134 +727,38 @@ fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr)
     }
 }
 
-/// Desugar `expr?` into a match expression.
-fn lower_try_expr(
+/// Lower a destructuring assignment `pattern = value`.
+fn lower_destructure_assign_expr(
     ctx: &mut LoweringContext,
-    try_expr: &yelang_ast::TrySafeAccess,
-    span: Span,
+    assign: &yelang_ast::DestructureAssignExpr,
+    _span: Span,
 ) -> Expr {
-    let base = lower_expr(ctx, &try_expr.base);
-    // match base { Ok(v) => v, Err(e) => return Err(e) }
-    let ok_inner = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::Binding {
-            mode: crate::hir_pat::BindingMode::ByValue,
-            name: yelang_interner::Symbol::from(0u32),
-            subpat: None,
-        },
-        span,
-    );
-    let ok_pat = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::TupleStruct {
-            res: Res::Err,
-            pats: vec![ok_inner],
-        },
-        span,
-    );
-    let err_inner = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::Binding {
-            mode: crate::hir_pat::BindingMode::ByValue,
-            name: yelang_interner::Symbol::from(1u32),
-            subpat: None,
-        },
-        span,
-    );
-    let err_pat = ctx.crate_hir.alloc_pat(
-        crate::hir_pat::Pat::TupleStruct {
-            res: Res::Err,
-            pats: vec![err_inner],
-        },
-        span,
-    );
-    let ok_body = ctx.crate_hir.alloc_expr(
-        Expr::Path {
-            res: Res::Local { pat_id: ok_inner },
-        },
-        span,
-    );
-    let err_arg = ctx.crate_hir.alloc_expr(
-        Expr::Path {
-            res: Res::Local { pat_id: err_inner },
-        },
-        span,
-    );
-    let err_func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
-    let err_call = ctx.crate_hir.alloc_expr(
-        Expr::Call {
-            func: err_func,
-            args: vec![err_arg],
-        },
-        span,
-    );
-    let err_body = ctx.crate_hir.alloc_expr(
-        Expr::Return {
-            expr: Some(err_call),
-        },
-        span,
-    );
-    Expr::Match {
-        expr: base,
-        arms: vec![
-            Arm {
-                pat: ok_pat,
-                guard: None,
-                body: ok_body,
-                span,
-            },
-            Arm {
-                pat: err_pat,
-                guard: None,
-                body: err_body,
-                span,
-            },
-        ],
-    }
+    let pat = crate::lowering_pat::lower_pat(ctx, &assign.pattern);
+    let value = lower_expr(ctx, &assign.value);
+    Expr::DestructureAssign { pat, value }
 }
 
-/// Desugar `expr.await` into a match expression.
-fn lower_await_expr(ctx: &mut LoweringContext, expr: &yelang_ast::Expr, _span: Span) -> Expr {
-    let base = lower_expr(ctx, expr);
-    // Simplified: just return the base expression.
-    // In a full implementation this would desugar to poll-based logic.
-    ctx.crate_hir
-        .exprs
-        .get(base)
-        .cloned()
-        .expect("await base expression")
-}
-
-/// Desugar list comprehension into a loop that builds a vector.
+/// Lower a list/set/dict comprehension into a structured HIR node.
 fn lower_comprehension_expr(
     ctx: &mut LoweringContext,
     comp: &yelang_ast::ComprehensionExpr,
-    span: Span,
+    _span: Span,
 ) -> Expr {
-    // For MVP, lower to a call to a builtin collector function.
     let element = lower_expr(ctx, &comp.element);
-    let sources: Vec<ExprId> = comp
+    let variables: Vec<(PatId, ExprId)> = comp
         .variables
         .iter()
-        .map(|v| lower_expr(ctx, &v.source))
+        .map(|v| {
+            let pat = crate::lowering_pat::lower_pat(ctx, &v.pattern);
+            let source = lower_expr(ctx, &v.source);
+            (pat, source)
+        })
         .collect();
-    let func = ctx.crate_hir.alloc_expr(Expr::Path { res: Res::Err }, span);
-    Expr::Call {
-        func,
-        args: std::iter::once(element).chain(sources).collect(),
-    }
-}
-
-/// Map an AST assignment operator kind to the corresponding binary operator.
-fn assign_op_kind_to_bin_op(kind: &yelang_ast::AssignOpKind) -> yelang_ast::BinaryOp {
-    use yelang_ast::{AssignOpKind, BinaryOp};
-    match kind {
-        AssignOpKind::AddEq => BinaryOp::Add,
-        AssignOpKind::SubEq => BinaryOp::Subtract,
-        AssignOpKind::MulEq => BinaryOp::Multiply,
-        AssignOpKind::DivEq => BinaryOp::Divide,
-        AssignOpKind::ModEq => BinaryOp::Modulo,
-        AssignOpKind::BitAndEq => BinaryOp::BitAnd,
-        AssignOpKind::BitOrEq => BinaryOp::BitOr,
-        AssignOpKind::BitXorEq => BinaryOp::BitXor,
-        AssignOpKind::BitShlEq => BinaryOp::Shl,
-        AssignOpKind::BitShrEq => BinaryOp::Shr,
+    let condition = comp.condition.as_ref().map(|e| lower_expr(ctx, e));
+    Expr::Comprehension {
+        kind: ComprehensionKind::List,
+        element,
+        variables,
+        condition,
     }
 }

@@ -167,7 +167,6 @@ pub(crate) fn item_kind_name(kind: &ItemKind) -> &'static str {
         ItemKind::Fn { .. } => "function",
         ItemKind::Struct { .. } => "struct",
         ItemKind::Enum { .. } => "enum",
-        ItemKind::Union { .. } => "union",
         ItemKind::Trait { .. } => "trait",
         ItemKind::Impl { .. } => "impl",
         ItemKind::TyAlias { .. } => "type alias",

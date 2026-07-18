@@ -4,7 +4,7 @@
  * within a function body.
  */
 
-use yelang_ast::BinaryOp;
+use yelang_ast::{AssignOpKind, BinaryOp};
 use yelang_hir::hir::{Arm, Block, Expr, FieldExpr, Stmt};
 use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use yelang_hir::res::Res;
@@ -91,6 +91,68 @@ fn check_expr_value<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: &Expr, _expr_id: ExprId)
         Expr::Tuple { exprs } => check_tuple(fcx, exprs),
         Expr::Array { exprs } => check_array(fcx, exprs),
         Expr::Cast { expr, ty } => check_cast(fcx, *expr, *ty),
+        Expr::AssignOp { left, right, op } => check_assign_op(fcx, op.clone(), *left, *right),
+        Expr::DestructureAssign { pat, value } => {
+            let value_ty = check_expr(fcx, *value);
+            crate::pat::check_pat(fcx, *pat, value_ty);
+            fcx.mk_unit()
+        }
+        Expr::Range { start, end, .. } => check_range(fcx, *start, *end),
+        Expr::Object { fields } => check_object_literal(fcx, fields),
+        Expr::IsType { expr: inner, ty } => {
+            check_expr(fcx, *inner);
+            lower_hir_ty_id(fcx, *ty)
+        }
+        Expr::TypeAscription { expr: inner, ty } => {
+            let ascribed = lower_hir_ty_id(fcx, *ty);
+            let expr_ty = check_expr(fcx, *inner);
+            let _ = fcx.eq(expr_ty, ascribed);
+            ascribed
+        }
+        Expr::Try { expr: inner } => check_try(fcx, *inner),
+        Expr::Await { expr: inner } => {
+            check_expr(fcx, *inner);
+            fcx.new_ty_var()
+        }
+        Expr::Async { body } => {
+            check_body(fcx, *body);
+            fcx.new_ty_var()
+        }
+        Expr::Gen { body, .. } => {
+            check_body(fcx, *body);
+            fcx.new_ty_var()
+        }
+        Expr::DocumentAccess { base, projection } => {
+            check_expr(fcx, *base);
+            for proj in projection {
+                match proj {
+                    yelang_hir::hir_expr::DocumentProjection::Field { value, .. } => {
+                        if let Some(e) = value {
+                            check_expr(fcx, *e);
+                        }
+                    }
+                    yelang_hir::hir_expr::DocumentProjection::Spread(e) => {
+                        check_expr(fcx, *e);
+                    }
+                }
+            }
+            fcx.new_ty_var()
+        }
+        Expr::Comprehension {
+            element,
+            variables,
+            condition,
+            ..
+        } => {
+            for (_pat, source) in variables {
+                check_expr(fcx, *source);
+            }
+            check_expr(fcx, *element);
+            if let Some(cond) = condition {
+                check_expr(fcx, *cond);
+            }
+            fcx.new_ty_var()
+        }
         Expr::Err => fcx.mk_error(),
     }
 }
@@ -696,4 +758,85 @@ fn lower_hir_ty_id<'tcx>(fcx: &mut FnCtxt<'tcx>, ty_id: TyId) -> Ty<'tcx> {
         .expect("TyId should be valid")
         .clone();
     lower_hir_ty(&hir_ty, fcx)
+}
+
+// ---------------------------------------------------------------------------
+// Assign-op, range, object, try
+// ---------------------------------------------------------------------------
+
+fn check_assign_op<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    op: AssignOpKind,
+    left: ExprId,
+    right: ExprId,
+) -> Ty<'tcx> {
+    let bin_op = assign_op_to_bin_op(op);
+    let left_ty = check_expr(fcx, left);
+    let right_ty = check_expr(fcx, right);
+
+    // Assignment operators only map to arithmetic and bitwise binary ops.
+    // The result of the underlying operation must be assignable back to `left`.
+    match bin_op {
+        BinaryOp::Add
+        | BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Modulo
+        | BinaryOp::BitAnd
+        | BinaryOp::BitOr
+        | BinaryOp::BitXor
+        | BinaryOp::Shl
+        | BinaryOp::Shr => {
+            let _ = fcx.eq(left_ty, right_ty);
+        }
+        _ => unreachable!("assignment operators cannot map to {bin_op:?}"),
+    }
+
+    fcx.mk_unit()
+}
+
+fn assign_op_to_bin_op(op: AssignOpKind) -> BinaryOp {
+    use yelang_ast::BinaryOp;
+    match op {
+        AssignOpKind::AddEq => BinaryOp::Add,
+        AssignOpKind::SubEq => BinaryOp::Subtract,
+        AssignOpKind::MulEq => BinaryOp::Multiply,
+        AssignOpKind::DivEq => BinaryOp::Divide,
+        AssignOpKind::ModEq => BinaryOp::Modulo,
+        AssignOpKind::BitAndEq => BinaryOp::BitAnd,
+        AssignOpKind::BitOrEq => BinaryOp::BitOr,
+        AssignOpKind::BitXorEq => BinaryOp::BitXor,
+        AssignOpKind::BitShlEq => BinaryOp::Shl,
+        AssignOpKind::BitShrEq => BinaryOp::Shr,
+    }
+}
+
+fn check_range<'tcx>(
+    fcx: &mut FnCtxt<'tcx>,
+    start: Option<ExprId>,
+    end: Option<ExprId>,
+) -> Ty<'tcx> {
+    if let Some(e) = start {
+        let _ = check_expr(fcx, e);
+    }
+    if let Some(e) = end {
+        let _ = check_expr(fcx, e);
+    }
+    // Range type is language-defined; return a fresh variable until the
+    // standard library Range type is wired up.
+    fcx.new_ty_var()
+}
+
+fn check_object_literal<'tcx>(fcx: &mut FnCtxt<'tcx>, fields: &[FieldExpr]) -> Ty<'tcx> {
+    for field in fields {
+        let _ = check_expr(fcx, field.expr);
+    }
+    fcx.new_ty_var()
+}
+
+fn check_try<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: ExprId) -> Ty<'tcx> {
+    let inner_ty = check_expr(fcx, expr);
+    // `expr?` unwraps the inner Ok/Some value. Until Result is modeled,
+    // return the inner type and let inference sort it out.
+    inner_ty
 }

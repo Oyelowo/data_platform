@@ -5,8 +5,9 @@ use yelang_lexer::Span;
 
 use crate::hir::FnSig;
 use crate::hir::Lit;
-use crate::ids::TyId;
+use crate::ids::{BodyId, ExprId, TyId};
 use crate::res::Res;
+use yelang_ast::Ident;
 
 /// Kinds of types.
 #[derive(Debug, Clone)]
@@ -15,8 +16,8 @@ pub enum Ty {
     ///
     /// Examples:
     /// - `i32` -> `Path { res: PrimTy(Int(I32)), args: [] }`
-    /// - `Vec<T>` -> `Path { res: Def(Vec), args: [T] }`
-    Path { res: Res, args: Vec<TyId> },
+    /// - `Vec<T>` -> `Path { res: Def(Vec), args: [Type(T)] }`
+    Path { res: Res, args: Vec<GenericArg> },
     /// Tuple type: `(i32, bool)`
     Tuple { tys: Vec<TyId> },
     /// Array type: `[T; N]`
@@ -31,6 +32,8 @@ pub enum Ty {
     TypeLit { variants: Vec<Lit> },
     /// Utility type: `Omit<T, K>`
     Utility { kind: UtilityKind, args: Vec<TyId> },
+    /// `typeof expr` type.
+    TypeOf { expr: ExprId },
     /// Reference: `&T` or `&mut T`
     Ref {
         mutability: yelang_ast::Mutability,
@@ -52,10 +55,25 @@ pub enum Ty {
     ImplTrait { path: Res },
     /// `dyn Trait` trait object type.
     DynTrait { path: Res },
+    /// The never type `!`.
+    Never,
     /// Type inference variable.
     Infer,
+    /// A type that was omitted in source (e.g. un-annotated let) and must be inferred.
+    Missing,
     /// Error recovery.
     Err,
+}
+
+/// A generic argument in a path.
+#[derive(Debug, Clone)]
+pub enum GenericArg {
+    /// Type argument: `T` in `Vec<T>`.
+    Type(TyId),
+    /// Const argument: `N` in `[T; N]` or `Foo<N>`.
+    Const(Const),
+    /// Associated type binding: `Item = i32`.
+    AssocBinding { name: Ident, ty: TyId },
 }
 
 /// A field in an anonymous struct type.
@@ -76,7 +94,7 @@ pub enum UtilityKind {
     Required,
 }
 
-/// A type-level constant (used for array lengths).
+/// A type-level constant (used for array lengths, enum discriminants, and const generics).
 #[derive(Debug, Clone)]
 pub struct Const {
     pub kind: ConstKind,
@@ -86,6 +104,11 @@ pub struct Const {
 /// Kinds of type-level constants.
 #[derive(Debug, Clone)]
 pub enum ConstKind {
+    /// A literal constant, e.g. `42` or `"foo"`.
     Lit { lit: Lit },
+    /// A constant expression that must be evaluated by const-eval.
+    /// The body has no parameters.
+    Expr { body: BodyId },
+    /// Error recovery.
     Err,
 }

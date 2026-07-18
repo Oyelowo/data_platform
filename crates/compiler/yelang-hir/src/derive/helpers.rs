@@ -347,6 +347,7 @@ pub fn method_impl_item(
     ImplItem {
         ident: ident(ctx, name),
         kind: ImplItemKind::Fn { sig, body: body_id },
+        attrs: vec![],
         span: ctx.derive_span,
         defaultness: crate::hir::Defaultness::Final,
     }
@@ -363,6 +364,7 @@ pub fn impl_item(
     Item {
         def_id,
         ident: ident(ctx, "<derived impl>"),
+        attrs: vec![],
         kind: ItemKind::Impl {
             items,
             generics: crate::hir::Generics {
@@ -371,6 +373,7 @@ pub fn impl_item(
                 span: ctx.derive_span,
             },
             self_ty,
+            polarity: crate::hir::ImplPolarity::Positive,
             of_trait: Some(TraitRef {
                 path: Res::Def {
                     def_id: trait_def_id,

@@ -100,6 +100,15 @@ pub fn check_pat<'tcx>(fcx: &mut FnCtxt<'tcx>, pat_id: PatId, expected_ty: Ty<'t
             }
             fcx.record_pat_ty(pat_id, expected_ty);
         }
+        Pat::Ref { pat, .. } => {
+            // TODO: check that expected_ty is a reference and deref for inner check
+            check_pat(fcx, *pat, expected_ty);
+            fcx.record_pat_ty(pat_id, expected_ty);
+        }
+        Pat::Rest { .. } => {
+            // Rest pattern does not bind a value on its own.
+            fcx.record_pat_ty(pat_id, expected_ty);
+        }
         Pat::Err => {
             fcx.record_pat_ty(pat_id, fcx.mk_error());
         }

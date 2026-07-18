@@ -1,11 +1,20 @@
 //! Expressions in HIR.
 
-use yelang_ast::{Ident, Label};
+use yelang_ast::{AssignOpKind, Ident, Label};
 
 use crate::hir::{Arm, Block, CaptureClause, FieldExpr, Lit};
 use crate::hir_body::Param;
 use crate::ids::{BodyId, ExprId, PatId, TyId};
 use crate::res::Res;
+
+/// Kind of generator expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeneratorKind {
+    /// `gen { }` — a sync generator.
+    Gen,
+    /// `gen async { }` — an async generator.
+    AsyncGen,
+}
 
 /// Kinds of expressions.
 /// All syntax sugar (`for`, `while`, `?`, `async`) has been desugared.
@@ -82,6 +91,52 @@ pub enum Expr {
     Cast { expr: ExprId, ty: TyId },
     /// Let expression (used inside `if let`).
     Let { pat: PatId, expr: ExprId },
+    /// Compound assignment: `a += b`.
+    AssignOp { op: AssignOpKind, left: ExprId, right: ExprId },
+    /// Destructuring assignment: `(a, b) = value`.
+    DestructureAssign { pat: PatId, value: ExprId },
+    /// Range expression: `1..10`, `1..=10`, `..`, `..5`, `5..`.
+    Range { start: Option<ExprId>, end: Option<ExprId>, inclusive: bool },
+    /// Object literal: `{ x: 1, y: 2 }`.
+    Object { fields: Vec<FieldExpr> },
+    /// `expr is Type` type test.
+    IsType { expr: ExprId, ty: TyId },
+    /// `expr?` — try operator (desugared, but kept as a node for clarity).
+    Try { expr: ExprId },
+    /// `expr.await`.
+    Await { expr: ExprId },
+    /// `async { ... }` block.
+    Async { body: BodyId },
+    /// `gen { ... }` or `gen async { ... }`.
+    Gen { kind: GeneratorKind, body: BodyId },
+    /// Type ascription: `expr: Type`.
+    TypeAscription { expr: ExprId, ty: TyId },
+    /// Document/JSON access: `doc.name` or `doc["name"]`.
+    DocumentAccess { base: ExprId, projection: Vec<DocumentProjection> },
+    /// List/set/dict comprehension.
+    Comprehension {
+        kind: ComprehensionKind,
+        element: ExprId,
+        variables: Vec<(PatId, ExprId)>,
+        condition: Option<ExprId>,
+    },
     /// Error recovery.
     Err,
+}
+
+/// A single projection step in a document access (`doc.{ ... }`).
+#[derive(Debug, Clone)]
+pub enum DocumentProjection {
+    /// Select or rename a field: `doc.{ name }`, `doc.{ name: expr }`.
+    Field { name: Ident, value: Option<ExprId> },
+    /// Spread another document/struct: `doc.{ ...expr }`.
+    Spread(ExprId),
+}
+
+/// Kind of comprehension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComprehensionKind {
+    List,
+    Set,
+    Dict,
 }

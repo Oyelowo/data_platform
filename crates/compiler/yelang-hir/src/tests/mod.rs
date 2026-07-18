@@ -17,4 +17,6 @@ mod storage_tests;
 #[cfg(test)]
 mod types;
 #[cfg(test)]
+mod validate;
+#[cfg(test)]
 mod visitor;

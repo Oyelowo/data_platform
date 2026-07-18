@@ -369,8 +369,7 @@ fn lower_never_type() {
 
     let sig = get_fn_sig(&crate_hir);
     let ty = crate_hir.tys.get(sig.output).unwrap();
-    // Never is lowered to empty tuple for now
-    assert!(matches!(ty, Ty::Tuple { .. }));
+    assert!(matches!(ty, Ty::Never));
 }
 
 // ---------------------------------------------------------------------------

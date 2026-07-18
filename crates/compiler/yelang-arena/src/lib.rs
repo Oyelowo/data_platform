@@ -8,7 +8,7 @@
 
 mod arena;
 mod id;
-mod index_vec;
+pub mod index_vec;
 mod map;
 mod set;
 

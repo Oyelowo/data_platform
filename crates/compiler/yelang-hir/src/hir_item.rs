@@ -16,6 +16,7 @@ pub struct Item {
     pub ident: Ident,
     pub kind: ItemKind,
     pub vis: Visibility,
+    pub attrs: Vec<crate::hir::Attribute>,
     pub span: Span,
 }
 
@@ -35,15 +36,11 @@ pub enum ItemKind {
     },
     /// Enum definition.
     Enum { def: EnumDef, generics: Generics },
-    /// Union definition.
-    Union {
-        data: VariantData,
-        generics: Generics,
-    },
     /// Trait definition.
     Trait {
         items: Vec<crate::hir::TraitItem>,
         generics: Generics,
+        super_traits: Vec<crate::hir::TraitRef>,
     },
     /// Impl block.
     Impl {
@@ -51,6 +48,7 @@ pub enum ItemKind {
         generics: Generics,
         self_ty: TyId,
         of_trait: Option<crate::hir::TraitRef>,
+        polarity: crate::hir::ImplPolarity,
     },
     /// Type alias.
     TyAlias { ty: TyId, generics: Generics },

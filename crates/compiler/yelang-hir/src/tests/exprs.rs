@@ -442,8 +442,7 @@ fn lower_await_expr() {
         panic!("expected block")
     };
     let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
-    // Await is currently lowered as the base expression (simplified desugaring).
-    assert!(matches!(tail, Expr::Call { .. }));
+    assert!(matches!(tail, Expr::Await { .. }));
 }
 
 #[test]
@@ -457,8 +456,7 @@ fn lower_try_expr() {
         panic!("expected block")
     };
     let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
-    // Try is desugared to match
-    assert!(matches!(tail, Expr::Match { .. }));
+    assert!(matches!(tail, Expr::Try { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -476,8 +474,7 @@ fn lower_range_expr() {
         panic!("expected block")
     };
     let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
-    // Range is desugared to a Call to a synthetic range constructor.
-    assert!(matches!(tail, Expr::Call { .. }));
+    assert!(matches!(tail, Expr::Range { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -509,8 +506,7 @@ fn lower_compound_assign_expr() {
         panic!("expected block")
     };
     let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
-    // Compound assign is desugared to binary + assign
-    assert!(matches!(tail, Expr::Assign { .. }));
+    assert!(matches!(tail, Expr::AssignOp { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -529,6 +525,130 @@ fn lower_block_expr() {
     };
     let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
     assert!(matches!(tail, Expr::Block { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Object, type tests, and ascriptions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_object_literal_expr() {
+    let src = "fn main() { { x: 1, y: 2 } }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Object { .. }));
+}
+
+#[test]
+fn lower_is_type_expr() {
+    let src = "fn main() { 1 is i32 }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::IsType { .. }));
+}
+
+#[test]
+fn lower_type_ascription_expr() {
+    let src = "fn main() { 1: i32 }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::TypeAscription { .. }));
+}
+
+#[test]
+fn lower_destructure_assign_expr() {
+    let src = "fn main() { (a, b) = (1, 2) }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::DestructureAssign { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Async / Gen
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_async_block_expr() {
+    let src = "fn main() { async { 1 } }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Async { .. }));
+}
+
+#[test]
+fn lower_gen_block_expr() {
+    let src = "fn main() { gen { 1 } }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Gen { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Document access and comprehensions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lower_document_access_expr() {
+    let src = "fn main() { doc.{name, age: 1} }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::DocumentAccess { .. }));
+}
+
+#[test]
+fn lower_comprehension_expr() {
+    let src = "fn main() { [x for x in xs] }";
+    let (program, interner) = parse_program(src);
+    let crate_hir = lower_crate(&program, &stub_resolved(), &interner);
+
+    let expr = get_body_expr(&crate_hir);
+    let Expr::Block { block, .. } = expr else {
+        panic!("expected block")
+    };
+    let tail = crate_hir.exprs.get(block.expr.expect("expected tail expr")).unwrap();
+    assert!(matches!(tail, Expr::Comprehension { .. }));
 }
 
 // ---------------------------------------------------------------------------

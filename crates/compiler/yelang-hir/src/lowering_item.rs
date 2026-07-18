@@ -6,8 +6,8 @@ use yelang_ast::{
 };
 
 use crate::hir::{
-    EnumDef, FieldDef, FnSig, GenericParam, Generics, Item, ItemKind, StructField,
-    VariantData, VariantDef, Visibility, WhereClause, WherePredicate,
+    EnumDef, FieldDef, FnSig, GenericParam, Generics, ImplPolarity, Item, ItemKind, StructField,
+    UseKind, UsePath, VariantData, VariantDef, Visibility, WhereClause, WherePredicate,
 };
 use crate::ids::{DefId, TyId};
 use crate::lowering::LoweringContext;
@@ -52,6 +52,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         },
         kind,
         vis: item.visibility.clone(),
+        attrs: item.attributes.clone(),
         span: item.span,
     };
 
@@ -66,7 +67,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
 }
 
 fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> ItemKind {
-    let sig = lower_fn_sig(ctx, &f.sig);
+    let sig = lower_fn_sig(ctx, &f.sig, f.is_const);
     let body_id = crate::lowering_body::lower_block_as_body(ctx, &f.body, &sig.inputs);
 
     ItemKind::Fn {
@@ -76,7 +77,7 @@ fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> Ite
     }
 }
 
-fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig) -> FnSig {
+fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bool) -> FnSig {
     let inputs: Vec<TyId> = sig
         .params
         .iter()
@@ -94,7 +95,7 @@ fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig) -> FnSig {
         inputs,
         output,
         is_async: sig.is_async,
-        is_const: false,
+        is_const,
         is_variadic: sig.is_variadic,
         abi: sig.abi.clone(),
         bound_vars: vec![],
@@ -111,6 +112,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
                     ty: crate::lowering_ty::lower_ty(ctx, &f.ty),
                     span: f.span,
                     vis: f.visibility.clone(),
+                    attrs: f.attributes.clone(),
                 })
                 .collect(),
         },
@@ -121,6 +123,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
                     ty: crate::lowering_ty::lower_ty(ctx, ty),
                     span: ty.span,
                     vis: Visibility::Private,
+                    attrs: vec![],
                 })
                 .collect(),
         },
@@ -134,6 +137,7 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
 }
 
 fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> ItemKind {
+    let mut next_discriminant: u128 = 0;
     let variants: Vec<VariantDef> = e
         .variants
         .iter()
@@ -147,6 +151,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                             ty: crate::lowering_ty::lower_ty(ctx, ty),
                             span: ty.span,
                             vis: Visibility::Private,
+                            attrs: vec![],
                         })
                         .collect(),
                 },
@@ -158,22 +163,25 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                             ty: crate::lowering_ty::lower_ty(ctx, &f.ty),
                             span: f.span,
                             vis: f.visibility.clone(),
+                            attrs: f.attributes.clone(),
                         })
                         .collect(),
                 },
             };
+            let discriminant = match &v.discriminant {
+                Some(expr) => {
+                    next_discriminant = explicit_discriminant_value(ctx, expr)
+                        .map(|v| v.saturating_add(1))
+                        .unwrap_or(0);
+                    crate::lowering_ty::lower_const_expr(ctx, expr, expr.span)
+                }
+                None => make_implicit_discriminant(ctx, v.span, &mut next_discriminant),
+            };
             VariantDef {
                 ident: v.name,
                 data,
-                discriminant: v.discriminant.as_ref().map(|expr| crate::hir_ty::Const {
-                    kind: crate::hir_ty::ConstKind::Lit {
-                        lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
-                            value: yelang_interner::Symbol::from(0u32),
-                            suffix: None,
-                        }),
-                    },
-                    span: expr.span,
-                }),
+                discriminant: Some(discriminant),
+                attrs: v.attributes.clone(),
                 span: v.span,
             }
         })
@@ -185,6 +193,41 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
             span: e.name.span,
         },
         generics: lower_generics(ctx, &e.generics),
+    }
+}
+
+/// Try to extract an integer value from an explicit discriminant expression so
+/// that subsequent implicit discriminants can be inferred sequentially.
+fn explicit_discriminant_value(
+    ctx: &LoweringContext,
+    expr: &yelang_ast::Expr,
+) -> Option<u128> {
+    match &expr.kind {
+        yelang_ast::ExprKind::Literal(yelang_ast::Literal::Int(lit)) => {
+            ctx.interner.resolve(&lit.value).parse().ok()
+        }
+        _ => None,
+    }
+}
+
+/// Build an implicit enum discriminant as a literal integer constant and bump
+/// the running counter.
+fn make_implicit_discriminant(
+    ctx: &mut LoweringContext,
+    span: yelang_lexer::Span,
+    next: &mut u128,
+) -> crate::hir_ty::Const {
+    let value = *next;
+    *next = next.saturating_add(1);
+    let sym = ctx.interner.get_or_intern(&value.to_string());
+    crate::hir_ty::Const {
+        kind: crate::hir_ty::ConstKind::Lit {
+            lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
+                value: sym,
+                suffix: None,
+            }),
+        },
+        span,
     }
 }
 
@@ -202,7 +245,7 @@ fn lower_trait_item(
         .map(|item| {
             let kind = match &item.item {
                 yelang_ast::TraitItemKind::Method(m) => crate::hir::TraitItemKind::Fn {
-                    sig: lower_fn_sig(ctx, &m.sig),
+                    sig: lower_fn_sig(ctx, &m.sig, m.is_const),
                     default: m
                         .body
                         .as_ref()
@@ -235,6 +278,7 @@ fn lower_trait_item(
             crate::hir::TraitItem {
                 ident,
                 kind,
+                attrs: item.attributes.clone(),
                 span: item.span,
             }
         })
@@ -242,9 +286,31 @@ fn lower_trait_item(
 
     ctx.self_type = prev_self_type;
 
+    let generics = lower_generics(ctx, &t.generics);
+    let super_traits: Vec<crate::hir::TraitRef> = t
+        .super_traits
+        .iter()
+        .map(|b| crate::hir::TraitRef {
+            path: crate::lowering_ty::lower_trait_bound(ctx, b).path,
+            span: b.span,
+        })
+        .collect();
+
+    ctx.crate_hir.traits.insert(
+        def_id,
+        Some(crate::hir::Trait {
+            name: t.name,
+            generics: generics.clone(),
+            super_traits: super_traits.clone(),
+            items: items.clone(),
+            span: t.span,
+        }),
+    );
+
     ItemKind::Trait {
         items,
-        generics: lower_generics(ctx, &t.generics),
+        generics,
+        super_traits,
     }
 }
 
@@ -279,7 +345,7 @@ fn lower_impl_item(
         .map(|item| {
             let kind = match &item.item {
                 yelang_ast::ImplItemKind::Method(m) => {
-                    let sig = lower_fn_sig(ctx, &m.sig);
+                    let sig = lower_fn_sig(ctx, &m.sig, m.is_const);
                     let body_id =
                         crate::lowering_body::lower_block_as_body(ctx, &m.body, &sig.inputs);
                     crate::hir::ImplItemKind::Fn { sig, body: body_id }
@@ -312,6 +378,7 @@ fn lower_impl_item(
             crate::hir::ImplItem {
                 ident,
                 kind,
+                attrs: item.attributes.clone(),
                 span: item.span,
                 defaultness: match item.defaultness {
                     yelang_ast::item::Defaultness::Default => crate::hir::Defaultness::Default,
@@ -321,11 +388,18 @@ fn lower_impl_item(
         })
         .collect();
 
+    let polarity = if i.is_negative {
+        ImplPolarity::Negative
+    } else {
+        ImplPolarity::Positive
+    };
+
     let impl_block = crate::hir::Impl {
         generics: lower_generics(ctx, &i.generics),
         self_ty,
         of_trait,
         items,
+        polarity,
         span: i.span,
     };
     ctx.crate_hir.impls.push(impl_block.clone());
@@ -336,6 +410,7 @@ fn lower_impl_item(
         generics: impl_block.generics,
         self_ty: impl_block.self_ty,
         of_trait: impl_block.of_trait,
+        polarity: impl_block.polarity,
     }
 }
 
@@ -382,11 +457,19 @@ fn lower_module_item(ctx: &mut LoweringContext, m: &yelang_ast::ModDef, def_id: 
     let mut item_ids = vec![];
     ctx.current_module = def_id;
 
-    if let yelang_ast::ModKind::Inline { items } = &m.kind {
-        for item in items {
-            if let Some(id) = lower_item(ctx, item) {
-                item_ids.push(id);
+    match &m.kind {
+        yelang_ast::ModKind::Inline { items } => {
+            for item in items {
+                if let Some(id) = lower_item(ctx, item) {
+                    item_ids.push(id);
+                }
             }
+        }
+        yelang_ast::ModKind::External => {
+            ctx.error(crate::lowering_err::LoweringError::UnsupportedAst {
+                kind: "external module (mod name;)".to_string(),
+                span: m.name.span,
+            });
         }
     }
 
@@ -394,17 +477,106 @@ fn lower_module_item(ctx: &mut LoweringContext, m: &yelang_ast::ModDef, def_id: 
 }
 
 fn lower_use_item(
-    _ctx: &mut LoweringContext,
+    ctx: &mut LoweringContext,
     u: &yelang_ast::item::Use,
     _def_id: DefId,
 ) -> ItemKind {
-    ItemKind::Use {
-        path: crate::hir::UsePath {
-            res: crate::res::Res::Err,
-            span: u.span,
-        },
-        kind: crate::hir::UseKind::Single,
+    let (path, kind) = lower_use_tree(ctx, &u.tree);
+    ItemKind::Use { path, kind }
+}
+
+/// Lower a top-level `use` tree into a primary path and a use kind.
+fn lower_use_tree(
+    ctx: &mut LoweringContext,
+    tree: &yelang_ast::item::UseTree,
+) -> (UsePath, UseKind) {
+    use yelang_ast::item::UseTree;
+    match tree {
+        UseTree::Simple { path, span } => (
+            make_use_path(ctx, path, *span, None),
+            UseKind::Single,
+        ),
+        UseTree::Rename { path, alias, span } => (
+            make_use_path(ctx, path, *span, Some(*alias)),
+            UseKind::Single,
+        ),
+        UseTree::Glob { path, span } => (
+            make_use_path(ctx, path, *span, None),
+            UseKind::Glob,
+        ),
+        UseTree::Nested { prefix, items, span } => {
+            let prefix_path = make_use_path(ctx, prefix, *span, None);
+            let nested: Vec<UsePath> = items
+                .iter()
+                .flat_map(|item| flatten_use_tree(ctx, prefix, item))
+                .collect();
+            (prefix_path, UseKind::Nested { items: nested })
+        }
     }
+}
+
+/// Flatten a (possibly nested) use tree relative to a prefix into a list of
+/// fully-qualified imported paths.
+fn flatten_use_tree(
+    ctx: &mut LoweringContext,
+    prefix: &yelang_ast::Path,
+    tree: &yelang_ast::item::UseTree,
+) -> Vec<UsePath> {
+    use yelang_ast::item::UseTree;
+    match tree {
+        UseTree::Simple { path, span } => vec![make_use_path(
+            ctx,
+            &combine_paths(prefix, path),
+            *span,
+            None,
+        )],
+        UseTree::Rename { path, alias, span } => vec![make_use_path(
+            ctx,
+            &combine_paths(prefix, path),
+            *span,
+            Some(*alias),
+        )],
+        UseTree::Glob { path, span } => vec![make_use_path(
+            ctx,
+            &combine_paths(prefix, path),
+            *span,
+            None,
+        )],
+        UseTree::Nested {
+            prefix: inner_prefix,
+            items,
+            span: _,
+        } => {
+            let combined = combine_paths(prefix, inner_prefix);
+            items
+                .iter()
+                .flat_map(|item| flatten_use_tree(ctx, &combined, item))
+                .collect()
+        }
+    }
+}
+
+/// Build a `UsePath` by resolving an AST path.
+fn make_use_path(
+    ctx: &mut LoweringContext,
+    path: &yelang_ast::Path,
+    span: yelang_lexer::Span,
+    rename: Option<yelang_ast::Ident>,
+) -> UsePath {
+    UsePath {
+        res: crate::lowering_expr::resolve_ast_path(ctx, path),
+        span,
+        rename,
+    }
+}
+
+/// Combine a prefix path with a suffix path, producing a new path whose
+/// segments are the concatenation of the two.
+fn combine_paths(prefix: &yelang_ast::Path, path: &yelang_ast::Path) -> yelang_ast::Path {
+    let mut combined = prefix.clone();
+    combined.segments.extend(path.segments.clone());
+    combined.span = prefix.span.merge(path.span);
+    combined
 }
 
 fn lower_generics(ctx: &mut LoweringContext, generics: &yelang_ast::Generics) -> Generics {

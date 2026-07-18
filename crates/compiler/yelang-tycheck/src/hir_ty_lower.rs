@@ -4,12 +4,12 @@
  * This module converts them to the interned type representation.
  */
 
-use yelang_hir::hir_ty::{Ty as HirTy, UtilityKind as HirUtilityKind};
+use yelang_hir::hir_ty::{GenericArg as HirGenericArg, Ty as HirTy, UtilityKind as HirUtilityKind};
 use yelang_hir::res::{FloatTy as HirFloatTy, IntTy as HirIntTy, PrimTy, Res};
 use yelang_ty::generic::GenericArg;
 use yelang_ty::primitive::{FloatTy, IntTy, UintTy};
 use yelang_ty::ty::{
-    AdtDef, AliasTy, AnonField, AnonStructDef, ConstKind, Mutability, Ty, TyKind, TypeAndMut,
+    AdtDef, AliasTy, AnonField, AnonStructDef, Mutability, Ty, TyKind, TypeAndMut,
 };
 
 use crate::fn_ctxt::FnCtxt;
@@ -37,13 +37,9 @@ fn lower_hir_ty_value<'tcx>(ty: &HirTy, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
             );
             interner.mk_ty(TyKind::Tuple(args))
         }
-        HirTy::Array { ty, len: _len } => {
+        HirTy::Array { ty, len } => {
             let elem_ty = lower_hir_ty_id(*ty, fcx);
-            // TODO: lower array length const properly
-            let len_const = yelang_ty::ty::Const {
-                kind: ConstKind::Error,
-                ty: elem_ty,
-            };
+            let len_const = lower_hir_const(len, elem_ty, fcx);
             interner.mk_ty(TyKind::Array(elem_ty, len_const))
         }
         HirTy::Slice { ty } => {
@@ -120,6 +116,13 @@ fn lower_hir_ty_value<'tcx>(ty: &HirTy, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
                 interner.mk_ty(TyKind::Union(acc, lowered))
             })
         }
+        HirTy::TypeOf { expr } => {
+            // `typeof expr` evaluates to the type of the expression.
+            let ty = crate::check::check_expr(fcx, *expr);
+            ty
+        }
+        HirTy::Never => fcx.mk_never(),
+        HirTy::Missing => fcx.new_ty_var(),
         HirTy::ImplTrait { path } => {
             if let Res::Def { def_id } = path {
                 interner.mk_ty(TyKind::Alias(AliasTy {
@@ -153,6 +156,58 @@ fn lower_hir_ty_value<'tcx>(ty: &HirTy, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
     }
 }
 
+fn lower_hir_const<'tcx>(
+    konst: &yelang_hir::hir_ty::Const,
+    ty: Ty<'tcx>,
+    _fcx: &mut FnCtxt<'tcx>,
+) -> yelang_ty::ty::Const<'tcx> {
+    use yelang_hir::hir_ty::ConstKind as HirConstKind;
+    use yelang_ty::ty::{ConstKind, ConstValue};
+
+    let kind = match &konst.kind {
+        HirConstKind::Lit { lit } => match lit {
+            yelang_lexer::Literal::Int(il) => {
+                // Parse the integer symbol as an i128 (best effort).
+                let s = il.value.to_string();
+                if let Ok(v) = s.parse::<i128>() {
+                    ConstKind::Value(ConstValue::Int(v))
+                } else {
+                    ConstKind::Error
+                }
+            }
+            yelang_lexer::Literal::Float(fl) => {
+                let s = fl.value.to_string();
+                if let Ok(v) = s.parse::<f64>() {
+                    ConstKind::Value(ConstValue::Float(v))
+                } else {
+                    ConstKind::Error
+                }
+            }
+            yelang_lexer::Literal::Str(sl) => ConstKind::Value(ConstValue::Str(sl.value)),
+            yelang_lexer::Literal::Char(cl) => ConstKind::Value(ConstValue::Int(*cl as i128)),
+            yelang_lexer::Literal::Bool(b) => ConstKind::Value(ConstValue::Bool(*b)),
+            // Non-scalar literals cannot appear in const-generic positions.
+            yelang_lexer::Literal::Regex(_)
+            | yelang_lexer::Literal::DateTime(_)
+            | yelang_lexer::Literal::Duration(_)
+            | yelang_lexer::Literal::Bytes(_)
+            | yelang_lexer::Literal::Uuid(_)
+            | yelang_lexer::Literal::Geometry(_)
+            | yelang_lexer::Literal::RecordId(_)
+            | yelang_lexer::Literal::Unit => ConstKind::Error,
+        },
+        HirConstKind::Expr { body: _ } => {
+            // TODO: const-eval the body once the const evaluator is available.
+            // For now leave the length/dimension as an error constant so that
+            // type checking does not crash.
+            ConstKind::Error
+        }
+        HirConstKind::Err => ConstKind::Error,
+    };
+
+    yelang_ty::ty::Const { kind, ty }
+}
+
 fn lower_hir_ty_id<'tcx>(ty_id: yelang_hir::ids::TyId, fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
     let hir_ty = fcx
         .crate_hir
@@ -163,7 +218,7 @@ fn lower_hir_ty_id<'tcx>(ty_id: yelang_hir::ids::TyId, fcx: &mut FnCtxt<'tcx>) -
     lower_hir_ty(&hir_ty, fcx)
 }
 
-fn lower_res<'tcx>(res: &Res, args: &[yelang_hir::ids::TyId], fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
+fn lower_res<'tcx>(res: &Res, args: &[HirGenericArg], fcx: &mut FnCtxt<'tcx>) -> Ty<'tcx> {
     let interner = fcx.interner;
     let lowered_args = lower_generic_args(args, fcx);
 
@@ -197,7 +252,7 @@ fn lower_res<'tcx>(res: &Res, args: &[yelang_hir::ids::TyId], fcx: &mut FnCtxt<'
 }
 
 fn lower_generic_args<'tcx>(
-    args: &[yelang_hir::ids::TyId],
+    args: &[HirGenericArg],
     fcx: &mut FnCtxt<'tcx>,
 ) -> yelang_ty::list::List<GenericArg<'tcx>> {
     let interner = fcx.interner;
@@ -207,7 +262,19 @@ fn lower_generic_args<'tcx>(
     interner.mk_generic_args(
         &args
             .iter()
-            .map(|t| GenericArg::Type(lower_hir_ty_id(*t, fcx)))
+            .filter_map(|arg| match arg {
+                HirGenericArg::Type(ty_id) => Some(GenericArg::Type(lower_hir_ty_id(*ty_id, fcx))),
+                HirGenericArg::Const(_) => {
+                    // TODO: lower const generic arguments once the type system
+                    // supports them. For now treat them as absent.
+                    None
+                }
+                HirGenericArg::AssocBinding { .. } => {
+                    // TODO: lower associated type bindings once the type system
+                    // supports them. For now treat them as absent.
+                    None
+                }
+            })
             .collect::<Vec<_>>(),
     )
 }

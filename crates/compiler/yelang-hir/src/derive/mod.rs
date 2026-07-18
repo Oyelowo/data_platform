@@ -124,6 +124,7 @@ pub fn expand_item_derives(
                     generics,
                     self_ty,
                     of_trait,
+                    polarity: _,
                 } = &generated_item.kind
                 {
                     ctx.crate_hir.impls.push(crate::hir::Impl {
@@ -131,6 +132,7 @@ pub fn expand_item_derives(
                         self_ty: self_ty.clone(),
                         of_trait: of_trait.clone(),
                         items: items.clone(),
+                        polarity: crate::hir::ImplPolarity::Positive,
                         span: generated_item.span,
                     });
                 }

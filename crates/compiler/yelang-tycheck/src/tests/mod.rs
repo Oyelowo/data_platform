@@ -6,7 +6,7 @@
 
 #![allow(unused_mut)]
 
-use yelang_arena::{DefId, IndexSecondaryMap};
+use yelang_arena::{DefId, index_vec as iv};
 use yelang_ast::{BinaryOp, UnaryOp};
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::hir::{Arm, Block, Expr, FieldExpr, Stmt};
@@ -91,7 +91,7 @@ fn fcx_with_return_ty<'tcx>(
     hir: &'tcx HirCrate,
     return_ty: Ty<'tcx>,
 ) -> FnCtxt<'tcx> {
-    FnCtxt::new(interner, hir, def_id(1), return_ty, IndexSecondaryMap::new())
+    FnCtxt::new(interner, hir, def_id(1), return_ty, iv::SecondaryMap::new())
 }
 
 fn mk_fcx<'tcx>(interner: &'tcx Interner<'tcx>, hir: &'tcx HirCrate) -> FnCtxt<'tcx> {
@@ -205,7 +205,7 @@ fn path_local_lookup() {
 #[test]
 fn path_def_lookup() {
     let interner = Interner::new();
-    let mut item_types = IndexSecondaryMap::new();
+    let mut item_types = iv::SecondaryMap::new();
     let def_ty = interner.mk_ty(TyKind::Int(IntTy::I64));
     item_types.insert(def_id(1), def_ty);
     let mut hir = hir_crate();

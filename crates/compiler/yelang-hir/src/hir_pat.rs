@@ -28,6 +28,8 @@ pub enum Pat {
     Tuple { pats: Vec<PatId> },
     /// Tuple-struct pattern: `Some(x)`
     TupleStruct { res: Res, pats: Vec<PatId> },
+    /// Reference pattern: `&pat` or `&mut pat`.
+    Ref { pat: PatId, mutability: yelang_ast::Mutability },
     /// Path pattern (enum variant without data, or constant).
     Path { res: Res },
     /// Literal pattern.
@@ -46,6 +48,8 @@ pub enum Pat {
         middle: Option<PatId>,
         suffix: Vec<PatId>,
     },
+    /// Slice rest pattern: `..` or `..rest` inside a slice pattern.
+    Rest { name: Option<Symbol> },
     /// Error recovery.
     Err,
 }

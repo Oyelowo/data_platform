@@ -23,6 +23,7 @@ pub struct FieldDef {
     pub ty: TyId,
     pub span: Span,
     pub vis: crate::hir::Visibility,
+    pub attrs: Vec<crate::hir::Attribute>,
 }
 
 /// A field in a tuple struct / tuple variant (positional).
@@ -31,4 +32,5 @@ pub struct StructField {
     pub ty: TyId,
     pub span: Span,
     pub vis: crate::hir::Visibility,
+    pub attrs: Vec<crate::hir::Attribute>,
 }

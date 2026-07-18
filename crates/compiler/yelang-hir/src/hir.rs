@@ -3,7 +3,7 @@
 //! This module defines the "shell" structs (`Item`, `Block`, `Arm`, `FnSig`, …)
 //! and shared auxiliary types.  The expression/pattern/type/statement enums
 //! live in their own sub-modules and are referenced here by ID.
-pub use yelang_ast::{Ident, Label, Mutability, Visibility};
+pub use yelang_ast::{Attribute, Ident, Label, Mutability, Visibility};
 use yelang_lexer::Span;
 
 pub use crate::hir_body::{Body, Param};
@@ -162,6 +162,7 @@ pub struct VariantDef {
     pub ident: Ident,
     pub data: VariantData,
     pub discriminant: Option<crate::hir_ty::Const>,
+    pub attrs: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -170,6 +171,7 @@ pub struct VariantDef {
 pub struct Trait {
     pub name: Ident,
     pub generics: Generics,
+    pub super_traits: Vec<TraitRef>,
     pub items: Vec<TraitItem>,
     pub span: Span,
 }
@@ -179,6 +181,7 @@ pub struct Trait {
 pub struct TraitItem {
     pub ident: Ident,
     pub kind: TraitItemKind,
+    pub attrs: Vec<Attribute>,
     pub span: Span,
 }
 
@@ -206,7 +209,17 @@ pub struct Impl {
     pub self_ty: TyId,
     pub of_trait: Option<TraitRef>,
     pub items: Vec<ImplItem>,
+    pub polarity: ImplPolarity,
     pub span: Span,
+}
+
+/// Polarity of an impl block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplPolarity {
+    /// `impl Trait for Type`
+    Positive,
+    /// `impl !Trait for Type`
+    Negative,
 }
 
 /// An item inside an impl block.
@@ -214,6 +227,7 @@ pub struct Impl {
 pub struct ImplItem {
     pub ident: Ident,
     pub kind: ImplItemKind,
+    pub attrs: Vec<Attribute>,
     pub span: Span,
     pub defaultness: Defaultness,
 }
@@ -238,6 +252,8 @@ pub struct TraitRef {
 pub struct UsePath {
     pub res: Res,
     pub span: Span,
+    /// Renamed identifier for `use path as name`.
+    pub rename: Option<Ident>,
 }
 
 /// Kinds of `use` imports.

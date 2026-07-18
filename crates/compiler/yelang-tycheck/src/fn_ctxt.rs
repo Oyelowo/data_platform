@@ -4,7 +4,7 @@
  * for checking a single function body.
  */
 
-use yelang_arena::{DefId, FxHashMap, IndexSecondaryMap};
+use yelang_arena::{DefId, FxHashMap, index_vec as iv};
 use yelang_ast::Label;
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::ids::{ExprId, PatId};
@@ -57,7 +57,7 @@ pub struct FnCtxt<'tcx> {
     /// The self type (if inside an impl).
     pub self_ty: Option<Ty<'tcx>>,
     /// Item types from the collector: DefId -> Ty.
-    pub item_types: IndexSecondaryMap<DefId, Ty<'tcx>>,
+    pub item_types: iv::SecondaryMap<DefId, Ty<'tcx>>,
     /// Whether we're currently in an irrefutable pattern context.
     pub in_irrefutable_pat: bool,
 }
@@ -68,7 +68,7 @@ impl<'tcx> FnCtxt<'tcx> {
         crate_hir: &'tcx HirCrate,
         def_id: DefId,
         return_ty: Ty<'tcx>,
-        item_types: IndexSecondaryMap<DefId, Ty<'tcx>>,
+        item_types: iv::SecondaryMap<DefId, Ty<'tcx>>,
     ) -> Self {
         Self {
             interner,
