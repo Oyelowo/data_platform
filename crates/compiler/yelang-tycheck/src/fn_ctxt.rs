@@ -199,6 +199,36 @@ impl<'a> FnCtxt<'a> {
         }
     }
 
+    /// Create a fresh substitution that maps an item's generic parameters to
+    /// new inference variables.
+    pub fn fresh_substitution_for_generics(
+        &mut self,
+        def_id: yelang_arena::DefId,
+    ) -> yelang_ty::generic::Substitution {
+        use yelang_ty::generic::Substitution;
+
+        let mut args = Vec::new();
+        if let Some(generics) = self.tcx.generics_of(def_id) {
+            for param in &generics.params {
+                match param.kind {
+                    crate::tcx::GenericParamKind::Type => {
+                        args.push(yelang_ty::generic::GenericArg::Type(self.new_ty_var()));
+                    }
+                    crate::tcx::GenericParamKind::Const => {
+                        // TODO: fresh const inference variables.
+                        let ty = self.tcx.interner().mk_ty(Ty::Error);
+                        let ct = self.tcx.interner().mk_const_from_parts(
+                            yelang_ty::ty::Const::Error,
+                            ty,
+                        );
+                        args.push(yelang_ty::generic::GenericArg::Const(ct));
+                    }
+                }
+            }
+        }
+        Substitution::from_args(args)
+    }
+
     // -----------------------------------------------------------------------
     // Obligation tracking
     // -----------------------------------------------------------------------
@@ -276,7 +306,7 @@ impl<'a> FnCtxt<'a> {
 
 /// A body inference variable that may be constrained by a solver response.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BodyInferVar {
+pub(crate) enum BodyInferVar {
     Ty(TyVid),
     Int(IntVid),
     Float(FloatVid),
@@ -285,7 +315,7 @@ enum BodyInferVar {
 
 /// Collect the body inference variables in `pred` in first-occurrence order,
 /// matching the order produced by the trait solver's canonicalizer.
-fn collect_body_infer_vars(interner: &Interner, infcx: &mut yelang_infer::InferCtxt, pred: &Predicate) -> Vec<BodyInferVar> {
+pub(crate) fn collect_body_infer_vars(interner: &Interner, infcx: &mut yelang_infer::InferCtxt, pred: &Predicate) -> Vec<BodyInferVar> {
     struct Collector<'a> {
         interner: &'a Interner,
         infcx: &'a mut yelang_infer::InferCtxt,
@@ -392,7 +422,7 @@ impl<'a> FnCtxt<'a> {
 
     /// Apply the inferred values from a solver response back to the body
     /// `InferCtxt`.
-    fn apply_response_to_body(
+    pub(crate) fn apply_response_to_body(
         &mut self,
         body_vars: &[BodyInferVar],
         response: &CanonicalResponse,

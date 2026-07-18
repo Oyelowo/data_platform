@@ -10,7 +10,6 @@
  */
 
 use yelang_arena::DefId;
-use yelang_interner::Symbol;
 use yelang_trait_solver::solver_ctx::{
     AssocItemInfo, AssocItemKind, BuiltinTraitKind, ImplInfo, SolverCtxt, TraitDefInfo,
 };
@@ -102,7 +101,16 @@ impl TyCtxt {
         let impl_ids: Vec<DefId> = self.impl_defs.iter().map(|imp| imp.def_id).collect();
         for impl_id in impl_ids {
             if let Some(imp) = self.impl_defs.iter().find(|imp| imp.def_id == impl_id) {
-                let infos: Vec<_> = imp.items.iter().map(impl_item_to_assoc).collect();
+                let trait_items = imp
+                    .trait_ref
+                    .and_then(|tr| self.trait_defs.get(tr.def_id))
+                    .map(|tr| tr.items.as_slice())
+                    .unwrap_or(&[]);
+                let infos: Vec<_> = imp
+                    .items
+                    .iter()
+                    .map(|item| impl_item_to_assoc(item, trait_items))
+                    .collect();
                 self.impl_assoc_items_cache
                     .insert(impl_id, infos.into_boxed_slice());
             }
@@ -139,22 +147,22 @@ fn impl_info_from_impl(imp: &ImplDefData) -> ImplInfo {
 
 fn trait_item_to_assoc(item: &TraitItemDefData) -> AssocItemInfo {
     match item {
-        TraitItemDefData::Fn { def_id, sig } => AssocItemInfo {
+        TraitItemDefData::Fn { def_id, ident, sig } => AssocItemInfo {
             def_id: *def_id,
             trait_item_def_id: Some(*def_id),
-            ident: Symbol::from(0), // TODO: preserve item name symbol
+            ident: ident.symbol,
             kind: AssocItemKind::Fn { sig: *sig },
         },
-        TraitItemDefData::Const { def_id, ty } => AssocItemInfo {
+        TraitItemDefData::Const { def_id, ident, ty } => AssocItemInfo {
             def_id: *def_id,
             trait_item_def_id: Some(*def_id),
-            ident: Symbol::from(0),
+            ident: ident.symbol,
             kind: AssocItemKind::Const { ty: *ty },
         },
-        TraitItemDefData::Type { def_id, bounds, default } => AssocItemInfo {
+        TraitItemDefData::Type { def_id, ident, bounds, default } => AssocItemInfo {
             def_id: *def_id,
             trait_item_def_id: Some(*def_id),
-            ident: Symbol::from(0),
+            ident: ident.symbol,
             kind: AssocItemKind::Type {
                 bounds: bounds.clone(),
                 default: *default,
@@ -163,24 +171,29 @@ fn trait_item_to_assoc(item: &TraitItemDefData) -> AssocItemInfo {
     }
 }
 
-fn impl_item_to_assoc(item: &ImplItemDefData) -> AssocItemInfo {
+fn impl_item_to_assoc(item: &ImplItemDefData, trait_items: &[TraitItemDefData]) -> AssocItemInfo {
+    let trait_item_def_id = trait_items
+        .iter()
+        .find(|tr_item| tr_item.ident().symbol == item.ident().symbol)
+        .map(|tr_item| tr_item.def_id());
+
     match item {
-        ImplItemDefData::Fn { def_id, sig } => AssocItemInfo {
+        ImplItemDefData::Fn { def_id, ident, sig } => AssocItemInfo {
             def_id: *def_id,
-            trait_item_def_id: None, // TODO: match impl items to trait items
-            ident: Symbol::from(0),
+            trait_item_def_id,
+            ident: ident.symbol,
             kind: AssocItemKind::Fn { sig: *sig },
         },
-        ImplItemDefData::Const { def_id, ty } => AssocItemInfo {
+        ImplItemDefData::Const { def_id, ident, ty } => AssocItemInfo {
             def_id: *def_id,
-            trait_item_def_id: None,
-            ident: Symbol::from(0),
+            trait_item_def_id,
+            ident: ident.symbol,
             kind: AssocItemKind::Const { ty: *ty },
         },
-        ImplItemDefData::Type { def_id, ty } => AssocItemInfo {
+        ImplItemDefData::Type { def_id, ident, ty } => AssocItemInfo {
             def_id: *def_id,
-            trait_item_def_id: None,
-            ident: Symbol::from(0),
+            trait_item_def_id,
+            ident: ident.symbol,
             kind: AssocItemKind::Type {
                 bounds: vec![],
                 default: Some(*ty),

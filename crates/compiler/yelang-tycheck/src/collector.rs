@@ -132,13 +132,17 @@ fn collect_trait(tcx: &mut TyCtxt, def_id: DefId, tr: &hir::Trait) {
     let generics_data = lower_generics(tcx, &tr.generics);
     let mut cx = CollectorCx::new(tcx, &generics_data.params);
 
-    // In a trait definition `Self` is an implicit type parameter. We model it
-    // as a placeholder parameter for supertrait and associated-type bound
-    // lowering.
+    // In a trait definition `Self` is an implicit type parameter. It is placed
+    // after all explicit generic parameters so that explicit parameter indices
+    // remain 0..n-1 and `Self` is index n. This lets a single substitution
+    // replace both the explicit parameters and `Self` when instantiating a
+    // trait method signature.
+    let self_param_index = generics_data.params.len() as u32;
     let self_ty = cx.tcx.interner().mk_ty(Ty::Param(ParamTy {
-        index: 0,
+        index: self_param_index,
         name: yelang_interner::Symbol::from(0),
     }));
+    cx.self_ty = Some(self_ty);
 
     let supertraits: Vec<_> = tr
         .super_traits
@@ -154,14 +158,17 @@ fn collect_trait(tcx: &mut TyCtxt, def_id: DefId, tr: &hir::Trait) {
             match &kind {
             hir::TraitItemKind::Fn { sig, default: _ } => TraitItemDefData::Fn {
                 def_id: item.def_id,
+                ident: item.ident,
                 sig: lower_fn_sig(&mut cx, sig),
             },
             hir::TraitItemKind::Const { ty, body: _ } => TraitItemDefData::Const {
                 def_id: item.def_id,
+                ident: item.ident,
                 ty: lower_hir_ty_id(*ty, &mut cx),
             },
             hir::TraitItemKind::Type { bounds, default } => TraitItemDefData::Type {
                 def_id: item.def_id,
+                ident: item.ident,
                 bounds: bounds
                     .iter()
                     .filter_map(|b| lower_trait_bound(&mut cx, self_ty, b))
@@ -207,14 +214,17 @@ fn collect_impl(tcx: &mut TyCtxt, imp: &hir::Impl) {
             match &kind {
             hir::ImplItemKind::Fn { sig, body: _ } => ImplItemDefData::Fn {
                 def_id: item.def_id,
+                ident: item.ident,
                 sig: lower_fn_sig(&mut cx, sig),
             },
             hir::ImplItemKind::Const { ty, body: _ } => ImplItemDefData::Const {
                 def_id: item.def_id,
+                ident: item.ident,
                 ty: lower_hir_ty_id(*ty, &mut cx),
             },
             hir::ImplItemKind::Type { ty } => ImplItemDefData::Type {
                 def_id: item.def_id,
+                ident: item.ident,
                 ty: lower_hir_ty_id(*ty, &mut cx),
             },
             }
@@ -223,7 +233,7 @@ fn collect_impl(tcx: &mut TyCtxt, imp: &hir::Impl) {
 
     cx.tcx.generics.insert(def_id, generics_data.clone());
     let impl_id = cx.tcx.impl_defs.push(ImplDefData {
-        id: crate::tcx::ImplDefId::new(0), // patched below
+        id: crate::tcx::ImplDefId::new(1), // patched below; 1 is a valid placeholder
         def_id,
         trait_ref,
         self_ty,

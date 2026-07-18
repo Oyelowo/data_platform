@@ -70,10 +70,10 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
         Expr::Call { func, args } => check_call(fcx, *func, args),
         Expr::MethodCall {
             receiver,
-            method: _,
+            method,
             args,
             ..
-        } => check_method_call(fcx, *receiver, args),
+        } => check_method_call(fcx, *receiver, method, args),
         Expr::Field { expr, field } => check_field(fcx, *expr, field),
         Expr::Index { expr, index } => check_index(fcx, *expr, *index),
         Expr::Assign { left, right } => check_assign(fcx, *left, *right),
@@ -321,34 +321,6 @@ fn check_unary(
 // Call checking
 // ---------------------------------------------------------------------------
 
-fn fresh_substitution_for_generics(
-    fcx: &mut FnCtxt<'_>,
-    def_id: yelang_arena::DefId,
-) -> yelang_ty::generic::Substitution {
-    use yelang_ty::generic::Substitution;
-
-    let mut args = Vec::new();
-    if let Some(generics) = fcx.tcx.generics_of(def_id) {
-        for param in &generics.params {
-            match param.kind {
-                crate::tcx::GenericParamKind::Type => {
-                    args.push(GenericArg::Type(fcx.new_ty_var()));
-                }
-                crate::tcx::GenericParamKind::Const => {
-                    // TODO: fresh const inference variables.
-                    let ty = fcx.tcx.interner().mk_ty(Ty::Error);
-                    let ct = fcx.tcx.interner().mk_const_from_parts(
-                        yelang_ty::ty::Const::Error,
-                        ty,
-                    );
-                    args.push(GenericArg::Const(ct));
-                }
-            }
-        }
-    }
-    Substitution::from_args(args)
-}
-
 fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
     let func_ty = check_expr(fcx, func);
     let interner = fcx.tcx.interner();
@@ -382,7 +354,7 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
                 None => return fcx.mk_error(),
             };
 
-            let subst = fresh_substitution_for_generics(fcx, fd.def_id);
+            let subst = fcx.fresh_substitution_for_generics(fd.def_id);
             let inputs = substitute(interner, poly_sig.sig.inputs, &subst);
             let output = substitute(interner, poly_sig.sig.output, &subst);
             let sig = yelang_ty::ty::FnSig { inputs, output };
@@ -435,14 +407,10 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
 fn check_method_call(
     fcx: &mut FnCtxt<'_>,
     receiver: ExprId,
+    method: &yelang_ast::Ident,
     args: &[ExprId],
 ) -> TyId {
-    let _receiver_ty = check_expr(fcx, receiver);
-    for arg in args {
-        let _ = check_expr(fcx, *arg);
-    }
-    // TODO: method lookup
-    fcx.new_ty_var()
+    crate::method::check_method_call(fcx, receiver, method.symbol, args)
 }
 
 // ---------------------------------------------------------------------------

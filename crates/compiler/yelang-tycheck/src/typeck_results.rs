@@ -4,6 +4,8 @@ use yelang_arena::{DefId, FxHashMap};
 use yelang_hir::ids::{ExprId, PatId};
 use yelang_ty::ty::TyId;
 
+use crate::method::Adjustment;
+
 /// The result of type-checking a function body.
 ///
 /// Maps HIR node IDs to their inferred types.
@@ -15,6 +17,8 @@ pub struct TypeckResults {
     pub pat_types: FxHashMap<PatId, TyId>,
     /// Type of each local variable (from pattern bindings).
     pub local_types: FxHashMap<PatId, TyId>,
+    /// Receiver adjustments discovered for each method-call expression.
+    pub expr_adjustments: FxHashMap<ExprId, Vec<Adjustment>>,
     /// The function's definition id.
     pub def_id: DefId,
 }
@@ -25,6 +29,7 @@ impl TypeckResults {
             expr_types: FxHashMap::new(),
             pat_types: FxHashMap::new(),
             local_types: FxHashMap::new(),
+            expr_adjustments: FxHashMap::new(),
             def_id,
         }
     }
@@ -39,5 +44,12 @@ impl TypeckResults {
 
     pub fn local_ty(&self, pat_id: PatId) -> Option<TyId> {
         self.local_types.get(&pat_id).copied()
+    }
+
+    pub fn expr_adjustments(&self, expr_id: ExprId) -> &[Adjustment] {
+        self.expr_adjustments
+            .get(&expr_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 }

@@ -24,6 +24,7 @@ use crate::check::{check_body, check_expr};
 use crate::coerce::Coerce;
 use crate::collector::collect_crate_types;
 use crate::fn_ctxt::FnCtxt;
+use crate::method::Adjustment;
 use crate::pat::check_pat;
 use crate::tcx::{BuiltinTraitKind, TyCtxt};
 use crate::writeback::writeback_types;
@@ -69,6 +70,18 @@ fn body(hir: &mut HirCrate, params: Vec<Param>, value: ExprId) -> BodyId {
 
 fn hir_ty(hir: &mut HirCrate, ty: HirTy) -> HirTyId {
     hir.alloc_ty(ty, dummy_span())
+}
+
+fn hir_i32_id(hir: &mut HirCrate) -> HirTyId {
+    hir_ty(
+        hir,
+        HirTy::Path {
+            res: Res::PrimTy {
+                ty: yelang_hir::res::PrimTy::Int(yelang_hir::res::IntTy::I32),
+            },
+            args: vec![],
+        },
+    )
 }
 
 fn def_id(n: u32) -> DefId {
@@ -2033,6 +2046,286 @@ fn where_clause_with_generic_args_is_proven_via_param_env() {
 }
 
 #[test]
+fn inherent_method_call_with_autoref() {
+    let mut hir = hir_crate();
+
+    let struct_def_id = def_id(2);
+    let impl_def_id = def_id(3);
+    let method_def_id = def_id(4);
+
+    let foo_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: struct_def_id },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+
+    // `struct Foo;`
+    hir.items.insert(
+        struct_def_id,
+        Some(yelang_hir::hir::item::Item {
+            def_id: struct_def_id,
+            ident: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Struct {
+                data: yelang_hir::hir::adt::VariantData::Unit,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    // `impl Foo { fn bar(&self, x: i32) -> bool { ... } }`
+    let i32_hir_ty = hir_i32_id(&mut hir);
+    let bool_hir_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::PrimTy {
+                ty: yelang_hir::res::PrimTy::Bool,
+            },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let ref_foo_ty = hir.alloc_ty(
+        HirTy::Ref {
+            mutability: yelang_ast::Mutability::Immutable,
+            ty: foo_ty_id,
+        },
+        dummy_span(),
+    );
+
+    let bar_sig = yelang_hir::hir::core::FnSig {
+        inputs: vec![ref_foo_ty, i32_hir_ty],
+        output: bool_hir_ty,
+        is_async: false,
+        is_const: false,
+        is_variadic: false,
+        abi: None,
+        bound_vars: vec![],
+    };
+    let bar_body_value = expr(&mut hir, Expr::Err);
+    let bar_body = body(&mut hir, vec![], bar_body_value);
+
+    hir.impls.push(yelang_hir::hir::core::Impl {
+        def_id: impl_def_id,
+        generics: yelang_hir::hir::core::Generics {
+            params: vec![],
+            where_clause: None,
+            span: dummy_span(),
+        },
+        self_ty: foo_ty_id,
+        of_trait: None,
+        items: vec![yelang_hir::hir::core::ImplItem {
+            def_id: method_def_id,
+            ident: yelang_ast::Ident::new(symbol(10), dummy_span()),
+            kind: yelang_hir::hir::core::ImplItemKind::Fn {
+                sig: bar_sig,
+                body: bar_body,
+            },
+            attrs: vec![],
+            span: dummy_span(),
+            defaultness: yelang_hir::hir::core::Defaultness::Final,
+        }],
+        polarity: yelang_hir::hir::core::ImplPolarity::Positive,
+        span: dummy_span(),
+    });
+
+    let mut tcx = TyCtxt::new(hir);
+    collect_crate_types(&mut tcx);
+
+    let foo_pat = pat(&mut tcx.crate_hir_mut(), Pat::Wild);
+    let receiver = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Path { res: local_res(foo_pat) },
+    );
+    let arg = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Lit {
+            lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
+                value: symbol(42),
+                suffix: None,
+            }),
+        },
+    );
+    let call = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::MethodCall {
+            receiver,
+            method: yelang_ast::Ident::new(symbol(10), dummy_span()),
+            args: vec![arg],
+            trait_def_id: None,
+        },
+    );
+
+    let mut fcx = mk_fcx(&tcx);
+    let foo_ty = fcx.tcx.item_ty(struct_def_id).expect("Foo should have a type");
+    fcx.insert_local(foo_pat, foo_ty);
+
+    let call_ty = check_expr(&mut fcx, call);
+    let bool_ty = tcx.interner().mk_ty(Ty::Bool);
+    assert_eq!(call_ty, bool_ty);
+}
+
+#[test]
+fn trait_method_call_extension() {
+    let mut hir = hir_crate();
+
+    let struct_def_id = def_id(2);
+    let trait_def_id = def_id(3);
+    let trait_method_def_id = def_id(4);
+    let impl_def_id = def_id(5);
+    let impl_method_def_id = def_id(6);
+
+    let foo_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: struct_def_id },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+
+    // `struct Foo;`
+    hir.items.insert(
+        struct_def_id,
+        Some(yelang_hir::hir::item::Item {
+            def_id: struct_def_id,
+            ident: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Struct {
+                data: yelang_hir::hir::adt::VariantData::Unit,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    // `trait Greet { fn greet(&self) -> bool; }`
+    let bool_hir_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::PrimTy {
+                ty: yelang_hir::res::PrimTy::Bool,
+            },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let ref_foo_ty = hir.alloc_ty(
+        HirTy::Ref {
+            mutability: yelang_ast::Mutability::Immutable,
+            ty: foo_ty_id,
+        },
+        dummy_span(),
+    );
+    let greet_sig = yelang_hir::hir::core::FnSig {
+        inputs: vec![ref_foo_ty],
+        output: bool_hir_ty,
+        is_async: false,
+        is_const: false,
+        is_variadic: false,
+        abi: None,
+        bound_vars: vec![],
+    };
+    let greet_trait_item = yelang_hir::hir::core::TraitItem {
+        def_id: trait_method_def_id,
+        ident: yelang_ast::Ident::new(symbol(10), dummy_span()),
+        kind: yelang_hir::hir::core::TraitItemKind::Fn {
+            sig: greet_sig.clone(),
+            default: None,
+        },
+        attrs: vec![],
+        span: dummy_span(),
+    };
+    hir.traits.insert(
+        trait_def_id,
+        Some(yelang_hir::hir::core::Trait {
+            name: yelang_ast::Ident::new(symbol(2), dummy_span()),
+            generics: yelang_hir::hir::core::Generics {
+                params: vec![],
+                where_clause: None,
+                span: dummy_span(),
+            },
+            super_traits: vec![],
+            items: vec![greet_trait_item],
+            span: dummy_span(),
+        }),
+    );
+
+    // `impl Greet for Foo { fn greet(&self) -> bool { ... } }`
+    let impl_body_value = expr(&mut hir, Expr::Err);
+    let impl_body = body(&mut hir, vec![], impl_body_value);
+    hir.impls.push(yelang_hir::hir::core::Impl {
+        def_id: impl_def_id,
+        generics: yelang_hir::hir::core::Generics {
+            params: vec![],
+            where_clause: None,
+            span: dummy_span(),
+        },
+        self_ty: foo_ty_id,
+        of_trait: Some(yelang_hir::hir::core::TraitRef {
+            path: Res::Def { def_id: trait_def_id },
+            span: dummy_span(),
+        }),
+        items: vec![yelang_hir::hir::core::ImplItem {
+            def_id: impl_method_def_id,
+            ident: yelang_ast::Ident::new(symbol(10), dummy_span()),
+            kind: yelang_hir::hir::core::ImplItemKind::Fn {
+                sig: greet_sig.clone(),
+                body: impl_body,
+            },
+            attrs: vec![],
+            span: dummy_span(),
+            defaultness: yelang_hir::hir::core::Defaultness::Final,
+        }],
+        polarity: yelang_hir::hir::core::ImplPolarity::Positive,
+        span: dummy_span(),
+    });
+
+    let mut tcx = TyCtxt::new(hir);
+    collect_crate_types(&mut tcx);
+
+    let foo_pat = pat(&mut tcx.crate_hir_mut(), Pat::Wild);
+    let receiver = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Path { res: local_res(foo_pat) },
+    );
+    let call = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::MethodCall {
+            receiver,
+            method: yelang_ast::Ident::new(symbol(10), dummy_span()),
+            args: vec![],
+            trait_def_id: None,
+        },
+    );
+
+    let mut fcx = mk_fcx(&tcx);
+    let foo_ty = fcx.tcx.item_ty(struct_def_id).expect("Foo should have a type");
+    fcx.insert_local(foo_pat, foo_ty);
+
+    let call_ty = check_expr(&mut fcx, call);
+    let bool_ty = tcx.interner().mk_ty(Ty::Bool);
+    assert_eq!(call_ty, bool_ty);
+
+    let unproven = fcx.prove_obligations();
+    assert!(
+        unproven.is_empty(),
+        "expected trait method obligation to be proven, got {:?}",
+        unproven
+    );
+}
+
+#[test]
 fn identity_args_uses_correct_param_indices() {
     let mut hir = hir_crate();
     let def_id_t = def_id(3);
@@ -2113,6 +2406,500 @@ fn identity_args_uses_correct_param_indices() {
         }
         _ => panic!("expected adt"),
     }
+}
+
+#[test]
+fn method_dispatch_via_deref_trait() {
+    let mut hir = hir_crate();
+
+    let inner_struct = def_id(2);
+    let wrapper_struct = def_id(3);
+    let deref_trait = def_id(4);
+    let target_assoc = def_id(5);
+    let deref_impl = def_id(6);
+    let target_impl_item = def_id(7);
+    let inner_method = def_id(8);
+    let inner_impl = def_id(9);
+
+    let inner_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: inner_struct },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let wrapper_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: wrapper_struct },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+
+    // `struct Inner;`
+    hir.items.insert(
+        inner_struct,
+        Some(yelang_hir::hir::item::Item {
+            def_id: inner_struct,
+            ident: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Struct {
+                data: yelang_hir::hir::adt::VariantData::Unit,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    // `struct Wrapper;`
+    hir.items.insert(
+        wrapper_struct,
+        Some(yelang_hir::hir::item::Item {
+            def_id: wrapper_struct,
+            ident: yelang_ast::Ident::new(symbol(2), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Struct {
+                data: yelang_hir::hir::adt::VariantData::Unit,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    // `trait Deref { type Target; }`
+    let target_trait_item = yelang_hir::hir::core::TraitItem {
+        def_id: target_assoc,
+        ident: yelang_ast::Ident::new(symbol(21), dummy_span()),
+        kind: yelang_hir::hir::core::TraitItemKind::Type {
+            bounds: vec![],
+            default: None,
+        },
+        attrs: vec![],
+        span: dummy_span(),
+    };
+    hir.traits.insert(
+        deref_trait,
+        Some(yelang_hir::hir::core::Trait {
+            name: yelang_ast::Ident::new(symbol(20), dummy_span()),
+            generics: yelang_hir::hir::core::Generics {
+                params: vec![],
+                where_clause: None,
+                span: dummy_span(),
+            },
+            super_traits: vec![],
+            items: vec![target_trait_item],
+            span: dummy_span(),
+        }),
+    );
+
+    // `impl Deref for Wrapper { type Target = Inner; }`
+    let target_impl_assoc = yelang_hir::hir::core::ImplItem {
+        def_id: target_impl_item,
+        ident: yelang_ast::Ident::new(symbol(21), dummy_span()),
+        kind: yelang_hir::hir::core::ImplItemKind::Type { ty: inner_ty_id },
+        attrs: vec![],
+        span: dummy_span(),
+        defaultness: yelang_hir::hir::core::Defaultness::Final,
+    };
+    hir.impls.push(yelang_hir::hir::core::Impl {
+        def_id: deref_impl,
+        generics: yelang_hir::hir::core::Generics {
+            params: vec![],
+            where_clause: None,
+            span: dummy_span(),
+        },
+        self_ty: wrapper_ty_id,
+        of_trait: Some(yelang_hir::hir::core::TraitRef {
+            path: Res::Def { def_id: deref_trait },
+            span: dummy_span(),
+        }),
+        items: vec![target_impl_assoc],
+        polarity: yelang_hir::hir::core::ImplPolarity::Positive,
+        span: dummy_span(),
+    });
+
+    // `impl Inner { fn get(&self) -> bool { ... } }`
+    let bool_hir_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::PrimTy {
+                ty: yelang_hir::res::PrimTy::Bool,
+            },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let ref_inner_ty = hir.alloc_ty(
+        HirTy::Ref {
+            mutability: yelang_ast::Mutability::Immutable,
+            ty: inner_ty_id,
+        },
+        dummy_span(),
+    );
+    let get_sig = yelang_hir::hir::core::FnSig {
+        inputs: vec![ref_inner_ty],
+        output: bool_hir_ty,
+        is_async: false,
+        is_const: false,
+        is_variadic: false,
+        abi: None,
+        bound_vars: vec![],
+    };
+    let get_body_value = expr(&mut hir, Expr::Err);
+    let get_body = body(&mut hir, vec![], get_body_value);
+    let get_impl_item = yelang_hir::hir::core::ImplItem {
+        def_id: inner_method,
+        ident: yelang_ast::Ident::new(symbol(30), dummy_span()),
+        kind: yelang_hir::hir::core::ImplItemKind::Fn {
+            sig: get_sig,
+            body: get_body,
+        },
+        attrs: vec![],
+        span: dummy_span(),
+        defaultness: yelang_hir::hir::core::Defaultness::Final,
+    };
+    hir.impls.push(yelang_hir::hir::core::Impl {
+        def_id: inner_impl,
+        generics: yelang_hir::hir::core::Generics {
+            params: vec![],
+            where_clause: None,
+            span: dummy_span(),
+        },
+        self_ty: inner_ty_id,
+        of_trait: None,
+        items: vec![get_impl_item],
+        polarity: yelang_hir::hir::core::ImplPolarity::Positive,
+        span: dummy_span(),
+    });
+
+    let mut tcx = TyCtxt::new(hir);
+    collect_crate_types(&mut tcx);
+    tcx.register_deref_lang_item(deref_trait, target_assoc);
+    tcx.populate_solver_caches();
+
+    let wrapper_pat = pat(&mut tcx.crate_hir_mut(), Pat::Wild);
+    let receiver = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Path { res: local_res(wrapper_pat) },
+    );
+    let call = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::MethodCall {
+            receiver,
+            method: yelang_ast::Ident::new(symbol(30), dummy_span()),
+            args: vec![],
+            trait_def_id: None,
+        },
+    );
+
+    let mut fcx = mk_fcx(&tcx);
+    let wrapper_ty = fcx.tcx.item_ty(wrapper_struct).expect("Wrapper should have a type");
+    let inner_ty = fcx.tcx.item_ty(inner_struct).expect("Inner should have a type");
+    fcx.insert_local(wrapper_pat, wrapper_ty);
+
+    let call_ty = check_expr(&mut fcx, call);
+    let bool_ty = tcx.interner().mk_ty(Ty::Bool);
+    assert_eq!(call_ty, bool_ty);
+
+    let unproven = fcx.prove_obligations();
+    assert!(
+        unproven.is_empty(),
+        "expected Deref obligations to be proven, got {:?}",
+        unproven
+    );
+
+    let adjustments = fcx.results.expr_adjustments(receiver);
+    assert!(
+        adjustments.iter().any(|a| matches!(
+            a,
+            Adjustment::DerefTrait { target, .. } if *target == inner_ty
+        )),
+        "expected a DerefTrait adjustment to Inner, got {:?}",
+        adjustments
+    );
+}
+
+#[test]
+fn deref_chain_two_steps() {
+    let mut hir = hir_crate();
+
+    let core_struct = def_id(10);
+    let inner_struct = def_id(11);
+    let wrapper_struct = def_id(12);
+    let deref_trait = def_id(13);
+    let target_assoc = def_id(14);
+    let inner_deref_impl = def_id(15);
+    let inner_target_impl = def_id(16);
+    let wrapper_deref_impl = def_id(17);
+    let wrapper_target_impl = def_id(18);
+    let core_method = def_id(19);
+    let core_impl = def_id(20);
+
+    let core_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: core_struct },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let inner_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: inner_struct },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let wrapper_ty_id = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: wrapper_struct },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+
+    // `struct Core; struct Inner; struct Wrapper;`
+    for (def_id_, symbol_) in [
+        (core_struct, symbol(10)),
+        (inner_struct, symbol(11)),
+        (wrapper_struct, symbol(12)),
+    ] {
+        hir.items.insert(
+            def_id_,
+            Some(yelang_hir::hir::item::Item {
+                def_id: def_id_,
+                ident: yelang_ast::Ident::new(symbol_, dummy_span()),
+                kind: yelang_hir::hir::item::ItemKind::Struct {
+                    data: yelang_hir::hir::adt::VariantData::Unit,
+                    generics: yelang_hir::hir::core::Generics {
+                        params: vec![],
+                        where_clause: None,
+                        span: dummy_span(),
+                    },
+                },
+                vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+                attrs: vec![],
+                span: dummy_span(),
+            }),
+        );
+    }
+
+    // `trait Deref { type Target; }`
+    let target_trait_item = yelang_hir::hir::core::TraitItem {
+        def_id: target_assoc,
+        ident: yelang_ast::Ident::new(symbol(21), dummy_span()),
+        kind: yelang_hir::hir::core::TraitItemKind::Type {
+            bounds: vec![],
+            default: None,
+        },
+        attrs: vec![],
+        span: dummy_span(),
+    };
+    hir.traits.insert(
+        deref_trait,
+        Some(yelang_hir::hir::core::Trait {
+            name: yelang_ast::Ident::new(symbol(20), dummy_span()),
+            generics: yelang_hir::hir::core::Generics {
+                params: vec![],
+                where_clause: None,
+                span: dummy_span(),
+            },
+            super_traits: vec![],
+            items: vec![target_trait_item],
+            span: dummy_span(),
+        }),
+    );
+
+    // `impl Deref for Wrapper { type Target = Inner; }`
+    // `impl Deref for Inner { type Target = Core; }`
+    for (self_ty, target_ty, impl_def_id, type_item_def_id) in [
+        (wrapper_ty_id, inner_ty_id, wrapper_deref_impl, wrapper_target_impl),
+        (inner_ty_id, core_ty_id, inner_deref_impl, inner_target_impl),
+    ] {
+        let type_item = yelang_hir::hir::core::ImplItem {
+            def_id: type_item_def_id,
+            ident: yelang_ast::Ident::new(symbol(21), dummy_span()),
+            kind: yelang_hir::hir::core::ImplItemKind::Type { ty: target_ty },
+            attrs: vec![],
+            span: dummy_span(),
+            defaultness: yelang_hir::hir::core::Defaultness::Final,
+        };
+        hir.impls.push(yelang_hir::hir::core::Impl {
+            def_id: impl_def_id,
+            generics: yelang_hir::hir::core::Generics {
+                params: vec![],
+                where_clause: None,
+                span: dummy_span(),
+            },
+            self_ty,
+            of_trait: Some(yelang_hir::hir::core::TraitRef {
+                path: Res::Def { def_id: deref_trait },
+                span: dummy_span(),
+            }),
+            items: vec![type_item],
+            polarity: yelang_hir::hir::core::ImplPolarity::Positive,
+            span: dummy_span(),
+        });
+    }
+
+    // `impl Core { fn val(&self) -> bool { ... } }`
+    let bool_hir_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::PrimTy {
+                ty: yelang_hir::res::PrimTy::Bool,
+            },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let ref_core_ty = hir.alloc_ty(
+        HirTy::Ref {
+            mutability: yelang_ast::Mutability::Immutable,
+            ty: core_ty_id,
+        },
+        dummy_span(),
+    );
+    let val_sig = yelang_hir::hir::core::FnSig {
+        inputs: vec![ref_core_ty],
+        output: bool_hir_ty,
+        is_async: false,
+        is_const: false,
+        is_variadic: false,
+        abi: None,
+        bound_vars: vec![],
+    };
+    let val_body_value = expr(&mut hir, Expr::Err);
+    let val_body = body(&mut hir, vec![], val_body_value);
+    let val_impl_item = yelang_hir::hir::core::ImplItem {
+        def_id: core_method,
+        ident: yelang_ast::Ident::new(symbol(30), dummy_span()),
+        kind: yelang_hir::hir::core::ImplItemKind::Fn {
+            sig: val_sig,
+            body: val_body,
+        },
+        attrs: vec![],
+        span: dummy_span(),
+        defaultness: yelang_hir::hir::core::Defaultness::Final,
+    };
+    hir.impls.push(yelang_hir::hir::core::Impl {
+        def_id: core_impl,
+        generics: yelang_hir::hir::core::Generics {
+            params: vec![],
+            where_clause: None,
+            span: dummy_span(),
+        },
+        self_ty: core_ty_id,
+        of_trait: None,
+        items: vec![val_impl_item],
+        polarity: yelang_hir::hir::core::ImplPolarity::Positive,
+        span: dummy_span(),
+    });
+
+    let mut tcx = TyCtxt::new(hir);
+    collect_crate_types(&mut tcx);
+    tcx.register_deref_lang_item(deref_trait, target_assoc);
+    tcx.populate_solver_caches();
+
+    let wrapper_pat = pat(&mut tcx.crate_hir_mut(), Pat::Wild);
+    let receiver = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Path { res: local_res(wrapper_pat) },
+    );
+    let call = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::MethodCall {
+            receiver,
+            method: yelang_ast::Ident::new(symbol(30), dummy_span()),
+            args: vec![],
+            trait_def_id: None,
+        },
+    );
+
+    let mut fcx = mk_fcx(&tcx);
+    let wrapper_ty = fcx.tcx.item_ty(wrapper_struct).expect("Wrapper should have a type");
+    let inner_ty = fcx.tcx.item_ty(inner_struct).expect("Inner should have a type");
+    let core_ty = fcx.tcx.item_ty(core_struct).expect("Core should have a type");
+    fcx.insert_local(wrapper_pat, wrapper_ty);
+
+    let call_ty = check_expr(&mut fcx, call);
+    let bool_ty = tcx.interner().mk_ty(Ty::Bool);
+    assert_eq!(call_ty, bool_ty);
+
+    let unproven = fcx.prove_obligations();
+    assert!(
+        unproven.is_empty(),
+        "expected chained Deref obligations to be proven, got {:?}",
+        unproven
+    );
+
+    let adjustments = fcx.results.expr_adjustments(receiver);
+    let targets: Vec<TyId> = adjustments
+        .iter()
+        .filter_map(|a| match a {
+            Adjustment::DerefTrait { target, .. } => Some(*target),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(targets, vec![inner_ty, core_ty]);
+}
+
+#[test]
+fn method_not_found_after_autoderef_returns_error() {
+    let mut hir = hir_crate();
+
+    let wrapper_struct = def_id(2);
+
+    hir.items.insert(
+        wrapper_struct,
+        Some(yelang_hir::hir::item::Item {
+            def_id: wrapper_struct,
+            ident: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Struct {
+                data: yelang_hir::hir::adt::VariantData::Unit,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    let mut tcx = TyCtxt::new(hir);
+    collect_crate_types(&mut tcx);
+
+    let wrapper_pat = pat(&mut tcx.crate_hir_mut(), Pat::Wild);
+    let receiver = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Path { res: local_res(wrapper_pat) },
+    );
+    let call = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::MethodCall {
+            receiver,
+            method: yelang_ast::Ident::new(symbol(99), dummy_span()),
+            args: vec![],
+            trait_def_id: None,
+        },
+    );
+
+    let mut fcx = mk_fcx(&tcx);
+    let wrapper_ty = fcx.tcx.item_ty(wrapper_struct).expect("Wrapper should have a type");
+    fcx.insert_local(wrapper_pat, wrapper_ty);
+
+    let call_ty = check_expr(&mut fcx, call);
+    assert_eq!(call_ty, fcx.mk_error());
 }
 
 #[test]

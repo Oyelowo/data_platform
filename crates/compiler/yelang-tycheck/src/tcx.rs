@@ -55,6 +55,10 @@ pub struct TyCtxt {
     pub impl_assoc_items_cache: FxHashMap<DefId, Box<[AssocItemInfo]>>,
     /// Precomputed solver views of ADT field types.
     pub adt_field_tys_cache: FxHashMap<DefId, Box<[TyId]>>,
+    /// `Deref` trait lang item, if registered.
+    pub deref_trait: Option<DefId>,
+    /// `Deref::Target` associated-type lang item, if registered.
+    pub deref_target: Option<DefId>,
 }
 
 impl TyCtxt {
@@ -74,6 +78,8 @@ impl TyCtxt {
             trait_assoc_items_cache: FxHashMap::default(),
             impl_assoc_items_cache: FxHashMap::default(),
             adt_field_tys_cache: FxHashMap::default(),
+            deref_trait: None,
+            deref_target: None,
         }
     }
 
@@ -163,6 +169,15 @@ impl TyCtxt {
     pub fn register_builtin_trait(&mut self, def_id: DefId, kind: BuiltinTraitKind) {
         self.builtin_traits.insert(def_id, kind);
     }
+
+    /// Register the `Deref` trait and its `Target` associated type as lang items.
+    ///
+    /// Method/field autoderef needs these IDs to build projection normalization
+    /// goals (`<T as Deref>::Target normalizes-to U`).
+    pub fn register_deref_lang_item(&mut self, trait_def_id: DefId, target_item_def_id: DefId) {
+        self.deref_trait = Some(trait_def_id);
+        self.deref_target = Some(target_item_def_id);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,14 +234,17 @@ pub struct TraitDefData {
 pub enum TraitItemDefData {
     Fn {
         def_id: DefId,
+        ident: Ident,
         sig: PolyFnSig,
     },
     Const {
         def_id: DefId,
+        ident: Ident,
         ty: TyId,
     },
     Type {
         def_id: DefId,
+        ident: Ident,
         bounds: Vec<TraitRef>,
         default: Option<TyId>,
     },
@@ -238,6 +256,14 @@ impl TraitItemDefData {
             TraitItemDefData::Fn { def_id, .. }
             | TraitItemDefData::Const { def_id, .. }
             | TraitItemDefData::Type { def_id, .. } => def_id,
+        }
+    }
+
+    pub fn ident(&self) -> Ident {
+        match *self {
+            TraitItemDefData::Fn { ident, .. }
+            | TraitItemDefData::Const { ident, .. }
+            | TraitItemDefData::Type { ident, .. } => ident,
         }
     }
 }
@@ -258,14 +284,17 @@ pub struct ImplDefData {
 pub enum ImplItemDefData {
     Fn {
         def_id: DefId,
+        ident: Ident,
         sig: PolyFnSig,
     },
     Const {
         def_id: DefId,
+        ident: Ident,
         ty: TyId,
     },
     Type {
         def_id: DefId,
+        ident: Ident,
         ty: TyId,
     },
 }
@@ -276,6 +305,14 @@ impl ImplItemDefData {
             ImplItemDefData::Fn { def_id, .. }
             | ImplItemDefData::Const { def_id, .. }
             | ImplItemDefData::Type { def_id, .. } => def_id,
+        }
+    }
+
+    pub fn ident(&self) -> Ident {
+        match *self {
+            ImplItemDefData::Fn { ident, .. }
+            | ImplItemDefData::Const { ident, .. }
+            | ImplItemDefData::Type { ident, .. } => ident,
         }
     }
 }
