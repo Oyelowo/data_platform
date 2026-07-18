@@ -14,6 +14,7 @@
  * - `writeback` — Write inferred types back to HIR.
  */
 
+pub mod autoderef;
 pub mod check;
 pub mod coerce;
 pub mod collector;

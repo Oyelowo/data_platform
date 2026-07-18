@@ -4,7 +4,7 @@ use yelang_arena::{DefId, FxHashMap};
 use yelang_hir::ids::{ExprId, PatId};
 use yelang_ty::ty::TyId;
 
-use crate::method::Adjustment;
+use crate::autoderef::Adjustment;
 
 /// The result of type-checking a function body.
 ///

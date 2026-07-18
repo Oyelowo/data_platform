@@ -76,6 +76,7 @@ impl TypeSuperFoldable for TyId {
                 sig: crate::ty::FnSig {
                     inputs: sig.sig.inputs.fold_with(folder),
                     output: sig.sig.output.fold_with(folder),
+                    return_ty_infer: sig.sig.return_ty_infer,
                 },
             }),
             Ty::FnDef(fd) => Ty::FnDef(crate::ty::FnDef {

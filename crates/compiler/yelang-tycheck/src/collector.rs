@@ -345,11 +345,20 @@ fn lower_fn_sig(cx: &mut CollectorCx<'_>, sig: &hir::FnSig) -> PolyFnSig {
         .iter()
         .map(|t| GenericArg::Type(lower_hir_ty_id(*t, cx)))
         .collect();
-    let output = lower_hir_ty_id(sig.output, cx);
+    let return_ty_infer = matches!(
+        cx.tcx.crate_hir().ty(sig.output),
+        Some(yelang_hir::hir::ty::HirTy::Infer)
+    );
+    let output = if return_ty_infer {
+        cx.tcx.interner().mk_ty(Ty::Error)
+    } else {
+        lower_hir_ty_id(sig.output, cx)
+    };
     PolyFnSig {
         sig: yelang_ty::ty::FnSig {
             inputs: cx.tcx.interner().mk_generic_args(&inputs),
             output,
+            return_ty_infer,
         },
     }
 }

@@ -10,8 +10,9 @@ use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
 use yelang_ty::generic::GenericArg;
 use yelang_ty::primitive::IntTy;
+use yelang_ty::generic::Substitution;
 use yelang_ty::subst::substitute;
-use yelang_ty::ty::{InferTy, Mutability, Ty, TyId, TypeAndMut};
+use yelang_ty::ty::{AdtDef, AnonStructDef, InferTy, Mutability, Ty, TyId, TypeAndMut};
 
 use crate::coerce::Coerce;
 use crate::fn_ctxt::{BreakableKind, BreakableScope, FnCtxt};
@@ -27,6 +28,13 @@ pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
         .body(body_id)
         .expect("BodyId should be valid")
         .clone();
+
+    // If the signature declared the return type as `_`, infer it from the body.
+    if let Some(poly_sig) = fcx.tcx.fn_sig(fcx.results.def_id) {
+        if poly_sig.sig.return_ty_infer {
+            fcx.return_ty = fcx.new_ty_var();
+        }
+    }
 
     // Check parameters: introduce local variables for each param
     for param in &body.params {
@@ -357,7 +365,7 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
             let subst = fcx.fresh_substitution_for_generics(fd.def_id);
             let inputs = substitute(interner, poly_sig.sig.inputs, &subst);
             let output = substitute(interner, poly_sig.sig.output, &subst);
-            let sig = yelang_ty::ty::FnSig { inputs, output };
+            let sig = yelang_ty::ty::FnSig { inputs, output, return_ty_infer: poly_sig.sig.return_ty_infer };
 
             if sig.inputs.len() != args.len() {
                 return fcx.mk_error();
@@ -423,26 +431,63 @@ fn check_field(
     field: &yelang_ast::Ident,
 ) -> TyId {
     let expr_ty = check_expr(fcx, expr);
+    let steps = crate::autoderef::probe_deref_steps(fcx, expr_ty);
+
+    for (probe_ty, adjustments) in steps {
+        if let Some(field_ty) = lookup_field(fcx, probe_ty, field) {
+            // Commit to this deref chain. Built-in deref steps need no extra
+            // work; user-defined `Deref` steps must be proven as obligations.
+            for adj in &adjustments {
+                if let crate::autoderef::Adjustment::DerefTrait { source, target } = *adj {
+                    crate::autoderef::emit_deref_trait_obligations(fcx, source, target);
+                }
+            }
+            if !adjustments.is_empty() {
+                fcx.results.expr_adjustments.insert(expr, adjustments);
+            }
+            return field_ty;
+        }
+    }
+
+    fcx.mk_error()
+}
+
+/// Look up a named field in a type (without considering deref).
+fn lookup_field(
+    fcx: &mut FnCtxt<'_>,
+    ty: TyId,
+    field: &yelang_ast::Ident,
+) -> Option<TyId> {
     let interner = fcx.tcx.interner();
 
-    match interner.ty(expr_ty) {
+    match interner.ty(ty) {
         Ty::Tuple(args) => {
-            // Tuple field access: field name should be a digit index
             let index = field.symbol.as_usize();
-            if let Some(arg) = args.get(index) {
-                match arg {
-                    GenericArg::Type(t) => *t,
-                    _ => fcx.mk_error(),
-                }
+            args.get(index).and_then(|arg| match arg {
+                GenericArg::Type(t) => Some(*t),
+                _ => None,
+            })
+        }
+        Ty::Adt(AdtDef { def_id }, args) => {
+            let adt = fcx.tcx.adt_def(def_id)?;
+            // For structs we only have a single variant; enums require match.
+            let variant = adt.variants.first()?;
+            let field_data = variant
+                .fields
+                .iter()
+                .find(|f| f.ident.symbol == field.symbol)?;
+            if args.is_empty() {
+                Some(field_data.ty)
             } else {
-                fcx.mk_error()
+                let subst = Substitution::from_args(args.iter().copied().collect());
+                Some(substitute(interner, field_data.ty, &subst))
             }
         }
-        Ty::Adt(_, _) | Ty::AnonStruct(_) | Ty::Infer(InferTy::TyVar(_)) => {
-            // TODO: struct field lookup (needs field map from DefId)
-            fcx.new_ty_var()
-        }
-        _ => fcx.mk_error(),
+        Ty::AnonStruct(AnonStructDef { fields }) => fields
+            .iter()
+            .find(|f| f.name == field.symbol)
+            .map(|f| f.ty),
+        _ => None,
     }
 }
 

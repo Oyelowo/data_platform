@@ -67,7 +67,7 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
             let inputs = cx.interner().mk_generic_args(&lowered_inputs);
             let output = lower_hir_ty_id(sig.output, cx);
             cx.mk_ty(Ty::FnPtr(yelang_ty::ty::PolyFnSig {
-                sig: yelang_ty::ty::FnSig { inputs, output },
+                sig: yelang_ty::ty::FnSig { inputs, output, return_ty_infer: false },
             }))
         }
         HirTy::AnonStruct { fields } => {

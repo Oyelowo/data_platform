@@ -54,12 +54,18 @@ pub fn writeback_types(fcx: &mut FnCtxt<'_>) {
 fn resolve_with_fallback(fcx: &mut FnCtxt<'_>, ty: TyId) -> TyId {
     let interner = fcx.tcx.interner();
     match interner.ty(ty) {
-        Ty::Infer(InferTy::IntVar(_)) => {
-            // Integer fallback: i32
+        Ty::Infer(InferTy::IntVar(vid)) => {
+            // Integer fallback: i32. Also commit the fallback to the inference
+            // tables so that other references to the same variable resolve
+            // consistently (e.g. an inferred return type).
+            let root = fcx.infer.find_int_var(vid);
+            let _ = fcx.infer.set_int_var(root, IntTy::I32);
             fcx.mk_int(IntTy::I32)
         }
-        Ty::Infer(InferTy::FloatVar(_)) => {
-            // Float fallback: f64
+        Ty::Infer(InferTy::FloatVar(vid)) => {
+            // Float fallback: f64.
+            let root = fcx.infer.find_float_var(vid);
+            let _ = fcx.infer.set_float_var(root, FloatTy::F64);
             fcx.mk_float(FloatTy::F64)
         }
         Ty::Infer(InferTy::TyVar(_)) => {

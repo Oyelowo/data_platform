@@ -217,6 +217,9 @@ pub struct PolyFnSig {
 pub struct FnSig {
     pub inputs: GenericArgsRef,
     pub output: TyId,
+    /// True when the return type was written as `_` and should be inferred from
+    /// the function body.
+    pub return_ty_infer: bool,
 }
 
 /// Mutability.

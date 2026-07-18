@@ -161,7 +161,7 @@ impl<'a> FnCtxt<'a> {
 
     pub fn mk_fn_ptr(&self, inputs: List<GenericArg>, output: TyId) -> TyId {
         self.mk_ty(Ty::FnPtr(yelang_ty::ty::PolyFnSig {
-            sig: yelang_ty::ty::FnSig { inputs, output },
+            sig: yelang_ty::ty::FnSig { inputs, output, return_ty_infer: false },
         }))
     }
 
