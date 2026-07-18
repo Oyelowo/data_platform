@@ -129,9 +129,25 @@ impl BPlusTreeCursor {
         }
     }
 
+    /// Refresh the pinned root if the current tree root has changed (e.g. due
+    /// to a root-level merge).  The MVCC read timestamp still governs record
+    /// visibility, so switching physical roots is safe.
+    fn refresh_root(&mut self) {
+        let current_root = self.tree.root_page_id();
+        if current_root != self.root {
+            self.tree.unpin_root(self.root);
+            self.tree.pin_root(current_root);
+            self.root = current_root;
+        }
+    }
+
     /// Descend from the pinned root to the leaf that should contain `key`.
     /// Returns `None` when a page version changes during the descent.
-    fn descend(&self, key: Option<&[u8]>) -> Result<Option<(PageGuard, Vec<CursorEntry>, usize)>> {
+    fn descend(
+        &mut self,
+        key: Option<&[u8]>,
+    ) -> Result<Option<(PageGuard, Vec<CursorEntry>, usize)>> {
+        self.refresh_root();
         let mut current_id = self.root;
         loop {
             let guard = self.tree.pool().fetch_or_read(current_id)?;

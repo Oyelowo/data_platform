@@ -735,6 +735,14 @@ impl Page {
         if slot.is_deleted() {
             return Err(Error::Corruption("read of deleted slot".into()));
         }
+        self.get_cell_at_slot(&slot)
+    }
+
+    /// Read the cell bytes described by an already-loaded slot.
+    ///
+    /// The slot's deleted flag is *not* re-checked; callers that need the
+    /// deleted-slot error must check it themselves.
+    fn get_cell_at_slot(&self, slot: &Slot) -> Result<OwnedCell> {
         let off = slot.offset as usize;
         let len = slot.len as usize;
         if off + len > self.page_size() {
@@ -750,25 +758,35 @@ impl Page {
     }
 
     /// Return the first live key in the page, or `None` if the page is empty.
+    ///
+    /// This reads each slot only once so that a concurrent delete cannot turn a
+    /// "live" observation into a deleted-slot error between the check and the
+    /// cell read.  The OLC version check performed by callers ensures a
+    /// concurrently modified page is discarded and retried.
     pub fn first_key(&self) -> Result<Option<Vec<u8>>> {
         let count = self.slot_count()?;
         for idx in 0..count {
-            if self.read_slot(idx)?.is_deleted() {
+            let slot = self.read_slot(idx)?;
+            if slot.is_deleted() {
                 continue;
             }
-            return Ok(Some(self.get_by_slot(idx)?.key));
+            return Ok(Some(self.get_cell_at_slot(&slot)?.key));
         }
         Ok(None)
     }
 
     /// Return the last live key in the page, or `None` if the page is empty.
+    ///
+    /// Like `first_key`, this reads each slot only once to avoid a deleted-slot
+    /// race under optimistic concurrency.
     pub fn last_key(&self) -> Result<Option<Vec<u8>>> {
         let count = self.slot_count()?;
         for idx in (0..count).rev() {
-            if self.read_slot(idx)?.is_deleted() {
+            let slot = self.read_slot(idx)?;
+            if slot.is_deleted() {
                 continue;
             }
-            return Ok(Some(self.get_by_slot(idx)?.key));
+            return Ok(Some(self.get_cell_at_slot(&slot)?.key));
         }
         Ok(None)
     }

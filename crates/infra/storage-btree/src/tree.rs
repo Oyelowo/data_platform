@@ -3327,6 +3327,64 @@ mod tests {
         }
     }
 
+    /// Regression test for the poisoned-old-root race.
+    ///
+    /// When the root collapses due to concurrent deletes, the old root page is
+    /// poisoned (`leftmost_child` set to NULL) so that no thread follows it.
+    /// Optimistic traversals that captured the old root id before the collapse
+    /// must retry rather than fetch a null page id.
+    #[test]
+    #[cfg(not(miri))]
+    fn concurrent_delete_and_scan_stress() {
+        let (tree, _dir) = make_tree(512, 1);
+        let tree = Arc::new(tree);
+        let keys: Vec<String> = (0u64..120).map(|i| format!("{:08x}", i)).collect();
+        for key in &keys {
+            tree.insert(key.as_bytes(), b"v").unwrap();
+        }
+
+        let mut handles = Vec::new();
+
+        // Two deleters remove disjoint key subsets.  This drives root-level
+        // merges that poison the old root.
+        for t in 0..2 {
+            let tree = Arc::clone(&tree);
+            let keys = keys.clone();
+            handles.push(std::thread::spawn(move || {
+                for key in keys.iter().skip(t).step_by(2) {
+                    tree.delete(key.as_bytes()).unwrap();
+                }
+            }));
+        }
+
+        // One scanner repeatedly traverses the tree from the current root while
+        // deletes are collapsing it.  This exercises both `optimistic_path_to_leaf`
+        // and `BPlusTreeCursor::descend`.
+        let scanner_tree = Arc::clone(&tree);
+        handles.push(std::thread::spawn(move || {
+            for _ in 0..30 {
+                let txn = scanner_tree
+                    .begin_txn(crate::txn::IsolationLevel::Snapshot)
+                    .unwrap();
+                let cursor = crate::cursor::BPlusTreeCursor::new(
+                    scanner_tree.clone(),
+                    &txn,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+                let _count = cursor.count();
+            }
+        }));
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        tree.check_integrity().unwrap();
+    }
+
     #[test]
     fn simple_insert_writes_wal_record() {
         let (tree, dir) = make_tree(4096, 1);
