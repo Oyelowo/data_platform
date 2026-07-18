@@ -48,7 +48,7 @@ impl<'a> AdtInfo<'a> {
             .filter_map(|p| match p {
                 crate::hir::core::GenericParam::Type { def_id, .. } => {
                     Some(crate::hir::ty::GenericArg::Type(ctx.ctx.crate_hir.alloc_ty(
-                        crate::hir::ty::HirTy::Path {
+                        crate::hir::ty::Ty::Path {
                             res: Res::Def { def_id: *def_id },
                             args: vec![],
                         },
@@ -64,7 +64,7 @@ impl<'a> AdtInfo<'a> {
             })
             .collect();
         ctx.ctx.crate_hir.alloc_ty(
-            crate::hir::ty::HirTy::Path {
+            crate::hir::ty::Ty::Path {
                 res: Res::Def {
                     def_id: self.def_id,
                 },

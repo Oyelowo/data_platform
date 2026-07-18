@@ -3,7 +3,7 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
-    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, HirTy, UsePath, VariantData,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
 use crate::hir::body::Body;
@@ -43,7 +43,7 @@ pub trait Visitor<'hir>: Sized {
         walk_stmt(self, stmt)
     }
 
-    fn visit_ty(&mut self, ty: &'hir HirTy) {
+    fn visit_ty(&mut self, ty: &'hir Ty) {
         walk_ty(self, ty)
     }
 
@@ -498,58 +498,58 @@ pub fn walk_body<'hir, V: Visitor<'hir>>(visitor: &mut V, body: &'hir Body) {
     visitor.visit_expr_by_id(body.value);
 }
 
-pub fn walk_ty<'hir, V: Visitor<'hir>>(visitor: &mut V, ty: &'hir HirTy) {
+pub fn walk_ty<'hir, V: Visitor<'hir>>(visitor: &mut V, ty: &'hir Ty) {
     match ty {
-        HirTy::Path { args, .. } => {
+        Ty::Path { args, .. } => {
             for arg in args {
                 walk_generic_arg(visitor, arg);
             }
         }
-        HirTy::Tuple { tys } => {
+        Ty::Tuple { tys } => {
             for t in tys {
                 visitor.visit_ty_by_id(*t);
             }
         }
-        HirTy::Array { ty: inner, len } => {
+        Ty::Array { ty: inner, len } => {
             visitor.visit_ty_by_id(*inner);
             walk_const(visitor, len);
         }
-        HirTy::Slice { ty: inner } => {
+        Ty::Slice { ty: inner } => {
             visitor.visit_ty_by_id(*inner);
         }
-        HirTy::FnPtr { sig } => {
+        Ty::FnPtr { sig } => {
             walk_fn_sig(visitor, sig);
         }
-        HirTy::AnonStruct { fields } => {
+        Ty::AnonStruct { fields } => {
             for field in fields {
                 visitor.visit_ty_by_id(field.ty);
             }
         }
-        HirTy::TypeLit { .. } => {}
-        HirTy::Utility { args, .. } => {
+        Ty::TypeLit { .. } => {}
+        Ty::Utility { args, .. } => {
             for arg in args {
                 visitor.visit_ty_by_id(*arg);
             }
         }
-        HirTy::Ref { ty: inner, .. } | HirTy::RawPtr { ty: inner, .. } => {
+        Ty::Ref { ty: inner, .. } | Ty::RawPtr { ty: inner, .. } => {
             visitor.visit_ty_by_id(*inner);
         }
-        HirTy::ForAll { params, ty: inner } => {
+        Ty::ForAll { params, ty: inner } => {
             for param in params {
                 visitor.visit_binder_param(param);
             }
             visitor.visit_ty_by_id(*inner);
         }
-        HirTy::Union { tys } => {
+        Ty::Union { tys } => {
             for t in tys {
                 visitor.visit_ty_by_id(*t);
             }
         }
-        HirTy::ImplTrait { .. } | HirTy::DynTrait { .. } => {}
-        HirTy::TypeOf { expr } => {
+        Ty::ImplTrait { .. } | Ty::DynTrait { .. } => {}
+        Ty::TypeOf { expr } => {
             visitor.visit_expr_by_id(*expr);
         }
-        HirTy::Never | HirTy::Infer | HirTy::Missing | HirTy::Err => {}
+        Ty::Never | Ty::Infer | Ty::Missing | Ty::Err => {}
     }
 }
 

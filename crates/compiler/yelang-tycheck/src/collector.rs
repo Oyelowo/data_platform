@@ -347,7 +347,7 @@ fn lower_fn_sig(cx: &mut CollectorCx<'_>, sig: &hir::FnSig) -> PolyFnSig {
         .collect();
     let return_ty_infer = matches!(
         cx.tcx.crate_hir().ty(sig.output),
-        Some(yelang_hir::hir::ty::HirTy::Infer)
+        Some(yelang_hir::hir::ty::Ty::Infer)
     );
     let output = if return_ty_infer {
         cx.tcx.interner().mk_ty(Ty::Error)
@@ -580,8 +580,8 @@ impl<'a> TyLowerCtxt for CollectorCx<'a> {
 mod tests {
     use super::*;
     use yelang_hir::hir::core::{FnSig, Generics, Item, ItemKind, Visibility};
+    use yelang_hir as hir;
     use yelang_hir::hir::body::Body;
-    use yelang_hir::hir::ty::HirTy;
     use yelang_hir::ids::BodyId;
     use yelang_hir::res::{PrimTy, IntTy as HirIntTy, Res};
     use yelang_interner::Symbol;
@@ -595,7 +595,7 @@ mod tests {
 
     fn hir_i32(hir: &mut HirCrate) -> yelang_hir::ids::HirTyId {
         hir.alloc_ty(
-            HirTy::Path {
+            hir::hir::Ty::Path {
                 res: Res::PrimTy {
                     ty: PrimTy::Int(HirIntTy::I32),
                 },
@@ -712,14 +712,14 @@ mod tests {
         let bar_trait = DefId::new(20);
 
         let t_ty = hir.alloc_ty(
-            HirTy::Path {
+            hir::Ty::Path {
                 res: Res::Def { def_id: t_param },
                 args: vec![],
             },
             dummy_span(),
         );
         let u_ty = hir.alloc_ty(
-            HirTy::Path {
+            hir::Ty::Path {
                 res: Res::Def { def_id: u_param },
                 args: vec![],
             },

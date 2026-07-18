@@ -12,7 +12,7 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
-    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, HirTy, UsePath, VariantData,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
 use crate::hir::body::Body;
@@ -44,7 +44,7 @@ pub trait Folder: Sized {
         stmt
     }
 
-    fn fold_ty(&mut self, ty: HirTy) -> HirTy {
+    fn fold_ty(&mut self, ty: Ty) -> Ty {
         ty
     }
 
@@ -586,32 +586,32 @@ pub fn walk_body(f: &mut impl Folder, crate_hir: &mut Crate, body: Body) -> Body
     }
 }
 
-pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: HirTy) -> HirTy {
+pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: Ty) -> Ty {
     match ty {
-        HirTy::Path { res, args } => HirTy::Path {
+        Ty::Path { res, args } => Ty::Path {
             res,
             args: args
                 .into_iter()
                 .map(|arg| walk_generic_arg(f, crate_hir, arg))
                 .collect(),
         },
-        HirTy::Tuple { tys } => HirTy::Tuple {
+        Ty::Tuple { tys } => Ty::Tuple {
             tys: tys
                 .into_iter()
                 .map(|t| fold_ty_id(f, crate_hir, t))
                 .collect(),
         },
-        HirTy::Array { ty: inner, len } => HirTy::Array {
+        Ty::Array { ty: inner, len } => Ty::Array {
             ty: fold_ty_id(f, crate_hir, inner),
             len: walk_const(f, crate_hir, len),
         },
-        HirTy::Slice { ty: inner } => HirTy::Slice {
+        Ty::Slice { ty: inner } => Ty::Slice {
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        HirTy::FnPtr { sig } => HirTy::FnPtr {
+        Ty::FnPtr { sig } => Ty::FnPtr {
             sig: Box::new(walk_fn_sig(f, crate_hir, *sig)),
         },
-        HirTy::AnonStruct { fields } => HirTy::AnonStruct {
+        Ty::AnonStruct { fields } => Ty::AnonStruct {
             fields: fields
                 .into_iter()
                 .map(|field| crate::hir::ty::AnonField {
@@ -620,41 +620,41 @@ pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: HirTy) -> HirTy {
                 })
                 .collect(),
         },
-        HirTy::TypeLit { variants } => HirTy::TypeLit { variants },
-        HirTy::Utility { kind, args } => HirTy::Utility {
+        Ty::TypeLit { variants } => Ty::TypeLit { variants },
+        Ty::Utility { kind, args } => Ty::Utility {
             kind,
             args: args
                 .into_iter()
                 .map(|arg| fold_ty_id(f, crate_hir, arg))
                 .collect(),
         },
-        HirTy::TypeOf { expr } => HirTy::TypeOf {
+        Ty::TypeOf { expr } => Ty::TypeOf {
             expr: fold_expr_id(f, crate_hir, expr),
         },
-        HirTy::Ref { mutability, ty: inner } => HirTy::Ref {
+        Ty::Ref { mutability, ty: inner } => Ty::Ref {
             mutability,
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        HirTy::RawPtr { mutability, ty: inner } => HirTy::RawPtr {
+        Ty::RawPtr { mutability, ty: inner } => Ty::RawPtr {
             mutability,
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        HirTy::ForAll { params, ty: inner } => HirTy::ForAll {
+        Ty::ForAll { params, ty: inner } => Ty::ForAll {
             params: params
                 .into_iter()
                 .map(|param| walk_binder_param(f, crate_hir, param))
                 .collect(),
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        HirTy::Union { tys } => HirTy::Union {
+        Ty::Union { tys } => Ty::Union {
             tys: tys
                 .into_iter()
                 .map(|t| fold_ty_id(f, crate_hir, t))
                 .collect(),
         },
-        HirTy::ImplTrait { path } => HirTy::ImplTrait { path },
-        HirTy::DynTrait { path } => HirTy::DynTrait { path },
-        HirTy::Never | HirTy::Infer | HirTy::Missing | HirTy::Err => ty,
+        Ty::ImplTrait { path } => Ty::ImplTrait { path },
+        Ty::DynTrait { path } => Ty::DynTrait { path },
+        Ty::Never | Ty::Infer | Ty::Missing | Ty::Err => ty,
     }
 }
 

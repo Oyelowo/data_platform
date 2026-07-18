@@ -10,7 +10,7 @@ use yelang_lexer::Span;
 
 use crate::hir::core::{
     Expr, ImplItem, ImplItemKind, Item, ItemKind, Pat, TraitBound, TraitItem, TraitItemKind,
-    TraitRef, HirTy, UsePath,
+    TraitRef, Ty, UsePath,
 };
 use crate::crate_data::Crate;
 use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
@@ -318,10 +318,10 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
         walk_pat(self, pat);
     }
 
-    fn visit_ty(&mut self, ty: &'hir HirTy) {
+    fn visit_ty(&mut self, ty: &'hir Ty) {
         match ty {
-            HirTy::Path { res, .. } => self.check_res(res, None),
-            HirTy::Array { len, .. } => self.check_const(len, Some(len.span)),
+            Ty::Path { res, .. } => self.check_res(res, None),
+            Ty::Array { len, .. } => self.check_const(len, Some(len.span)),
             _ => {}
         }
         walk_ty(self, ty);

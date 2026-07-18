@@ -4,7 +4,7 @@ use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
 use crate::derive::helpers::{derive_generics, FieldView, impl_item, iter_fields};
 use crate::hir::core::Item;
-use crate::hir::ty::HirTy;
+use crate::hir::ty::Ty;
 use yelang_resolve::lang_items::LangItem;
 
 /// Expand `#[derive(Eq)]` for a struct or enum.
@@ -100,7 +100,7 @@ fn find_float_in_fields(
 
 fn is_float(ty_id: crate::ids::HirTyId, ctx: &crate::derive::context::DeriveContext<'_, '_>) -> bool {
     let ty = ctx.ctx.crate_hir.ty(ty_id).expect("field type");
-    if let HirTy::Path {
+    if let Ty::Path {
         res: crate::res::Res::PrimTy {
             ty: crate::res::PrimTy::Float(_),
         },
@@ -111,7 +111,7 @@ fn is_float(ty_id: crate::ids::HirTyId, ctx: &crate::derive::context::DeriveCont
     }
     // Primitives may also be resolved to prelude/type-alias definitions with
     // a float lang item.
-    if let HirTy::Path {
+    if let Ty::Path {
         res: crate::res::Res::Def { def_id },
         ..
     } = ty

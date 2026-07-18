@@ -1,13 +1,14 @@
 /*! Lower HIR types to canonical `yelang_ty::TyId`.
  *
- * HIR types (`hir::HirTy`) are syntactic and already have resolved paths.
+ * HIR types (`hir::Ty`) are syntactic and already have resolved paths.
  * This module converts them to the interned type representation.
  *
  * The lowering is parameterized over a [`TyLowerCtxt`] so that both the
  * signature collector and the body type checker can reuse the same logic.
  */
 
-use yelang_hir::hir::ty::{GenericArg as HirGenericArg, HirTy, UtilityKind as HirUtilityKind};
+use yelang_hir as hir;
+use yelang_hir::hir::ty::{GenericArg as HirGenericArg, UtilityKind as HirUtilityKind};
 use yelang_hir::ids::HirTyId;
 use yelang_hir::res::{FloatTy as HirFloatTy, IntTy as HirIntTy, PrimTy, Res};
 use yelang_ty::generic::GenericArg;
@@ -20,7 +21,7 @@ use yelang_ty::ty::{
 use crate::lower_ctx::TyLowerCtxt;
 
 /// Lower a HIR type to a canonical type.
-pub fn lower_hir_ty<Cx: TyLowerCtxt>(hir_ty: &HirTy, cx: &mut Cx) -> TyId {
+pub fn lower_hir_ty<Cx: TyLowerCtxt>(hir_ty: &hir::Ty, cx: &mut Cx) -> TyId {
     lower_hir_ty_value(hir_ty, cx)
 }
 
@@ -34,10 +35,10 @@ pub fn lower_hir_ty_id<Cx: TyLowerCtxt>(ty_id: HirTyId, cx: &mut Cx) -> TyId {
     lower_hir_ty(&hir_ty, cx)
 }
 
-fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
+fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &hir::Ty, cx: &mut Cx) -> TyId {
     match ty {
-        HirTy::Path { res, args } => lower_res(res, args, cx),
-        HirTy::Tuple { tys } => {
+        hir::Ty::Path { res, args } => lower_res(res, args, cx),
+        hir::Ty::Tuple { tys } => {
             let lowered: Vec<_> = tys
                 .iter()
                 .map(|t| lower_hir_ty_id(*t, cx))
@@ -50,16 +51,16 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
             );
             cx.mk_ty(Ty::Tuple(args))
         }
-        HirTy::Array { ty, len } => {
+        hir::Ty::Array { ty, len } => {
             let elem_ty = lower_hir_ty_id(*ty, cx);
             let len_const = lower_hir_const(len, elem_ty, cx);
             cx.mk_ty(Ty::Array(elem_ty, len_const))
         }
-        HirTy::Slice { ty } => {
+        hir::Ty::Slice { ty } => {
             let elem_ty = lower_hir_ty_id(*ty, cx);
             cx.mk_ty(Ty::Slice(elem_ty))
         }
-        HirTy::FnPtr { sig } => {
+        hir::Ty::FnPtr { sig } => {
             let lowered_inputs: Vec<_> = sig.inputs
                 .iter()
                 .map(|t| GenericArg::Type(lower_hir_ty_id(*t, cx)))
@@ -70,7 +71,7 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
                 sig: yelang_ty::ty::FnSig { inputs, output, return_ty_infer: false },
             }))
         }
-        HirTy::AnonStruct { fields } => {
+        hir::Ty::AnonStruct { fields } => {
             let lowered_fields: Vec<_> = fields
                 .iter()
                 .map(|f| AnonField {
@@ -83,11 +84,11 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
                 fields: field_list,
             }))
         }
-        HirTy::TypeLit { .. } => {
+        hir::Ty::TypeLit { .. } => {
             // Type literals are union-like; for now return a fresh variable
             cx.lower_infer()
         }
-        HirTy::Utility { kind, args } => {
+        hir::Ty::Utility { kind, args } => {
             let kind = match kind {
                 HirUtilityKind::Omit => yelang_ty::ty::UtilityKind::Omit,
                 HirUtilityKind::Pick => yelang_ty::ty::UtilityKind::Pick,
@@ -103,21 +104,21 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
             let lowered_args = cx.interner().mk_generic_args(&lowered_args);
             cx.mk_ty(Ty::Utility(kind, lowered_args))
         }
-        HirTy::Ref { mutability, ty } => {
+        hir::Ty::Ref { mutability, ty } => {
             let mutbl = lower_mutability(mutability.clone());
             let inner = lower_hir_ty_id(*ty, cx);
             cx.mk_ty(Ty::Ref(inner, mutbl))
         }
-        HirTy::RawPtr { mutability, ty } => {
+        hir::Ty::RawPtr { mutability, ty } => {
             let mutbl = lower_mutability(mutability.clone());
             let inner = lower_hir_ty_id(*ty, cx);
             cx.mk_ty(Ty::RawPtr(TypeAndMut { ty: inner, mutbl }))
         }
-        HirTy::ForAll { ty, .. } => {
+        hir::Ty::ForAll { ty, .. } => {
             // HRTB: for now just lower the inner type
             lower_hir_ty_id(*ty, cx)
         }
-        HirTy::Union { tys } => {
+        hir::Ty::Union { tys } => {
             if tys.is_empty() {
                 return cx.mk_never();
             }
@@ -127,10 +128,10 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
                 cx.mk_ty(Ty::Union(acc, lowered))
             })
         }
-        HirTy::TypeOf { expr } => cx.lower_typeof(*expr),
-        HirTy::Never => cx.mk_never(),
-        HirTy::Missing => cx.lower_missing(),
-        HirTy::ImplTrait { path } => {
+        hir::Ty::TypeOf { expr } => cx.lower_typeof(*expr),
+        hir::Ty::Never => cx.mk_never(),
+        hir::Ty::Missing => cx.lower_missing(),
+        hir::Ty::ImplTrait { path } => {
             if let Res::Def { def_id } = path {
                 cx.mk_ty(Ty::Alias(AliasTy {
                     def_id: *def_id,
@@ -140,7 +141,7 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
                 cx.lower_infer()
             }
         }
-        HirTy::DynTrait { path } => {
+        hir::Ty::DynTrait { path } => {
             if let Res::Def { def_id } = path {
                 // TODO: proper existential predicate list
                 let pred = yelang_ty::ty::ExistentialPredicate::Trait(
@@ -158,8 +159,8 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &HirTy, cx: &mut Cx) -> TyId {
                 cx.lower_infer()
             }
         }
-        HirTy::Infer => cx.lower_infer(),
-        HirTy::Err => cx.mk_error(),
+        hir::Ty::Infer => cx.lower_infer(),
+        hir::Ty::Err => cx.mk_error(),
     }
 }
 

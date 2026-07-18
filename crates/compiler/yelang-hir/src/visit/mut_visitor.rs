@@ -8,7 +8,7 @@
 use crate::crate_data::Crate;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
-    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, HirTy, UsePath, VariantData,
+    ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
 use crate::hir::body::Body;
@@ -32,7 +32,7 @@ pub trait MutVisitor: Sized {
 
     fn visit_stmt(&mut self, _stmt: &mut Stmt) {}
 
-    fn visit_ty(&mut self, _ty: &mut HirTy) {}
+    fn visit_ty(&mut self, _ty: &mut Ty) {}
 
     fn visit_pat(&mut self, _pat: &mut Pat) {}
 
@@ -454,58 +454,58 @@ pub fn walk_body_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, body: &mut 
     visit_expr_id_mut(v, crate_hir, body.value);
 }
 
-pub fn walk_ty_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty: &mut HirTy) {
+pub fn walk_ty_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty: &mut Ty) {
     match ty {
-        HirTy::Path { args, .. } => {
+        Ty::Path { args, .. } => {
             for arg in args {
                 walk_generic_arg_mut(v, crate_hir, arg);
             }
         }
-        HirTy::Tuple { tys } => {
+        Ty::Tuple { tys } => {
             for t in tys {
                 visit_ty_id_mut(v, crate_hir, *t);
             }
         }
-        HirTy::Array { ty: inner, len } => {
+        Ty::Array { ty: inner, len } => {
             visit_ty_id_mut(v, crate_hir, *inner);
             walk_const_mut(v, crate_hir, len);
         }
-        HirTy::Slice { ty: inner } => {
+        Ty::Slice { ty: inner } => {
             visit_ty_id_mut(v, crate_hir, *inner);
         }
-        HirTy::FnPtr { sig } => {
+        Ty::FnPtr { sig } => {
             walk_fn_sig_mut(v, crate_hir, sig);
         }
-        HirTy::AnonStruct { fields } => {
+        Ty::AnonStruct { fields } => {
             for field in fields {
                 visit_ty_id_mut(v, crate_hir, field.ty);
             }
         }
-        HirTy::TypeLit { .. } => {}
-        HirTy::Utility { args, .. } => {
+        Ty::TypeLit { .. } => {}
+        Ty::Utility { args, .. } => {
             for arg in args {
                 visit_ty_id_mut(v, crate_hir, *arg);
             }
         }
-        HirTy::Ref { ty: inner, .. } | HirTy::RawPtr { ty: inner, .. } => {
+        Ty::Ref { ty: inner, .. } | Ty::RawPtr { ty: inner, .. } => {
             visit_ty_id_mut(v, crate_hir, *inner);
         }
-        HirTy::ForAll { params, ty: inner } => {
+        Ty::ForAll { params, ty: inner } => {
             for param in params {
                 walk_binder_param_mut(v, crate_hir, param);
             }
             visit_ty_id_mut(v, crate_hir, *inner);
         }
-        HirTy::Union { tys } => {
+        Ty::Union { tys } => {
             for t in tys {
                 visit_ty_id_mut(v, crate_hir, *t);
             }
         }
-        HirTy::TypeOf { expr } => {
+        Ty::TypeOf { expr } => {
             visit_expr_id_mut(v, crate_hir, *expr);
         }
-        HirTy::ImplTrait { .. } | HirTy::DynTrait { .. } => {}
-        HirTy::Never | HirTy::Infer | HirTy::Missing | HirTy::Err => {}
+        Ty::ImplTrait { .. } | Ty::DynTrait { .. } => {}
+        Ty::Never | Ty::Infer | Ty::Missing | Ty::Err => {}
     }
 }
 

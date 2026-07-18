@@ -4,7 +4,7 @@ use crate::crate_data::Crate;
 use crate::hir::core::{Expr, Item, Stmt};
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
-use crate::hir::ty::HirTy;
+use crate::hir::ty::Ty;
 use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
 
 /// Provides O(1) lookup from HIR ids to HIR nodes.
@@ -33,7 +33,7 @@ impl<'hir> Map<'hir> {
     }
 
     /// Lookup a HIR type by `HirTyId`.
-    pub fn ty(&self, ty_id: HirTyId) -> Option<&HirTy> {
+    pub fn ty(&self, ty_id: HirTyId) -> Option<&Ty> {
         self.crate_hir.ty(ty_id)
     }
 

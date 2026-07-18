@@ -11,7 +11,7 @@ pub use crate::hir::expr::Expr;
 pub use crate::hir::item::{Item, ItemKind};
 pub use crate::hir::pat::Pat;
 pub use crate::hir::adt::{FieldDef, StructField, VariantData};
-pub use crate::hir::ty::HirTy;
+pub use crate::hir::ty::Ty;
 
 use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
 use crate::res::Res;

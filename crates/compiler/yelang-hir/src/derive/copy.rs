@@ -6,7 +6,7 @@ use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
 use crate::derive::helpers::{derive_generics, FieldView, impl_item, iter_fields};
 use crate::hir::core::Item;
-use crate::hir::ty::HirTy;
+use crate::hir::ty::Ty;
 
 /// Expand `#[derive(Copy)]` for a struct or enum.
 pub fn derive_copy(
@@ -92,7 +92,7 @@ fn is_known_non_copy(ty_id: crate::ids::HirTyId, ctx: &DeriveContext<'_, '_>) ->
     let ty = ctx.ctx.crate_hir.ty(ty_id).expect("field type");
     matches!(
         ty,
-        HirTy::Path {
+        Ty::Path {
             res: crate::res::Res::Def { def_id },
             ..
         } if is_string_or_vec(ctx, *def_id)

@@ -36,7 +36,7 @@ pub fn derive_partial_eq(
 
     let self_ty = adt.self_ty(ctx);
     let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir::ty::HirTy::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: self_ty,
         },
@@ -58,7 +58,7 @@ fn eq_method(
     let self_param = self_param(ctx, ref_self_ty);
     let other_param = other_param(ctx, self_def_id);
     let bool_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir::ty::HirTy::Path {
+        crate::hir::ty::Ty::Path {
             res: crate::res::Res::PrimTy {
                 ty: crate::res::PrimTy::Bool,
             },

@@ -67,7 +67,7 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
 
     let self_ty = adt.self_ty(ctx);
     let ref_self_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir::ty::HirTy::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: self_ty,
         },
@@ -75,7 +75,7 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
     let formatter_ty = crate::derive::helpers::path_ty(ctx, formatter_def_id);
     let ref_formatter_ty = ctx.ctx.crate_hir.alloc_ty(
-        crate::hir::ty::HirTy::Ref {
+        crate::hir::ty::Ty::Ref {
             mutability: yelang_ast::Mutability::Mutable,
             ty: formatter_ty,
         },

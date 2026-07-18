@@ -12,7 +12,7 @@ use yelang_hir::Crate as HirCrate;
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
 use yelang_hir::hir::body::{Body, Param};
 use yelang_hir::hir::pat::{BindingMode, Pat};
-use yelang_hir::hir::ty::HirTy;
+use yelang_hir as hir;
 use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
 use yelang_interner::Symbol;
@@ -26,6 +26,7 @@ use crate::collector::collect_crate_types;
 use crate::fn_ctxt::FnCtxt;
 use crate::autoderef::Adjustment;
 use crate::pat::check_pat;
+use crate::hir_ty_lower::lower_hir_ty_id;
 use crate::tcx::{BuiltinTraitKind, TyCtxt};
 use crate::writeback::writeback_types;
 // ---------------------------------------------------------------------------
@@ -68,14 +69,14 @@ fn body(hir: &mut HirCrate, params: Vec<Param>, value: ExprId) -> BodyId {
     hir.alloc_body(Body { params, value, span: dummy_span() }, dummy_span())
 }
 
-fn hir_ty(hir: &mut HirCrate, ty: HirTy) -> HirTyId {
+fn hir_ty(hir: &mut HirCrate, ty: hir::Ty) -> HirTyId {
     hir.alloc_ty(ty, dummy_span())
 }
 
 fn hir_i32_id(hir: &mut HirCrate) -> HirTyId {
     hir_ty(
         hir,
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::PrimTy {
                 ty: yelang_hir::res::PrimTy::Int(yelang_hir::res::IntTy::I32),
             },
@@ -1303,7 +1304,7 @@ fn cast_returns_target_type() {
                 suffix: None,
             }),
         });
-    let target = HirTy::Path {
+    let target = hir::Ty::Path {
         res: Res::PrimTy {
             ty: yelang_hir::res::PrimTy::Int(yelang_hir::res::IntTy::I64),
         },
@@ -1519,7 +1520,7 @@ fn body_check_params_and_expr() {
                 name: symbol(1),
                 subpat: None,
             });
-    let _ty1 = hir_ty(&mut hir, HirTy::Path {
+    let _ty1 = hir_ty(&mut hir, hir::Ty::Path {
                 res: Res::PrimTy {
                     ty: yelang_hir::res::PrimTy::Int(yelang_hir::res::IntTy::I32),
                 },
@@ -1563,7 +1564,7 @@ fn expr_err_is_error() {
 /// Build a HIR generic function `fn id<T>(x: T) -> T`.
 fn build_generic_identity_fn(hir: &mut HirCrate, fn_def_id: DefId, param_def_id: DefId) -> BodyId {
     let param_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: param_def_id },
             args: vec![],
         },
@@ -1669,7 +1670,7 @@ fn builtin_trait_obligation_is_proven() {
 
     // Generic param with a `Clone` bound.
     let param_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: param_def_id },
             args: vec![],
         },
@@ -1858,28 +1859,28 @@ fn where_clause_with_generic_args_is_proven_via_param_env() {
     );
 
     let t_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: t_param },
             args: vec![],
         },
         dummy_span(),
     );
     let u_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: u_param },
             args: vec![],
         },
         dummy_span(),
     );
     let v_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: v_param },
             args: vec![],
         },
         dummy_span(),
     );
     let w_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: w_param },
             args: vec![],
         },
@@ -2056,7 +2057,7 @@ fn inherent_method_call_with_autoref() {
     let method_def_id = def_id(4);
 
     let foo_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: struct_def_id },
             args: vec![],
         },
@@ -2086,7 +2087,7 @@ fn inherent_method_call_with_autoref() {
     // `impl Foo { fn bar(&self, x: i32) -> bool { ... } }`
     let i32_hir_ty = hir_i32_id(&mut hir);
     let bool_hir_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::PrimTy {
                 ty: yelang_hir::res::PrimTy::Bool,
             },
@@ -2095,7 +2096,7 @@ fn inherent_method_call_with_autoref() {
         dummy_span(),
     );
     let ref_foo_ty = hir.alloc_ty(
-        HirTy::Ref {
+        hir::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: foo_ty_id,
         },
@@ -2185,7 +2186,7 @@ fn trait_method_call_extension() {
     let impl_method_def_id = def_id(6);
 
     let foo_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: struct_def_id },
             args: vec![],
         },
@@ -2214,7 +2215,7 @@ fn trait_method_call_extension() {
 
     // `trait Greet { fn greet(&self) -> bool; }`
     let bool_hir_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::PrimTy {
                 ty: yelang_hir::res::PrimTy::Bool,
             },
@@ -2223,7 +2224,7 @@ fn trait_method_call_extension() {
         dummy_span(),
     );
     let ref_foo_ty = hir.alloc_ty(
-        HirTy::Ref {
+        hir::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: foo_ty_id,
         },
@@ -2335,14 +2336,14 @@ fn identity_args_uses_correct_param_indices() {
     let struct_def_id = def_id(2);
 
     let t_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: def_id_t },
             args: vec![],
         },
         dummy_span(),
     );
     let _u_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: def_id_u },
             args: vec![],
         },
@@ -2424,14 +2425,14 @@ fn method_dispatch_via_deref_trait() {
     let inner_impl = def_id(9);
 
     let inner_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: inner_struct },
             args: vec![],
         },
         dummy_span(),
     );
     let wrapper_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: wrapper_struct },
             args: vec![],
         },
@@ -2532,7 +2533,7 @@ fn method_dispatch_via_deref_trait() {
 
     // `impl Inner { fn get(&self) -> bool { ... } }`
     let bool_hir_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::PrimTy {
                 ty: yelang_hir::res::PrimTy::Bool,
             },
@@ -2541,7 +2542,7 @@ fn method_dispatch_via_deref_trait() {
         dummy_span(),
     );
     let ref_inner_ty = hir.alloc_ty(
-        HirTy::Ref {
+        hir::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: inner_ty_id,
         },
@@ -2647,21 +2648,21 @@ fn deref_chain_two_steps() {
     let core_impl = def_id(20);
 
     let core_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: core_struct },
             args: vec![],
         },
         dummy_span(),
     );
     let inner_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: inner_struct },
             args: vec![],
         },
         dummy_span(),
     );
     let wrapper_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: wrapper_struct },
             args: vec![],
         },
@@ -2754,7 +2755,7 @@ fn deref_chain_two_steps() {
 
     // `impl Core { fn val(&self) -> bool { ... } }`
     let bool_hir_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::PrimTy {
                 ty: yelang_hir::res::PrimTy::Bool,
             },
@@ -2763,7 +2764,7 @@ fn deref_chain_two_steps() {
         dummy_span(),
     );
     let ref_core_ty = hir.alloc_ty(
-        HirTy::Ref {
+        hir::Ty::Ref {
             mutability: yelang_ast::Mutability::Immutable,
             ty: core_ty_id,
         },
@@ -3084,7 +3085,7 @@ fn field_generic_struct_substitutes_params() {
     let field_def_id = def_id(11);
 
     let t_ty = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: t_param },
             args: vec![],
         },
@@ -3267,14 +3268,14 @@ fn field_through_deref_trait() {
     let field_def_id = def_id(8);
 
     let inner_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: inner_struct },
             args: vec![],
         },
         dummy_span(),
     );
     let wrapper_ty_id = hir.alloc_ty(
-        HirTy::Path {
+        hir::Ty::Path {
             res: Res::Def { def_id: wrapper_struct },
             args: vec![],
         },
@@ -3434,7 +3435,7 @@ fn return_type_infer_from_body() {
     let mut hir = hir_crate();
 
     let fn_def_id = def_id(2);
-    let infer_return = hir.alloc_ty(HirTy::Infer, dummy_span());
+    let infer_return = hir.alloc_ty(hir::Ty::Infer, dummy_span());
     let i32_hir_ty = hir_i32_id(&mut hir);
 
     let body_value = expr(
@@ -3489,4 +3490,75 @@ fn return_type_infer_from_body() {
     let i32_ty = tcx.interner().mk_ty(Ty::Int(IntTy::I32));
     let resolved_return = fcx.resolve_ty(fcx.return_ty);
     assert_eq!(resolved_return, i32_ty);
+}
+
+// ---------------------------------------------------------------------------
+// Ty -> Ty lowering edge cases (Phase F)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn syntax_ty_infer_in_body_is_fresh_var() {
+    let hir = hir_crate();
+    let mut tcx = TyCtxt::new(hir);
+    let ty_id = tcx.crate_hir_mut().alloc_ty(hir::Ty::Infer, dummy_span());
+
+    let mut fcx = mk_fcx(&tcx);
+    let ty = lower_hir_ty_id(ty_id, &mut fcx);
+    assert!(matches!(tcx.interner().ty(ty), Ty::Infer(yelang_ty::ty::InferTy::TyVar(_))));
+}
+
+#[test]
+fn syntax_ty_missing_in_body_is_fresh_var() {
+    let hir = hir_crate();
+    let mut tcx = TyCtxt::new(hir);
+    let ty_id = tcx.crate_hir_mut().alloc_ty(hir::Ty::Missing, dummy_span());
+
+    let mut fcx = mk_fcx(&tcx);
+    let ty = lower_hir_ty_id(ty_id, &mut fcx);
+    assert!(matches!(tcx.interner().ty(ty), Ty::Infer(yelang_ty::ty::InferTy::TyVar(_))));
+}
+
+#[test]
+fn syntax_ty_typeof_in_body_lowers_to_expr_type() {
+    let hir = hir_crate();
+    let mut tcx = TyCtxt::new(hir);
+    let inner = expr(
+        &mut tcx.crate_hir_mut(),
+        Expr::Lit {
+            lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
+                value: symbol(1),
+                suffix: None,
+            }),
+        },
+    );
+    let ty_id = tcx
+        .crate_hir_mut()
+        .alloc_ty(hir::Ty::TypeOf { expr: inner }, dummy_span());
+
+    let mut fcx = mk_fcx(&tcx);
+    let ty = lower_hir_ty_id(ty_id, &mut fcx);
+    assert!(matches!(
+        tcx.interner().ty(ty),
+        Ty::Infer(yelang_ty::ty::InferTy::IntVar(_))
+    ));
+}
+
+#[test]
+fn syntax_ty_impl_trait_lowers_to_alias() {
+    let hir = hir_crate();
+    let mut tcx = TyCtxt::new(hir);
+    let trait_def_id = def_id(10);
+    let ty_id = tcx.crate_hir_mut().alloc_ty(
+        hir::Ty::ImplTrait {
+            path: Res::Def { def_id: trait_def_id },
+        },
+        dummy_span(),
+    );
+
+    let mut fcx = mk_fcx(&tcx);
+    let ty = lower_hir_ty_id(ty_id, &mut fcx);
+    match tcx.interner().ty(ty) {
+        Ty::Alias(alias) => assert_eq!(alias.def_id, trait_def_id),
+        _ => panic!("expected Alias for impl Trait"),
+    }
 }

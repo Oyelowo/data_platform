@@ -260,7 +260,7 @@ fn lower_inherent_impl() {
         unreachable!()
     };
     let ty = crate_hir.ty(*self_ty).unwrap();
-    assert!(matches!(ty, crate::hir::ty::HirTy::Path { .. }));
+    assert!(matches!(ty, crate::hir::ty::Ty::Path { .. }));
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn lower_type_alias() {
         panic!("expected type alias")
     };
     let ty_node = crate_hir.ty(*ty).unwrap();
-    assert!(matches!(ty_node, crate::hir::ty::HirTy::Path { .. }));
+    assert!(matches!(ty_node, crate::hir::ty::Ty::Path { .. }));
 }
 
 #[test]

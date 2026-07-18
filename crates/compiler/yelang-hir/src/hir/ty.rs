@@ -11,7 +11,7 @@ use yelang_ast::Ident;
 
 /// Kinds of HIR types.
 #[derive(Debug, Clone)]
-pub enum HirTy {
+pub enum Ty {
     /// Resolved path type, optionally with generic arguments.
     ///
     /// Examples:

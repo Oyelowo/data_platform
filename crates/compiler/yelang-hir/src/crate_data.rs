@@ -31,7 +31,7 @@ pub struct Crate {
     /// All statement nodes keyed by `StmtId`.
     pub stmts: Arena<StmtId, Option<Stmt>>,
     /// All HIR type syntax nodes keyed by `HirTyId`.
-    pub tys: Arena<HirTyId, Option<HirTy>>,
+    pub tys: Arena<HirTyId, Option<Ty>>,
     /// Secondary map from `ExprId` to the source span of the expression.
     pub expr_spans: ArenaMap<ExprId, Span>,
     /// Secondary map from `PatId` to the source span of the pattern.
@@ -87,7 +87,7 @@ impl Crate {
     }
 
     /// Allocate a HIR type syntax node and its span, returning the `HirTyId`.
-    pub fn alloc_ty(&mut self, ty: HirTy, span: Span) -> HirTyId {
+    pub fn alloc_ty(&mut self, ty: Ty, span: Span) -> HirTyId {
         let id = self.tys.insert(Some(ty));
         self.ty_spans.insert(id, span);
         id
@@ -131,12 +131,12 @@ impl Crate {
     }
 
     /// Look up a HIR type syntax node by `HirTyId`.
-    pub fn ty(&self, id: HirTyId) -> Option<&HirTy> {
+    pub fn ty(&self, id: HirTyId) -> Option<&Ty> {
         self.tys.get(id).and_then(|o| o.as_ref())
     }
 
     /// Look up a mutable HIR type syntax node by `HirTyId`.
-    pub fn ty_mut(&mut self, id: HirTyId) -> Option<&mut HirTy> {
+    pub fn ty_mut(&mut self, id: HirTyId) -> Option<&mut Ty> {
         self.tys.get_mut(id).and_then(|o| o.as_mut())
     }
 
@@ -196,7 +196,7 @@ impl Crate {
 pub use crate::hir::body::Body;
 pub use crate::hir::expr::Expr;
 pub use crate::hir::pat::Pat;
-pub use crate::hir::ty::HirTy;
+pub use crate::hir::ty::Ty;
 pub use crate::hir::core::Stmt;
 pub use crate::hir::core::Trait;
 pub use crate::hir::item::Item;

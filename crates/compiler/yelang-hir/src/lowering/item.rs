@@ -88,7 +88,7 @@ fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bo
     let output = match &sig.return_type {
         FnRefType::Type(ty) => crate::lowering::ty::lower_ty(ctx, ty),
         FnRefType::Default(span) => {
-            ctx.crate_hir.alloc_ty(crate::hir::ty::HirTy::Tuple { tys: vec![] }, *span)
+            ctx.crate_hir.alloc_ty(crate::hir::ty::Ty::Tuple { tys: vec![] }, *span)
         }
     };
 
@@ -333,7 +333,7 @@ fn lower_impl_item(
         .crate_hir
         .ty(self_ty)
         .and_then(|ty| match ty {
-            crate::hir::ty::HirTy::Path {
+            crate::hir::ty::Ty::Path {
                 res: crate::res::Res::Def { def_id },
                 ..
             } => Some(*def_id),
@@ -694,7 +694,7 @@ fn lower_where_predicate(
             match lower_where_predicate(ctx, predicate) {
                 WherePredicate::TraitBound { ty, bounds } => {
                     let forall_ty = ctx.crate_hir.alloc_ty(
-                        crate::hir::ty::HirTy::ForAll {
+                        crate::hir::ty::Ty::ForAll {
                             params: bound_vars,
                             ty,
                         },
