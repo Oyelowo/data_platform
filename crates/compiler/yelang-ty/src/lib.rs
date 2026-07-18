@@ -26,23 +26,32 @@
 pub mod binder;
 pub mod canonical;
 pub mod consts;
+pub mod existential;
 pub mod fold;
 pub mod generic;
 pub mod interner;
 pub mod list;
 pub mod predicate;
 pub mod primitive;
+pub mod projection;
+pub mod subst;
 pub mod ty;
 pub mod visit;
 
 pub use binder::*;
 pub use canonical::*;
+pub use consts::*;
+pub use existential::*;
+pub use fold::*;
 pub use generic::*;
 pub use interner::*;
 pub use list::*;
 pub use predicate::*;
 pub use primitive::*;
+pub use projection::*;
+pub use subst::*;
 pub use ty::*;
+pub use visit::*;
 
 #[cfg(test)]
 mod tests;

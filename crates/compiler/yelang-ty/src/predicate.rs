@@ -2,7 +2,7 @@
 
 use yelang_arena::DefId;
 
-use crate::ty::{AliasTy, Const, GenericArgsRef, ImplPolarity, Ty};
+use crate::ty::{Const, GenericArgsRef, ImplPolarity, ProjectionTy, Ty};
 
 /// Something that must be proven to hold.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,6 +11,10 @@ pub enum Predicate<'tcx> {
     Trait(TraitPredicate<'tcx>),
     /// An associated type projection equality: `<T as Iterator>::Item == U`.
     Projection(ProjectionPredicate<'tcx>),
+    /// A normalization goal: `<T as Iterator>::Item normalizes-to U`.
+    NormalizesTo(NormalizesToPredicate<'tcx>),
+    /// A well-formedness goal: `T` is well-formed.
+    WellFormed(WellFormedPredicate<'tcx>),
     /// A type outlives bound (no-op in Yelang, kept for uniformity).
     TypeOutlives(TypeOutlivesPredicate<'tcx>),
     /// A const expression that must be evaluatable.
@@ -44,7 +48,7 @@ pub struct TraitRef<'tcx> {
 /// A projection predicate: `<T as Trait>::Assoc == U`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProjectionPredicate<'tcx> {
-    pub projection_ty: AliasTy<'tcx>,
+    pub projection_ty: ProjectionTy<'tcx>,
     pub term: Ty<'tcx>,
 }
 
@@ -53,7 +57,24 @@ impl<'tcx> std::fmt::Debug for ProjectionPredicate<'tcx> {
         write!(
             f,
             "ProjectionPredicate({:?} == {:?})",
-            self.projection_ty.def_id, self.term
+            self.projection_ty.item_def_id, self.term
+        )
+    }
+}
+
+/// A normalization predicate: `<T as Trait>::Assoc normalizes-to U`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NormalizesToPredicate<'tcx> {
+    pub projection_ty: ProjectionTy<'tcx>,
+    pub term: Ty<'tcx>,
+}
+
+impl<'tcx> std::fmt::Debug for NormalizesToPredicate<'tcx> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "NormalizesTo({:?}, {:?})",
+            self.projection_ty.item_def_id, self.term
         )
     }
 }
@@ -91,9 +112,17 @@ impl<'tcx> fmt::Debug for Predicate<'tcx> {
                 write!(
                     f,
                     "Projection({:?} == {:?})",
-                    pp.projection_ty.def_id, pp.term
+                    pp.projection_ty.item_def_id, pp.term
                 )
             }
+            Predicate::NormalizesTo(np) => {
+                write!(
+                    f,
+                    "NormalizesTo({:?}, {:?})",
+                    np.projection_ty.item_def_id, np.term
+                )
+            }
+            Predicate::WellFormed(wf) => write!(f, "WellFormed({:?})", wf.ty),
             Predicate::TypeOutlives(_) => write!(f, "TypeOutlives"),
             Predicate::ConstEvaluatable(ct) => write!(f, "ConstEvaluatable({:?})", ct),
         }

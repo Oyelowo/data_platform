@@ -22,7 +22,7 @@ pub fn check_body<'tcx>(fcx: &mut FnCtxt<'tcx>, body_id: BodyId) {
     fcx.push_scope();
 
     let body = fcx
-        .crate_hir
+        .tcx.crate_hir()
         .bodies
         .get(body_id)
         .expect("BodyId should be valid")
@@ -46,7 +46,7 @@ pub fn check_body<'tcx>(fcx: &mut FnCtxt<'tcx>, body_id: BodyId) {
 /// Type-check an expression and return its inferred type.
 pub fn check_expr<'tcx>(fcx: &mut FnCtxt<'tcx>, expr_id: ExprId) -> Ty<'tcx> {
     let expr = fcx
-        .crate_hir
+        .tcx.crate_hir()
         .exprs
         .get(expr_id)
         .expect("ExprId should be valid")
@@ -347,7 +347,7 @@ fn check_call<'tcx>(fcx: &mut FnCtxt<'tcx>, func: ExprId, args: &[ExprId]) -> Ty
         TyKind::Infer(InferTy::TyVar(_)) => {
             // Function type not yet known: create expected arg types and return type
             let arg_tys: Vec<_> = args.iter().map(|arg| check_expr(fcx, *arg)).collect();
-            let arg_args = fcx.interner.mk_generic_args(
+            let arg_args = fcx.tcx.interner().mk_generic_args(
                 &arg_tys
                     .iter()
                     .map(|&t| GenericArg::Type(t))
@@ -468,7 +468,7 @@ fn check_block<'tcx>(fcx: &mut FnCtxt<'tcx>, block: &Block) -> Ty<'tcx> {
 
 fn check_stmt<'tcx>(fcx: &mut FnCtxt<'tcx>, stmt_id: StmtId) {
     let stmt = fcx
-        .crate_hir
+        .tcx.crate_hir()
         .stmts
         .get(stmt_id)
         .expect("StmtId should be valid")
@@ -705,7 +705,7 @@ fn check_struct_literal<'tcx>(
 fn check_tuple<'tcx>(fcx: &mut FnCtxt<'tcx>, exprs: &[ExprId]) -> Ty<'tcx> {
     let tys: Vec<_> = exprs.iter().map(|e| check_expr(fcx, *e)).collect();
     let args = fcx
-        .interner
+        .tcx.interner()
         .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
     fcx.mk_ty(TyKind::Tuple(args))
 }
@@ -752,7 +752,7 @@ fn check_cast<'tcx>(fcx: &mut FnCtxt<'tcx>, expr: ExprId, ty: TyId) -> Ty<'tcx> 
 
 fn lower_hir_ty_id<'tcx>(fcx: &mut FnCtxt<'tcx>, ty_id: TyId) -> Ty<'tcx> {
     let hir_ty = fcx
-        .crate_hir
+        .tcx.crate_hir()
         .tys
         .get(ty_id)
         .expect("TyId should be valid")

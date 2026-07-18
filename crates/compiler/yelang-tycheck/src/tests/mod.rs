@@ -6,7 +6,7 @@
 
 #![allow(unused_mut)]
 
-use yelang_arena::{DefId, index_vec as iv};
+use yelang_arena::DefId;
 use yelang_ast::{BinaryOp, UnaryOp};
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
@@ -17,7 +17,6 @@ use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId};
 use yelang_hir::res::Res;
 use yelang_interner::Symbol;
 use yelang_lexer::{Position, Span};
-use yelang_ty::interner::Interner;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{Mutability, Ty, TyKind};
 
@@ -25,6 +24,7 @@ use crate::check::{check_body, check_expr};
 use crate::coerce::Coerce;
 use crate::fn_ctxt::FnCtxt;
 use crate::pat::check_pat;
+use crate::tcx::TyCtxt;
 use crate::writeback::writeback_types;
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -87,16 +87,15 @@ fn local_res(pat_id: PatId) -> Res {
 }
 
 fn fcx_with_return_ty<'tcx>(
-    interner: &'tcx Interner<'tcx>,
-    hir: &'tcx HirCrate,
+    tcx: &'tcx TyCtxt<'tcx>,
     return_ty: Ty<'tcx>,
 ) -> FnCtxt<'tcx> {
-    FnCtxt::new(interner, hir, def_id(1), return_ty, iv::SecondaryMap::new())
+    FnCtxt::new(tcx, def_id(1), return_ty)
 }
 
-fn mk_fcx<'tcx>(interner: &'tcx Interner<'tcx>, hir: &'tcx HirCrate) -> FnCtxt<'tcx> {
-    let unit = interner.mk_ty(TyKind::Tuple(yelang_ty::list::List::empty()));
-    fcx_with_return_ty(interner, hir, unit)
+fn mk_fcx<'tcx>(tcx: &'tcx TyCtxt<'tcx>) -> FnCtxt<'tcx> {
+    let unit = tcx.interner().mk_ty(TyKind::Tuple(yelang_ty::list::List::empty()));
+    fcx_with_return_ty(tcx, unit)
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +104,6 @@ fn mk_fcx<'tcx>(interner: &'tcx Interner<'tcx>, hir: &'tcx HirCrate) -> FnCtxt<'
 
 #[test]
 fn literal_int_creates_int_var() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -113,7 +111,8 @@ fn literal_int_creates_int_var() {
                 suffix: None,
             }),
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
     assert!(matches!(
@@ -124,7 +123,6 @@ fn literal_int_creates_int_var() {
 
 #[test]
 fn literal_float_creates_float_var() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Float(yelang_lexer::FloatLit {
@@ -132,7 +130,8 @@ fn literal_float_creates_float_var() {
                 suffix: None,
             }),
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
     assert!(matches!(
@@ -143,33 +142,32 @@ fn literal_float_creates_float_var() {
 
 #[test]
 fn literal_bool_is_bool() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 #[test]
 fn literal_char_is_char() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Char('a'),
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Char));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Char));
 }
 
 #[test]
 fn literal_str_is_str() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Str(yelang_lexer::StringLit {
@@ -177,10 +175,11 @@ fn literal_str_is_str() {
                 kind: yelang_lexer::StrKind::Normal,
             }),
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Str));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Str));
 }
 
 // ---------------------------------------------------------------------------
@@ -189,12 +188,12 @@ fn literal_str_is_str() {
 
 #[test]
 fn path_local_lookup() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr2 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let local_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let local_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     fcx.insert_local(_pat1, local_ty);
 
     let e = _expr2;
@@ -204,19 +203,16 @@ fn path_local_lookup() {
 
 #[test]
 fn path_def_lookup() {
-    let interner = Interner::new();
-    let mut item_types = iv::SecondaryMap::new();
-    let def_ty = interner.mk_ty(TyKind::Int(IntTy::I64));
-    item_types.insert(def_id(1), def_ty);
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Path { res: def_res(1) });
 
+    let mut tcx = TyCtxt::new(&hir);
+    let def_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I64));
+    tcx.item_types.insert(def_id(1), def_ty);
     let mut fcx = FnCtxt::new(
-        &interner,
-        &hir,
+        &tcx,
         def_id(1),
-        interner.mk_ty(TyKind::Tuple(yelang_ty::list::List::empty())),
-        item_types,
+        tcx.interner().mk_ty(TyKind::Tuple(yelang_ty::list::List::empty())),
     );
 
     let e = _expr2;
@@ -226,14 +222,14 @@ fn path_def_lookup() {
 
 #[test]
 fn path_missing_local_is_error() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat99 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat99) });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Error));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Error));
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +238,6 @@ fn path_missing_local_is_error() {
 
 #[test]
 fn binary_arithmetic_unifies_operands() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -263,7 +258,8 @@ fn binary_arithmetic_unifies_operands() {
             left: left,
             right: right,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
@@ -277,7 +273,6 @@ fn binary_arithmetic_unifies_operands() {
 
 #[test]
 fn binary_comparison_returns_bool() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -298,17 +293,17 @@ fn binary_comparison_returns_bool() {
             left: left,
             right: right,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 #[test]
 fn binary_logical_requires_bool() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -323,17 +318,17 @@ fn binary_logical_requires_bool() {
             left: left,
             right: right,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 #[test]
 fn binary_bitwise_unifies_operands() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -354,7 +349,8 @@ fn binary_bitwise_unifies_operands() {
             left: left,
             right: right,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
@@ -371,7 +367,6 @@ fn binary_bitwise_unifies_operands() {
 
 #[test]
 fn unary_neg_preserves_type() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -384,7 +379,8 @@ fn unary_neg_preserves_type() {
             op: UnaryOp::Neg,
             expr: inner,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
@@ -396,7 +392,6 @@ fn unary_neg_preserves_type() {
 
 #[test]
 fn unary_not_preserves_type() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -406,16 +401,16 @@ fn unary_not_preserves_type() {
             op: UnaryOp::Not,
             expr: inner,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 #[test]
 fn unary_deref_on_reference() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -424,9 +419,10 @@ fn unary_deref_on_reference() {
             op: UnaryOp::Deref,
             expr: inner,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let pointee = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let ref_ty = interner.mk_ty(TyKind::Ref(pointee, Mutability::Not));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let pointee = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let ref_ty = tcx.interner().mk_ty(TyKind::Ref(pointee, Mutability::Not));
     fcx.insert_local(_pat1, ref_ty);
 
     let e = _expr2;
@@ -436,7 +432,6 @@ fn unary_deref_on_reference() {
 
 #[test]
 fn unary_deref_inference() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -449,17 +444,17 @@ fn unary_deref_inference() {
             op: UnaryOp::Deref,
             expr: inner,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
     // The operand is an int var, not a reference, so this is an error.
-    assert_eq!(ty, interner.mk_ty(TyKind::Error));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Error));
 }
 
 #[test]
 fn unary_ref_creates_reference() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -469,19 +464,19 @@ fn unary_ref_creates_reference() {
             op: UnaryOp::Ref,
             expr: inner,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
     assert_eq!(
         ty,
-        interner.mk_ty(TyKind::Ref(interner.mk_ty(TyKind::Bool), Mutability::Not))
+        tcx.interner().mk_ty(TyKind::Ref(tcx.interner().mk_ty(TyKind::Bool), Mutability::Not))
     );
 }
 
 #[test]
 fn unary_refmut_creates_mutable_reference() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -491,13 +486,14 @@ fn unary_refmut_creates_mutable_reference() {
             op: UnaryOp::RefMut,
             expr: inner,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
     assert_eq!(
         ty,
-        interner.mk_ty(TyKind::Ref(interner.mk_ty(TyKind::Bool), Mutability::Mut))
+        tcx.interner().mk_ty(TyKind::Ref(tcx.interner().mk_ty(TyKind::Bool), Mutability::Mut))
     );
 }
 
@@ -507,7 +503,6 @@ fn unary_refmut_creates_mutable_reference() {
 
 #[test]
 fn call_fn_ptr() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -523,11 +518,12 @@ fn call_fn_ptr() {
             func: func,
             args: vec![arg],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let bool_ty = interner.mk_ty(TyKind::Bool);
-    let inputs = interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]);
-    let fn_ty = interner.mk_ty(TyKind::FnPtr(yelang_ty::ty::PolyFnSig {
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let bool_ty = tcx.interner().mk_ty(TyKind::Bool);
+    let inputs = tcx.interner().mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]);
+    let fn_ty = tcx.interner().mk_ty(TyKind::FnPtr(yelang_ty::ty::PolyFnSig {
         sig: yelang_ty::ty::FnSig {
             inputs,
             output: bool_ty,
@@ -543,7 +539,6 @@ fn call_fn_ptr() {
 
 #[test]
 fn call_wrong_arg_count_is_error() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -552,10 +547,11 @@ fn call_wrong_arg_count_is_error() {
             func: func,
             args: vec![],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let inputs = interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]);
-    let fn_ty = interner.mk_ty(TyKind::FnPtr(yelang_ty::ty::PolyFnSig {
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let inputs = tcx.interner().mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]);
+    let fn_ty = tcx.interner().mk_ty(TyKind::FnPtr(yelang_ty::ty::PolyFnSig {
         sig: yelang_ty::ty::FnSig {
             inputs,
             output: i32_ty,
@@ -565,12 +561,11 @@ fn call_wrong_arg_count_is_error() {
 
     let e = _expr3;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Error));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Error));
 }
 
 #[test]
 fn call_unknown_function_inference() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -583,7 +578,8 @@ fn call_unknown_function_inference() {
             func: func,
             args: vec![arg],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let func_ty = fcx.new_ty_var();
     fcx.insert_local(_pat1, func_ty);
 
@@ -603,7 +599,6 @@ fn call_unknown_function_inference() {
 
 #[test]
 fn field_tuple_access() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -616,10 +611,11 @@ fn field_tuple_access() {
                 origin: yelang_ast::IdentOrigin::Plain,
             },
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let bool_ty = interner.mk_ty(TyKind::Bool);
-    let tuple_ty = interner.mk_ty(TyKind::Tuple(interner.mk_generic_args(&[
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let bool_ty = tcx.interner().mk_ty(TyKind::Bool);
+    let tuple_ty = tcx.interner().mk_ty(TyKind::Tuple(tcx.interner().mk_generic_args(&[
         yelang_ty::generic::GenericArg::Type(i32_ty),
         yelang_ty::generic::GenericArg::Type(bool_ty),
     ])));
@@ -632,7 +628,6 @@ fn field_tuple_access() {
 
 #[test]
 fn field_tuple_out_of_bounds_is_error() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -645,16 +640,17 @@ fn field_tuple_out_of_bounds_is_error() {
                 origin: yelang_ast::IdentOrigin::Plain,
             },
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let tuple_ty = interner.mk_ty(TyKind::Tuple(
-        interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]),
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let tuple_ty = tcx.interner().mk_ty(TyKind::Tuple(
+        tcx.interner().mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]),
     ));
     fcx.insert_local(_pat1, tuple_ty);
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Error));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Error));
 }
 
 // ---------------------------------------------------------------------------
@@ -663,7 +659,6 @@ fn field_tuple_out_of_bounds_is_error() {
 
 #[test]
 fn index_array() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -679,9 +674,10 @@ fn index_array() {
             expr: base,
             index: idx,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let array_ty = interner.mk_ty(TyKind::Array(
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let array_ty = tcx.interner().mk_ty(TyKind::Array(
         i32_ty,
         yelang_ty::ty::Const {
             kind: yelang_ty::ty::ConstKind::Value(yelang_ty::ty::ConstValue::Int(3)),
@@ -698,7 +694,6 @@ fn index_array() {
 
 #[test]
 fn index_slice() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -714,9 +709,10 @@ fn index_slice() {
             expr: base,
             index: idx,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let slice_ty = interner.mk_ty(TyKind::Slice(i32_ty));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let slice_ty = tcx.interner().mk_ty(TyKind::Slice(i32_ty));
     fcx.insert_local(_pat1, slice_ty);
 
 
@@ -731,7 +727,6 @@ fn index_slice() {
 
 #[test]
 fn assign_unifies_types() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr1 = expr(&mut hir, Expr::Path { res: local_res(_pat1) });
@@ -747,8 +742,9 @@ fn assign_unifies_types() {
             left: left,
             right: right,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     fcx.insert_local(_pat1, i32_ty);
 
 
@@ -756,7 +752,7 @@ fn assign_unifies_types() {
     let ty = check_expr(&mut fcx, e);
     assert_eq!(
         ty,
-        interner.mk_ty(TyKind::Tuple(yelang_ty::list::List::empty()))
+        tcx.interner().mk_ty(TyKind::Tuple(yelang_ty::list::List::empty()))
     );
 }
 
@@ -766,12 +762,12 @@ fn assign_unifies_types() {
 
 #[test]
 fn block_empty_is_unit() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _block1 = block(&mut hir, vec![], None);
     let b = _block1;
     let _expr1 = expr(&mut hir, Expr::Block { block: b });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
@@ -780,7 +776,6 @@ fn block_empty_is_unit() {
 
 #[test]
 fn block_with_trailing_expr() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -789,17 +784,17 @@ fn block_with_trailing_expr() {
     let _block1 = block(&mut hir, vec![], Some(trailing));
     let b = _block1;
     let _expr1 = expr(&mut hir, Expr::Block { block: b });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 #[test]
 fn block_with_let_binding() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -819,7 +814,8 @@ fn block_with_let_binding() {
     let _block1 = block(&mut hir, vec![s], None);
     let b = _block1;
     let _expr1 = expr(&mut hir, Expr::Block { block: b });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
 
@@ -835,7 +831,6 @@ fn block_with_let_binding() {
 
 #[test]
 fn loop_without_break_is_never() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _block1 = block(&mut hir, vec![], None);
     let b = _block1;
@@ -843,7 +838,8 @@ fn loop_without_break_is_never() {
             block: b,
             label: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
@@ -852,7 +848,6 @@ fn loop_without_break_is_never() {
 
 #[test]
 fn loop_with_break_value() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Lit {
                     lit: yelang_lexer::Literal::Bool(true),
@@ -869,17 +864,17 @@ fn loop_with_break_value() {
             block: b,
             label: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 #[test]
 fn break_without_value_is_unit() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Break {
             label: None,
@@ -893,7 +888,8 @@ fn break_without_value_is_unit() {
             block: b,
             label: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr1;
@@ -903,7 +899,6 @@ fn break_without_value_is_unit() {
 
 #[test]
 fn continue_is_never() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Continue { label: None });
     let continue_expr = _expr2;
@@ -914,7 +909,8 @@ fn continue_is_never() {
             block: b,
             label: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr1;
@@ -928,8 +924,6 @@ fn continue_is_never() {
 
 #[test]
 fn return_with_value_unifies_with_return_ty() {
-    let interner = Interner::new();
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
     let mut hir = hir_crate();
     let _expr2 = expr(&mut hir, Expr::Lit {
                     lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -940,7 +934,9 @@ fn return_with_value_unifies_with_return_ty() {
     let _expr1 = expr(&mut hir, Expr::Return {
             expr: Some(_expr2),
         });
-    let mut fcx = fcx_with_return_ty(&interner, &hir, i32_ty);
+    let tcx = TyCtxt::new(&hir);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let mut fcx = fcx_with_return_ty(&tcx, i32_ty);
     let ret = _expr1;
     let ty = check_expr(&mut fcx, ret);
     assert!(ty.is_never());
@@ -948,11 +944,11 @@ fn return_with_value_unifies_with_return_ty() {
 
 #[test]
 fn return_without_value_unifies_with_unit() {
-    let interner = Interner::new();
-    let unit_ty = interner.mk_ty(TyKind::Tuple(yelang_ty::list::List::empty()));
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Return { expr: None });
-    let mut fcx = fcx_with_return_ty(&interner, &hir, unit_ty);
+    let tcx = TyCtxt::new(&hir);
+    let unit_ty = tcx.interner().mk_ty(TyKind::Tuple(yelang_ty::list::List::empty()));
+    let mut fcx = fcx_with_return_ty(&tcx, unit_ty);
     let ret = _expr1;
     let ty = check_expr(&mut fcx, ret);
     assert!(ty.is_never());
@@ -964,7 +960,6 @@ fn return_without_value_unifies_with_unit() {
 
 #[test]
 fn if_else_branches_unify() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -989,7 +984,8 @@ fn if_else_branches_unify() {
             then_branch: then_branch,
             else_branch: Some(else_branch),
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
 
@@ -1003,7 +999,6 @@ fn if_else_branches_unify() {
 
 #[test]
 fn if_without_else_requires_unit() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -1019,7 +1014,8 @@ fn if_without_else_requires_unit() {
             then_branch: then_branch,
             else_branch: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
@@ -1033,7 +1029,6 @@ fn if_without_else_requires_unit() {
 
 #[test]
 fn match_arms_unify() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -1069,7 +1064,8 @@ fn match_arms_unify() {
             expr: scrutinee,
             arms: vec![arm1, arm2],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
 
@@ -1086,7 +1082,6 @@ fn match_arms_unify() {
 
 #[test]
 fn match_guard_must_be_bool() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -1112,7 +1107,8 @@ fn match_guard_must_be_bool() {
             expr: scrutinee,
             arms: vec![arm],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr5;
@@ -1130,7 +1126,6 @@ fn match_guard_must_be_bool() {
 
 #[test]
 fn let_expr_returns_bool() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Bool(true),
@@ -1142,12 +1137,13 @@ fn let_expr_returns_bool() {
             pat: p,
             expr: scrutinee,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Bool));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Bool));
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,7 +1152,6 @@ fn let_expr_returns_bool() {
 
 #[test]
 fn tuple_literal() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -1170,7 +1165,8 @@ fn tuple_literal() {
     let a = _expr1;
     let b = _expr2;
     let _expr3 = expr(&mut hir, Expr::Tuple { exprs: vec![a, b] });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
@@ -1189,7 +1185,6 @@ fn tuple_literal() {
 
 #[test]
 fn array_literal_homogeneous() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -1206,7 +1201,8 @@ fn array_literal_homogeneous() {
     let a = _expr1;
     let b = _expr2;
     let _expr3 = expr(&mut hir, Expr::Array { exprs: vec![a, b] });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr3;
@@ -1224,10 +1220,10 @@ fn array_literal_homogeneous() {
 
 #[test]
 fn array_literal_empty() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Array { exprs: vec![] });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
     match ty.kind() {
@@ -1247,7 +1243,6 @@ fn array_literal_empty() {
 
 #[test]
 fn struct_literal_returns_struct_ty() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
     let _expr2 = expr(&mut hir, Expr::Lit {
@@ -1271,8 +1266,9 @@ fn struct_literal_returns_struct_ty() {
             fields: vec![field],
             rest: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     fcx.insert_local(_pat1, i32_ty);
 
 
@@ -1287,7 +1283,6 @@ fn struct_literal_returns_struct_ty() {
 
 #[test]
 fn cast_returns_target_type() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Lit {
             lit: yelang_lexer::Literal::Int(yelang_lexer::IntegerLit {
@@ -1307,12 +1302,13 @@ fn cast_returns_target_type() {
             expr: inner,
             ty: _ty1,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
 
 
     let e = _expr2;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Int(IntTy::I64)));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Int(IntTy::I64)));
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,11 +1317,11 @@ fn cast_returns_target_type() {
 
 #[test]
 fn pat_wild() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Wild);
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     let p = _pat1;
     check_pat(&mut fcx, p, i32_ty);
     assert_eq!(fcx.results.pat_ty(_pat1), Some(i32_ty));
@@ -1333,15 +1329,15 @@ fn pat_wild() {
 
 #[test]
 fn pat_binding_inserts_local() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Binding {
             mode: BindingMode::ByValue,
             name: symbol(1),
             subpat: None,
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     let p = _pat1;
     check_pat(&mut fcx, p, i32_ty);
     assert_eq!(fcx.results.local_ty(_pat1), Some(i32_ty));
@@ -1350,15 +1346,15 @@ fn pat_binding_inserts_local() {
 
 #[test]
 fn pat_tuple() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat2 = pat(&mut hir, Pat::Wild);
     let _pat3 = pat(&mut hir, Pat::Wild);
     let _pat1 = pat(&mut hir, Pat::Tuple {
             pats: vec![_pat2, _pat3],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     let p = _pat1;
     check_pat(&mut fcx, p, i32_ty);
     assert_eq!(fcx.results.pat_ty(_pat1), Some(i32_ty));
@@ -1366,15 +1362,15 @@ fn pat_tuple() {
 
 #[test]
 fn pat_or() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat2 = pat(&mut hir, Pat::Wild);
     let _pat3 = pat(&mut hir, Pat::Wild);
     let _pat1 = pat(&mut hir, Pat::Or {
             pats: vec![_pat2, _pat3],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     let p = _pat1;
     check_pat(&mut fcx, p, i32_ty);
     assert_eq!(fcx.results.pat_ty(_pat1), Some(i32_ty));
@@ -1382,7 +1378,6 @@ fn pat_or() {
 
 #[test]
 fn pat_slice() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat2 = pat(&mut hir, Pat::Wild);
     let _pat1 = pat(&mut hir, Pat::Slice {
@@ -1390,8 +1385,9 @@ fn pat_slice() {
             middle: None,
             suffix: vec![],
         });
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     let p = _pat1;
     check_pat(&mut fcx, p, i32_ty);
     assert_eq!(fcx.results.pat_ty(_pat1), Some(i32_ty));
@@ -1399,15 +1395,15 @@ fn pat_slice() {
 
 #[test]
 fn pat_err_is_error() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Err);
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let p = _pat1;
-    check_pat(&mut fcx, p, interner.mk_ty(TyKind::Int(IntTy::I32)));
+    check_pat(&mut fcx, p, tcx.interner().mk_ty(TyKind::Int(IntTy::I32)));
     assert_eq!(
         fcx.results.pat_ty(_pat1),
-        Some(interner.mk_ty(TyKind::Error))
+        Some(tcx.interner().mk_ty(TyKind::Error))
     );
 }
 
@@ -1417,21 +1413,21 @@ fn pat_err_is_error() {
 
 #[test]
 fn coerce_exact_match() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     let result = fcx.coerce(i32_ty, i32_ty);
     assert_eq!(result, Ok(i32_ty));
 }
 
 #[test]
 fn coerce_mismatch_fails() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
-    let mut fcx = mk_fcx(&interner, &hir);
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
-    let bool_ty = interner.mk_ty(TyKind::Bool);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let bool_ty = tcx.interner().mk_ty(TyKind::Bool);
     let result = fcx.coerce(i32_ty, bool_ty);
     assert!(result.is_err());
 }
@@ -1442,12 +1438,12 @@ fn coerce_mismatch_fails() {
 
 #[test]
 fn writeback_resolves_ty_var() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Err);
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let ty_var = fcx.new_ty_var();
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
     fcx.eq(ty_var, i32_ty).unwrap();
     fcx.results.expr_types.insert(_expr1, ty_var);
 
@@ -1458,44 +1454,44 @@ fn writeback_resolves_ty_var() {
 
 #[test]
 fn writeback_int_fallback_to_i32() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Err);
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let int_var = fcx.new_int_var();
     fcx.results.expr_types.insert(_expr1, int_var);
 
     writeback_types(&mut fcx);
     let resolved = fcx.results.expr_ty(_expr1).unwrap();
-    assert_eq!(resolved, interner.mk_ty(TyKind::Int(IntTy::I32)));
+    assert_eq!(resolved, tcx.interner().mk_ty(TyKind::Int(IntTy::I32)));
 }
 
 #[test]
 fn writeback_float_fallback_to_f64() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Err);
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let float_var = fcx.new_float_var();
     fcx.results.expr_types.insert(_expr1, float_var);
 
     writeback_types(&mut fcx);
     let resolved = fcx.results.expr_ty(_expr1).unwrap();
-    assert_eq!(resolved, interner.mk_ty(TyKind::Float(FloatTy::F64)));
+    assert_eq!(resolved, tcx.interner().mk_ty(TyKind::Float(FloatTy::F64)));
 }
 
 #[test]
 fn writeback_unresolved_ty_var_becomes_error() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Err);
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let ty_var = fcx.new_ty_var();
     fcx.results.expr_types.insert(_expr1, ty_var);
 
     writeback_types(&mut fcx);
     let resolved = fcx.results.expr_ty(_expr1).unwrap();
-    assert_eq!(resolved, interner.mk_ty(TyKind::Error));
+    assert_eq!(resolved, tcx.interner().mk_ty(TyKind::Error));
 }
 
 // ---------------------------------------------------------------------------
@@ -1504,8 +1500,6 @@ fn writeback_unresolved_ty_var_becomes_error() {
 
 #[test]
 fn body_check_params_and_expr() {
-    let interner = Interner::new();
-    let i32_ty = interner.mk_ty(TyKind::Int(IntTy::I32));
     let mut hir = hir_crate();
     let _pat1 = pat(&mut hir, Pat::Binding {
                 mode: BindingMode::ByValue,
@@ -1525,7 +1519,9 @@ fn body_check_params_and_expr() {
         span: dummy_span(),
     };
     let _body1 = body(&mut hir, vec![param], _expr2);
-    let mut fcx = fcx_with_return_ty(&interner, &hir, i32_ty);
+    let tcx = TyCtxt::new(&hir);
+    let i32_ty = tcx.interner().mk_ty(TyKind::Int(IntTy::I32));
+    let mut fcx = fcx_with_return_ty(&tcx, i32_ty);
 
     let body_id = _body1;
     check_body(&mut fcx, body_id);
@@ -1538,11 +1534,11 @@ fn body_check_params_and_expr() {
 
 #[test]
 fn expr_err_is_error() {
-    let interner = Interner::new();
     let mut hir = hir_crate();
     let _expr1 = expr(&mut hir, Expr::Err);
-    let mut fcx = mk_fcx(&interner, &hir);
+    let tcx = TyCtxt::new(&hir);
+    let mut fcx = mk_fcx(&tcx);
     let e = _expr1;
     let ty = check_expr(&mut fcx, e);
-    assert_eq!(ty, interner.mk_ty(TyKind::Error));
+    assert_eq!(ty, tcx.interner().mk_ty(TyKind::Error));
 }

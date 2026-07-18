@@ -13,6 +13,7 @@ use yelang_interner::Symbol;
 use crate::binder::{BoundTy, BoundVar, BoundVariableKind, DebruijnIndex};
 use crate::generic::GenericArg;
 use crate::list::List;
+use crate::predicate::TraitRef;
 use crate::primitive::{FloatTy, IntTy, UintTy};
 
 // ---------------------------------------------------------------------------
@@ -152,10 +153,12 @@ pub enum TyKind<'tcx> {
     TypeLit(Symbol),
     /// A utility type: `Omit<T, K>`, `Pick<T, K>`, etc.
     Utility(UtilityKind, GenericArgsRef<'tcx>),
-    /// An opaque type (`impl Trait`) or associated type projection.
+    /// An opaque type (`impl Trait`) or type alias expansion.
     Alias(AliasTy<'tcx>),
+    /// An associated type projection: `<T as Trait>::Assoc`.
+    Projection(ProjectionTy<'tcx>),
     /// A trait object: `dyn Trait`.
-    Dynamic(Binder<'tcx, ExistentialPredicate<'tcx>>),
+    Dynamic(Binder<'tcx, List<ExistentialPredicate<'tcx>>>),
     /// A placeholder type, used during canonicalization.
     Placeholder(PlaceholderType),
     /// Error recovery type.
@@ -275,11 +278,18 @@ pub enum UtilityKind {
     Required,
 }
 
-/// An alias / projection type (`impl Trait` or associated type).
+/// An opaque type (`impl Trait`) or a type alias expansion.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AliasTy<'tcx> {
     pub def_id: DefId,
     pub args: GenericArgsRef<'tcx>,
+}
+
+/// An associated type projection: `<T as Trait>::Assoc`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProjectionTy<'tcx> {
+    pub trait_ref: TraitRef<'tcx>,
+    pub item_def_id: DefId,
 }
 
 /// An existential predicate for `dyn Trait`.
@@ -328,6 +338,8 @@ pub struct Const<'tcx> {
 pub enum ConstKind<'tcx> {
     /// A literal constant: `42`.
     Value(ConstValue),
+    /// A const parameter: `N` in `fn foo<const N: usize>()`.
+    Param(ParamConst),
     /// A bound const variable.
     Bound(DebruijnIndex, BoundVar),
     /// A placeholder const.
@@ -338,6 +350,13 @@ pub enum ConstKind<'tcx> {
     Infer(ConstVid),
     /// Error recovery.
     Error,
+}
+
+/// A const parameter like `N` in `fn foo<const N: usize>() {}`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ParamConst {
+    pub index: u32,
+    pub name: Symbol,
 }
 
 /// A concrete constant value.
@@ -439,6 +458,7 @@ impl<'tcx> fmt::Debug for TyKind<'tcx> {
             TyKind::TypeLit(sym) => write!(f, "type_lit({})", sym.as_usize()),
             TyKind::Utility(k, _) => write!(f, "Utility({:?})", k),
             TyKind::Alias(_) => write!(f, "alias"),
+            TyKind::Projection(_) => write!(f, "projection"),
             TyKind::Dynamic(_) => write!(f, "dyn _"),
             TyKind::Placeholder(p) => write!(f, "Placeholder({:?})", p),
             TyKind::Error => write!(f, "{{error}}"),
@@ -474,6 +494,12 @@ impl<'tcx> fmt::Debug for AliasTy<'tcx> {
     }
 }
 
+impl<'tcx> fmt::Debug for ProjectionTy<'tcx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Projection({:?}, {:?})", self.trait_ref.def_id, self.item_def_id)
+    }
+}
+
 impl<'tcx> fmt::Debug for ExistentialPredicate<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -500,6 +526,7 @@ impl<'tcx> fmt::Debug for ConstKind<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConstKind::Value(v) => write!(f, "{:?}", v),
+            ConstKind::Param(p) => write!(f, "Param({:?})", p),
             ConstKind::Bound(d, bc) => write!(f, "Bound({:?}, {:?})", d, bc),
             ConstKind::Placeholder(p) => write!(f, "Placeholder({:?})", p),
             ConstKind::Unevaluated(u) => write!(f, "Unevaluated({:?})", u.def),

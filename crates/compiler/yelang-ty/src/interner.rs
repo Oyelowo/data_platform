@@ -34,6 +34,15 @@ pub struct Interner<'tcx> {
             List<crate::binder::BoundVariableKind>,
         >,
     >,
+    existential_predicates: RefCell<
+        FxHashMap<
+            SliceKey<crate::ty::ExistentialPredicate<'tcx>>,
+            List<crate::ty::ExistentialPredicate<'tcx>>,
+        >,
+    >,
+    anon_struct_fields: RefCell<FxHashMap<SliceKey<crate::ty::AnonField<'tcx>>, List<crate::ty::AnonField<'tcx>>>>,
+    predicates: RefCell<FxHashMap<SliceKey<crate::predicate::Predicate<'tcx>>, List<crate::predicate::Predicate<'tcx>>>>,
+    canonical_var_kinds: RefCell<FxHashMap<SliceKey<crate::canonical::CanonicalVarKind>, List<crate::canonical::CanonicalVarKind>>>,
     _marker: PhantomData<&'tcx ()>,
 }
 
@@ -78,6 +87,10 @@ impl<'tcx> Interner<'tcx> {
             ty_lists: RefCell::new(FxHashMap::default()),
             generic_args: RefCell::new(FxHashMap::default()),
             bound_var_lists: RefCell::new(FxHashMap::default()),
+            existential_predicates: RefCell::new(FxHashMap::default()),
+            anon_struct_fields: RefCell::new(FxHashMap::default()),
+            predicates: RefCell::new(FxHashMap::default()),
+            canonical_var_kinds: RefCell::new(FxHashMap::default()),
             _marker: PhantomData,
         }
     }
@@ -176,6 +189,128 @@ impl<'tcx> Interner<'tcx> {
         let ptr = self.arena.alloc(value);
         // SAFETY: The arena lives for `'tcx`.
         unsafe { std::mem::transmute(ptr) }
+    }
+
+    /// Intern a list of existential predicates.
+    pub fn mk_existential_predicates(
+        &self,
+        elems: &[crate::ty::ExistentialPredicate<'tcx>],
+    ) -> List<crate::ty::ExistentialPredicate<'tcx>> {
+        if elems.is_empty() {
+            return List::empty();
+        }
+        let key = SliceKey {
+            ptr: elems.as_ptr(),
+            len: elems.len(),
+        };
+        if let Some(&existing) = self.existential_predicates.borrow().get(&key) {
+            return existing;
+        }
+        let slice = self.arena.alloc_slice_copy(elems);
+        let slice: &'tcx [crate::ty::ExistentialPredicate<'tcx>] =
+            unsafe { std::mem::transmute(slice) };
+        let list = List::from_slice(slice);
+        let key = SliceKey {
+            ptr: slice.as_ptr(),
+            len: slice.len(),
+        };
+        self.existential_predicates.borrow_mut().insert(key, list);
+        list
+    }
+
+    /// Intern a list of anonymous struct fields.
+    pub fn mk_anon_struct_fields(
+        &self,
+        elems: &[crate::ty::AnonField<'tcx>],
+    ) -> List<crate::ty::AnonField<'tcx>> {
+        if elems.is_empty() {
+            return List::empty();
+        }
+        let key = SliceKey {
+            ptr: elems.as_ptr(),
+            len: elems.len(),
+        };
+        if let Some(&existing) = self.anon_struct_fields.borrow().get(&key) {
+            return existing;
+        }
+        let slice = self.arena.alloc_slice_copy(elems);
+        let slice: &'tcx [crate::ty::AnonField<'tcx>] = unsafe { std::mem::transmute(slice) };
+        let list = List::from_slice(slice);
+        let key = SliceKey {
+            ptr: slice.as_ptr(),
+            len: slice.len(),
+        };
+        self.anon_struct_fields.borrow_mut().insert(key, list);
+        list
+    }
+
+    /// Intern a list of predicates.
+    pub fn mk_predicates(
+        &self,
+        elems: &[crate::predicate::Predicate<'tcx>],
+    ) -> List<crate::predicate::Predicate<'tcx>> {
+        if elems.is_empty() {
+            return List::empty();
+        }
+        let key = SliceKey {
+            ptr: elems.as_ptr(),
+            len: elems.len(),
+        };
+        if let Some(&existing) = self.predicates.borrow().get(&key) {
+            return existing;
+        }
+        let slice = self.arena.alloc_slice_copy(elems);
+        let slice: &'tcx [crate::predicate::Predicate<'tcx>] =
+            unsafe { std::mem::transmute(slice) };
+        let list = List::from_slice(slice);
+        let key = SliceKey {
+            ptr: slice.as_ptr(),
+            len: slice.len(),
+        };
+        self.predicates.borrow_mut().insert(key, list);
+        list
+    }
+
+    /// Intern a list of canonical variable kinds.
+    pub fn mk_canonical_var_kinds(
+        &self,
+        elems: &[crate::canonical::CanonicalVarKind],
+    ) -> List<crate::canonical::CanonicalVarKind> {
+        if elems.is_empty() {
+            return List::empty();
+        }
+        let key = SliceKey {
+            ptr: elems.as_ptr(),
+            len: elems.len(),
+        };
+        if let Some(&existing) = self.canonical_var_kinds.borrow().get(&key) {
+            return existing;
+        }
+        let slice = self.arena.alloc_slice_copy(elems);
+        let slice: &'tcx [crate::canonical::CanonicalVarKind] =
+            unsafe { std::mem::transmute(slice) };
+        let list = List::from_slice(slice);
+        let key = SliceKey {
+            ptr: slice.as_ptr(),
+            len: slice.len(),
+        };
+        self.canonical_var_kinds.borrow_mut().insert(key, list);
+        list
+    }
+
+    /// Generic list interning for types that do not have a dedicated table.
+    ///
+    /// Prefer the dedicated `mk_*` methods for known list kinds; this is a
+    /// fallback for one-off lists (e.g., `List<Ty>` used in tests).
+    pub fn mk_list<T: Copy + 'tcx>(&self, elems: &[T]) -> List<T> {
+        if elems.is_empty() {
+            return List::empty();
+        }
+        // Fallback: allocate without deduplication. Callers that need
+        // deduplication should use a dedicated interner method.
+        let slice = self.arena.alloc_slice_copy(elems);
+        let slice: &'tcx [T] = unsafe { std::mem::transmute(slice) };
+        List::from_slice(slice)
     }
 
     /// Allocate a slice copy in the arena.

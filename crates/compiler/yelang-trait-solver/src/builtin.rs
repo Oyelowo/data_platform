@@ -31,7 +31,8 @@ pub fn is_sized(ty_kind: &TyKind<'_>) -> bool {
         TyKind::Slice(_) => false,   // Dynamically sized
         TyKind::Dynamic(_) => false, // Dynamically sized
         TyKind::Error => true,
-        TyKind::Alias(_) => true, // TODO: check alias expansion
+        TyKind::Alias(_) => true,       // TODO: check alias expansion
+        TyKind::Projection(_) => true,  // TODO: check projection normalization
         TyKind::AnonStruct(anon) => anon.fields.iter().all(|f| is_sized(f.ty.kind())),
         TyKind::Union(a, b) => is_sized(a.kind()) && is_sized(b.kind()),
         TyKind::TypeLit(_) => true,

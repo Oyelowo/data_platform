@@ -22,16 +22,20 @@
 
 pub mod builtin;
 pub mod candidate;
+pub mod canonicalize;
 pub mod eval_ctxt;
 pub mod goal;
+pub mod instantiate;
 pub mod normalize;
 pub mod response;
 pub mod search_graph;
 
 pub use builtin::*;
 pub use candidate::*;
+pub use canonicalize::*;
 pub use eval_ctxt::*;
 pub use goal::*;
+pub use instantiate::*;
 pub use normalize::*;
 pub use response::*;
 pub use search_graph::*;

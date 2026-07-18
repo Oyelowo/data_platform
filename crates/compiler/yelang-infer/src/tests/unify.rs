@@ -38,7 +38,7 @@ fn union_and_find() {
     let mut table: UnificationTable<TestVid, TestValue> = UnificationTable::default();
     let v1 = table.new_var(TestValue::Unknown);
     let v2 = table.new_var(TestValue::Unknown);
-    table.union(v1, v2).unwrap();
+    table.union(v1, v2);
     assert_eq!(table.find(v1), table.find(v2));
 }
 
@@ -55,7 +55,7 @@ fn union_preserves_value() {
     let mut table: UnificationTable<TestVid, TestValue> = UnificationTable::default();
     let v1 = table.new_var(TestValue::Known(10));
     let v2 = table.new_var(TestValue::Unknown);
-    table.union(v1, v2).unwrap();
+    table.union(v1, v2);
     let root = table.find(v1);
     assert_eq!(*table.probe_value(root), TestValue::Known(10));
 }
@@ -66,7 +66,7 @@ fn snapshot_and_rollback() {
     let v1 = table.new_var(TestValue::Unknown);
     let snap = table.snapshot();
     let v2 = table.new_var(TestValue::Unknown);
-    table.union(v1, v2).unwrap();
+    table.union(v1, v2);
     table.set_value(v1, TestValue::Known(99));
 
     table.rollback_to(snap);
@@ -81,7 +81,7 @@ fn rollback_restores_parent() {
     let v1 = table.new_var(TestValue::Unknown);
     let v2 = table.new_var(TestValue::Unknown);
     let snap = table.snapshot();
-    table.union(v1, v2).unwrap();
+    table.union(v1, v2);
     assert_eq!(table.find(v1), table.find(v2));
 
     table.rollback_to(snap);
@@ -97,8 +97,8 @@ fn path_compression() {
     let v1 = table.new_var(TestValue::Unknown);
     let v2 = table.new_var(TestValue::Unknown);
     let v3 = table.new_var(TestValue::Unknown);
-    table.union(v1, v2).unwrap();
-    table.union(v2, v3).unwrap();
+    table.union(v1, v2);
+    table.union(v2, v3);
 
     let root = table.find(v1);
     assert_eq!(table.find(v2), root);

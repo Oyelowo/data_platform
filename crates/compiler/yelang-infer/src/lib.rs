@@ -7,14 +7,18 @@
  * - Snapshots for speculative trait solving
  */
 
+pub mod const_variable;
 pub mod context;
 pub mod error;
+pub mod occurs_check;
 pub mod snapshot;
 pub mod type_variable;
 pub mod unify;
 
+pub use const_variable::*;
 pub use context::*;
 pub use error::*;
+pub use occurs_check::*;
 pub use type_variable::*;
 pub use unify::*;
 

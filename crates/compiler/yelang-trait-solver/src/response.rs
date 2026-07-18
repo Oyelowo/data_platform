@@ -3,7 +3,8 @@
 pub use yelang_ty::canonical::{CanonicalResponse, Certainty, NoSolution, Response};
 
 use yelang_ty::canonical::Canonical;
-use yelang_ty::predicate::Predicate;
+
+use crate::goal::Goal;
 
 /// The result of evaluating a canonical goal.
 pub type SolverResult<'tcx> = Result<CanonicalResponse<'tcx>, NoSolution>;
@@ -31,4 +32,7 @@ pub enum GoalSource {
 }
 
 /// A canonicalized goal.
-pub type CanonicalGoal<'tcx> = Canonical<'tcx, Predicate<'tcx>>;
+///
+/// The whole goal (param-env + predicate) is canonicalized so that the solver
+/// cache distinguishes goals with different available assumptions.
+pub type CanonicalGoal<'tcx> = Canonical<'tcx, Goal<'tcx>>;

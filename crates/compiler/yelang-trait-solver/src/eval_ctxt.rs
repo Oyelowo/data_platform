@@ -4,12 +4,15 @@
  * goals recursively, using the search graph for cycle detection and caching.
  */
 
+use yelang_infer::InferCtxt;
 use yelang_ty::canonical::{Canonical, Certainty, NoSolution, Response};
+use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::predicate::{Predicate, TraitPredicate};
 use yelang_ty::ty::UniverseIndex;
 
 use crate::candidate::{Candidate, CandidateSource};
+use crate::canonicalize::canonicalize_goal;
 use crate::goal::Goal;
 use crate::response::{CanonicalGoal, CanonicalResponse, NestedGoal, SolverResult};
 use crate::search_graph::SearchGraph;
@@ -18,6 +21,10 @@ use crate::search_graph::SearchGraph;
 #[allow(dead_code)] // `nested_goals` and `tainted` are solver state used by the
                     // full next-gen solver implementation, which is still WIP.
 pub struct EvalCtxt<'tcx> {
+    /// The interner for constructing and interning types.
+    interner: &'tcx Interner<'tcx>,
+    /// The inference context for speculative unification.
+    infcx: InferCtxt<'tcx>,
     /// The search graph for cycle detection and caching.
     search_graph: SearchGraph<'tcx>,
     /// Currently accumulated nested goals.
@@ -29,8 +36,10 @@ pub struct EvalCtxt<'tcx> {
 }
 
 impl<'tcx> EvalCtxt<'tcx> {
-    pub fn new() -> Self {
+    pub fn new(interner: &'tcx Interner<'tcx>) -> Self {
         Self {
+            interner,
+            infcx: InferCtxt::new(),
             search_graph: SearchGraph::new(),
             nested_goals: Vec::new(),
             max_universe: UniverseIndex(0),
@@ -40,7 +49,8 @@ impl<'tcx> EvalCtxt<'tcx> {
 
     /// Entry point: evaluate a root goal.
     pub fn evaluate_root_goal(&mut self, goal: Goal<'tcx>) -> SolverResult<'tcx> {
-        let canonical_goal = self.canonicalize_goal(goal);
+        let canonical_goal =
+            canonicalize_goal(goal, self.interner, &mut self.infcx, self.max_universe);
         self.evaluate_canonical_goal(canonical_goal)
     }
 
@@ -81,11 +91,13 @@ impl<'tcx> EvalCtxt<'tcx> {
     fn compute_goal(&mut self, goal: CanonicalGoal<'tcx>) -> SolverResult<'tcx> {
         // In a full implementation, we'd instantiate the canonical goal
         // and match on the predicate. For now, we sketch the structure.
-        let predicate = goal.value;
+        let predicate = goal.value.predicate;
 
         match predicate {
             Predicate::Trait(trait_pred) => self.compute_trait_goal(goal, trait_pred),
             Predicate::Projection(proj_pred) => self.compute_projection_goal(goal, proj_pred),
+            Predicate::NormalizesTo(norm_pred) => self.compute_normalizes_to_goal(goal, norm_pred),
+            Predicate::WellFormed(wf_pred) => self.compute_well_formed_goal(goal, wf_pred),
             Predicate::TypeOutlives(_) => {
                 // No-op in Yelang (no lifetimes).
                 Ok(self.make_response(Certainty::Yes))
@@ -122,13 +134,33 @@ impl<'tcx> EvalCtxt<'tcx> {
         self.merge_responses(&responses)
     }
 
-    /// Compute a projection (associated type normalization) goal.
+    /// Compute a projection equality goal `<T as Trait>::Assoc == U`.
     fn compute_projection_goal(
         &mut self,
         _goal: CanonicalGoal<'tcx>,
         _proj_pred: yelang_ty::predicate::ProjectionPredicate<'tcx>,
     ) -> SolverResult<'tcx> {
+        // TODO: implement projection equality
+        Ok(self.make_response(Certainty::Yes))
+    }
+
+    /// Compute a normalization goal `<T as Trait>::Assoc normalizes-to U`.
+    fn compute_normalizes_to_goal(
+        &mut self,
+        _goal: CanonicalGoal<'tcx>,
+        _norm_pred: yelang_ty::predicate::NormalizesToPredicate<'tcx>,
+    ) -> SolverResult<'tcx> {
         // TODO: implement normalization
+        Ok(self.make_response(Certainty::Yes))
+    }
+
+    /// Compute a well-formedness goal.
+    fn compute_well_formed_goal(
+        &mut self,
+        _goal: CanonicalGoal<'tcx>,
+        _wf_pred: yelang_ty::predicate::WellFormedPredicate<'tcx>,
+    ) -> SolverResult<'tcx> {
+        // TODO: implement structural well-formedness
         Ok(self.make_response(Certainty::Yes))
     }
 
@@ -167,12 +199,6 @@ impl<'tcx> EvalCtxt<'tcx> {
         }
     }
 
-    /// Canonicalize a goal.
-    fn canonicalize_goal(&self, goal: Goal<'tcx>) -> CanonicalGoal<'tcx> {
-        // TODO: proper canonicalization (replace inference vars with bound vars)
-        Canonical::new(goal.predicate, self.max_universe, List::empty())
-    }
-
     /// Create a response with the given certainty.
     fn make_response(&self, certainty: Certainty) -> CanonicalResponse<'tcx> {
         Canonical::new(
@@ -186,8 +212,4 @@ impl<'tcx> EvalCtxt<'tcx> {
     }
 }
 
-impl<'tcx> Default for EvalCtxt<'tcx> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+

@@ -3,6 +3,7 @@
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{FloatVid, IntVid, Ty, TyVid};
 
+use crate::const_variable::{ConstVarValue, ConstVariableTable};
 use crate::unify::UnificationTable;
 
 /// Value stored for a general type variable.
@@ -58,6 +59,7 @@ pub struct VariableTables<'tcx> {
     pub ty_vars: TypeVariableTable<'tcx>,
     pub int_vars: IntVariableTable,
     pub float_vars: FloatVariableTable,
+    pub const_vars: ConstVariableTable<'tcx>,
 }
 
 impl<'tcx> VariableTables<'tcx> {
@@ -66,6 +68,7 @@ impl<'tcx> VariableTables<'tcx> {
             ty_vars: TypeVariableTable::new(TypeVarValue::Unknown),
             int_vars: IntVariableTable::new(IntVarValue::Unknown),
             float_vars: FloatVariableTable::new(FloatVarValue::Unknown),
+            const_vars: ConstVariableTable::new(ConstVarValue::Unknown),
         }
     }
 }

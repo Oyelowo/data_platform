@@ -141,13 +141,13 @@ impl<K: UnifyKey, V: Clone + Debug + PartialEq> UnificationTable<K, V> {
         self.values[index as usize].value = value;
     }
 
-    /// Unify two variables, returning `Ok(())` on success.
-    /// The caller must check values if both roots have known values.
-    pub fn union(&mut self, a: K, b: K) -> Result<(), ()> {
+    /// Unify two variables. This operation is infallible: if the variables are
+    /// already in the same equivalence class, it is a no-op.
+    pub fn union(&mut self, a: K, b: K) {
         let root_a = self.find(a);
         let root_b = self.find(b);
         if root_a.index() == root_b.index() {
-            return Ok(());
+            return;
         }
 
         let index_a = root_a.index();
@@ -185,8 +185,6 @@ impl<K: UnifyKey, V: Clone + Debug + PartialEq> UnificationTable<K, V> {
             });
             self.values[parent_index as usize].rank += 1;
         }
-
-        Ok(())
     }
 
     /// Create a snapshot of the current state.
@@ -249,7 +247,7 @@ impl<K: UnifyKey, V: Clone + Debug + PartialEq + Default> Default for Unificatio
 // Concrete key implementations
 // ---------------------------------------------------------------------------
 
-use yelang_ty::ty::{FloatVid, IntVid, TyVid};
+use yelang_ty::ty::{ConstVid, FloatVid, IntVid, TyVid};
 
 impl UnifyKey for TyVid {
     fn index(self) -> u32 {
@@ -275,6 +273,15 @@ impl UnifyKey for FloatVid {
     }
     fn from_index(index: u32) -> Self {
         FloatVid(index)
+    }
+}
+
+impl UnifyKey for ConstVid {
+    fn index(self) -> u32 {
+        self.0
+    }
+    fn from_index(index: u32) -> Self {
+        ConstVid(index)
     }
 }
 
@@ -319,7 +326,7 @@ mod tests {
         let mut table: UnificationTable<TestVid, TestValue> = UnificationTable::default();
         let v1 = table.new_var(TestValue::Unknown);
         let v2 = table.new_var(TestValue::Unknown);
-        table.union(v1, v2).unwrap();
+        table.union(v1, v2);
         assert_eq!(table.find(v1), table.find(v2));
     }
 
@@ -336,7 +343,7 @@ mod tests {
         let mut table: UnificationTable<TestVid, TestValue> = UnificationTable::default();
         let v1 = table.new_var(TestValue::Known(10));
         let v2 = table.new_var(TestValue::Unknown);
-        table.union(v1, v2).unwrap();
+        table.union(v1, v2);
         // After union, the root should still have its value.
         let root = table.find(v1);
         assert_eq!(*table.probe_value(root), TestValue::Known(10));
@@ -348,7 +355,7 @@ mod tests {
         let v1 = table.new_var(TestValue::Unknown);
         let snap = table.snapshot();
         let v2 = table.new_var(TestValue::Unknown);
-        table.union(v1, v2).unwrap();
+        table.union(v1, v2);
         table.set_value(v1, TestValue::Known(99));
 
         // Rollback
@@ -366,7 +373,7 @@ mod tests {
         let v1 = table.new_var(TestValue::Unknown);
         let v2 = table.new_var(TestValue::Unknown);
         let snap = table.snapshot();
-        table.union(v1, v2).unwrap();
+        table.union(v1, v2);
         assert_eq!(table.find(v1), table.find(v2));
 
         table.rollback_to(snap);
@@ -383,8 +390,8 @@ mod tests {
         let v1 = table.new_var(TestValue::Unknown);
         let v2 = table.new_var(TestValue::Unknown);
         let v3 = table.new_var(TestValue::Unknown);
-        table.union(v1, v2).unwrap();
-        table.union(v2, v3).unwrap();
+        table.union(v1, v2);
+        table.union(v2, v3);
 
         // Before find, v1's parent might be v2.
         // After find, v1's parent should be the root.

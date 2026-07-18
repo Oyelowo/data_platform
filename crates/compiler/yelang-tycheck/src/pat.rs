@@ -13,7 +13,7 @@ use crate::fn_ctxt::FnCtxt;
 /// Check a pattern against an expected type.
 pub fn check_pat<'tcx>(fcx: &mut FnCtxt<'tcx>, pat_id: PatId, expected_ty: Ty<'tcx>) {
     let pat = fcx
-        .crate_hir
+        .tcx.crate_hir()
         .pats
         .get(pat_id)
         .expect("PatId should be valid")

@@ -4,7 +4,7 @@
  * for checking a single function body.
  */
 
-use yelang_arena::{DefId, FxHashMap, index_vec as iv};
+use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Label;
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::ids::{ExprId, PatId};
@@ -18,6 +18,8 @@ use yelang_ty::ty::{AdtDef, Const, InferTy, Mutability, Ty, TyKind, TypeAndMut};
 use yelang_infer::context::InferCtxt;
 use yelang_infer::error::TypeError;
 use yelang_infer::type_variable::{FloatVarValue, IntVarValue, TypeVarValue};
+use crate::lower_ctx::TyLowerCtxt;
+use crate::tcx::TyCtxt;
 use crate::typeck_results::TypeckResults;
 
 /// A breakable scope for loop/break type checking.
@@ -37,13 +39,8 @@ pub enum BreakableKind {
 
 /// The function body type-checking context.
 pub struct FnCtxt<'tcx> {
-    /// The interner for creating canonical types.
-    pub interner: &'tcx Interner<'tcx>,
-    /// The HIR crate used to look up arena-allocated nodes.
-    ///
-    /// Immutable: type checking must not mutate the HIR. Results are stored in
-    /// `results` and other side tables.
-    pub crate_hir: &'tcx HirCrate,
+    /// The global type context: interner, item tables, and HIR reference.
+    pub tcx: &'tcx TyCtxt<'tcx>,
     /// The inference context.
     pub infer: InferCtxt<'tcx>,
     /// Collected results.
@@ -56,30 +53,24 @@ pub struct FnCtxt<'tcx> {
     pub return_ty: Ty<'tcx>,
     /// The self type (if inside an impl).
     pub self_ty: Option<Ty<'tcx>>,
-    /// Item types from the collector: DefId -> Ty.
-    pub item_types: iv::SecondaryMap<DefId, Ty<'tcx>>,
     /// Whether we're currently in an irrefutable pattern context.
     pub in_irrefutable_pat: bool,
 }
 
 impl<'tcx> FnCtxt<'tcx> {
     pub fn new(
-        interner: &'tcx Interner<'tcx>,
-        crate_hir: &'tcx HirCrate,
+        tcx: &'tcx TyCtxt<'tcx>,
         def_id: DefId,
         return_ty: Ty<'tcx>,
-        item_types: iv::SecondaryMap<DefId, Ty<'tcx>>,
     ) -> Self {
         Self {
-            interner,
-            crate_hir,
+            tcx,
             infer: InferCtxt::new(),
             results: TypeckResults::new(def_id),
             local_scopes: vec![FxHashMap::new()],
             breakable_scopes: Vec::new(),
             return_ty,
             self_ty: None,
-            item_types,
             in_irrefutable_pat: false,
         }
     }
@@ -89,12 +80,12 @@ impl<'tcx> FnCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     pub fn mk_ty(&self, kind: TyKind<'tcx>) -> Ty<'tcx> {
-        self.interner.mk_ty(kind)
+        self.tcx.interner().mk_ty(kind)
     }
 
     pub fn mk_tuple(&self, tys: &[Ty<'tcx>]) -> Ty<'tcx> {
         let args = self
-            .interner
+            .tcx.interner()
             .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
         self.mk_ty(TyKind::Tuple(args))
     }
@@ -166,15 +157,15 @@ impl<'tcx> FnCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     pub fn new_ty_var(&mut self) -> Ty<'tcx> {
-        self.infer.new_ty_var(self.interner)
+        self.infer.new_ty_var(self.tcx.interner())
     }
 
     pub fn new_int_var(&mut self) -> Ty<'tcx> {
-        self.infer.new_int_var(self.interner)
+        self.infer.new_int_var(self.tcx.interner())
     }
 
     pub fn new_float_var(&mut self) -> Ty<'tcx> {
-        self.infer.new_float_var(self.interner)
+        self.infer.new_float_var(self.tcx.interner())
     }
 
     // -----------------------------------------------------------------------
@@ -254,7 +245,7 @@ impl<'tcx> FnCtxt<'tcx> {
     // -----------------------------------------------------------------------
 
     pub fn item_ty(&self, def_id: DefId) -> Option<Ty<'tcx>> {
-        self.item_types.get(def_id).copied()
+        self.tcx.item_ty(def_id)
     }
 
     // -----------------------------------------------------------------------
@@ -298,5 +289,35 @@ impl<'tcx> FnCtxt<'tcx> {
             }
             _ => ty,
         }
+    }
+}
+
+impl<'tcx> TyLowerCtxt<'tcx> for FnCtxt<'tcx> {
+    fn interner(&self) -> &Interner<'tcx> {
+        self.tcx.interner()
+    }
+
+    fn crate_hir(&self) -> &HirCrate {
+        self.tcx.crate_hir()
+    }
+
+    fn item_ty(&self, def_id: DefId) -> Option<Ty<'tcx>> {
+        self.tcx.item_ty(def_id)
+    }
+
+    fn self_ty(&self) -> Option<Ty<'tcx>> {
+        self.self_ty
+    }
+
+    fn lower_infer(&mut self) -> Ty<'tcx> {
+        self.new_ty_var()
+    }
+
+    fn lower_missing(&mut self) -> Ty<'tcx> {
+        self.new_ty_var()
+    }
+
+    fn lower_typeof(&mut self, expr: yelang_hir::ids::ExprId) -> Ty<'tcx> {
+        crate::check::check_expr(self, expr)
     }
 }

@@ -4,4 +4,4 @@
  * live in `crate::ty` because they are referenced by `TyKind`.
  */
 
-pub use crate::ty::{Const, ConstKind, ConstValue, PlaceholderConst, UnevaluatedConst};
+pub use crate::ty::{Const, ConstKind, ConstValue, ParamConst, PlaceholderConst, UnevaluatedConst};
