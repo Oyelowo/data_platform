@@ -48,7 +48,11 @@ fn validate_simple_fn_has_no_errors() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let errors = validate_hir(&crate_hir);
-    assert!(errors.is_empty(), "expected no validation errors, got: {:?}", errors);
+    assert!(
+        errors.is_empty(),
+        "expected no validation errors, got: {:?}",
+        errors
+    );
 }
 
 #[test]
@@ -63,9 +67,14 @@ fn validate_catches_unallocated_expr_id() {
     crate_hir.body_mut(body_id).unwrap().value = crate::ids::ExprId::default();
 
     let errors = validate_hir(&crate_hir);
-    assert!(!errors.is_empty(), "expected a validation error for unallocated ExprId");
     assert!(
-        errors.iter().any(|e| e.message.contains("ExprId is not allocated")),
+        !errors.is_empty(),
+        "expected a validation error for unallocated ExprId"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("ExprId is not allocated")),
         "expected ExprId allocation error, got: {:?}",
         errors
     );

@@ -1,8 +1,7 @@
 //! Lowering of AST expressions to HIR expressions.
 
 use yelang_ast::{
-    BlockExpr, Expr as AstExpr,
-    ExprKind as AstExprKind, ForLoopExpr, IfExpr, MatchExpr,
+    BlockExpr, Expr as AstExpr, ExprKind as AstExprKind, ForLoopExpr, IfExpr, MatchExpr,
     StructExpr, WhileExpr,
 };
 use yelang_lexer::Span;
@@ -63,10 +62,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
         AstExprKind::Match(match_expr) => lower_match_expr(ctx, match_expr),
         AstExprKind::Break(break_expr) => Expr::Break {
             label: break_expr.label.clone(),
-            expr: break_expr
-                .value
-                .as_ref()
-                .map(|e| lower_expr(ctx, e)),
+            expr: break_expr.value.as_ref().map(|e| lower_expr(ctx, e)),
         },
         AstExprKind::Continue(cont) => Expr::Continue {
             label: cont.label.clone(),
@@ -189,9 +185,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             left: lower_expr(ctx, &assign.target),
             right: lower_expr(ctx, &assign.value),
         },
-        AstExprKind::DestructureAssign(assign) => {
-            lower_destructure_assign_expr(ctx, assign, span)
-        }
+        AstExprKind::DestructureAssign(assign) => lower_destructure_assign_expr(ctx, assign, span),
         AstExprKind::Range(range) => Expr::Range {
             start: range.start.as_ref().map(|e| lower_expr(ctx, e)),
             end: range.end.as_ref().map(|e| lower_expr(ctx, e)),
@@ -222,7 +216,9 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
                         name: kv.key,
                         value: Some(lower_expr(ctx, &kv.value)),
                     },
-                    yelang_ast::DocumentField::Spread(s) => DocumentProjection::Spread(lower_expr(ctx, &s.expr)),
+                    yelang_ast::DocumentField::Spread(s) => {
+                        DocumentProjection::Spread(lower_expr(ctx, &s.expr))
+                    }
                 })
                 .collect();
             Expr::DocumentAccess {
@@ -244,9 +240,7 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             });
             Expr::Err
         }
-        AstExprKind::Comprehension(comp) => {
-            lower_comprehension_expr(ctx, comp, span)
-        }
+        AstExprKind::Comprehension(comp) => lower_comprehension_expr(ctx, comp, span),
         AstExprKind::InterpolatedString(_parts) => {
             ctx.error(LoweringError::UnsupportedAst {
                 kind: "interpolated string".to_string(),
@@ -286,11 +280,17 @@ pub(crate) fn resolve_ast_path(ctx: &mut LoweringContext, path: &yelang_ast::Pat
 
     // 2. Check pre-computed def resolutions from name resolution.
     if let Some(&def_id) = ctx.resolved.def_resolutions.get(&path.span) {
+        if let Some(prim) = prim_res_for_def(ctx, def_id) {
+            return prim;
+        }
         return Res::Def { def_id };
     }
 
     // 3. Fallback: resolve via module tree for multi-segment paths.
     if let Some(def_id) = resolve_via_module_tree(ctx, path) {
+        if let Some(prim) = prim_res_for_def(ctx, def_id) {
+            return prim;
+        }
         return Res::Def { def_id };
     }
 
@@ -302,6 +302,42 @@ pub(crate) fn resolve_ast_path(ctx: &mut LoweringContext, path: &yelang_ast::Pat
         span: path.span,
     });
     Res::Err
+}
+
+/// If `def_id` is a seeded primitive-type lang item, return the corresponding
+/// `Res::PrimTy`. This keeps primitive types represented as `PrimTy` in HIR
+/// rather than as opaque `Res::Def`s.
+fn prim_res_for_def(ctx: &LoweringContext, def_id: DefId) -> Option<Res> {
+    use crate::res::FloatTy;
+    use crate::res::IntTy;
+    use crate::res::PrimTy;
+    use yelang_resolve::lang_items::LangItem;
+
+    let def = ctx.resolved.definitions.get(def_id)?;
+    let lang_item = def.lang_item?;
+
+    let prim = match lang_item {
+        LangItem::I8 => PrimTy::Int(IntTy::I8),
+        LangItem::I16 => PrimTy::Int(IntTy::I16),
+        LangItem::I32 => PrimTy::Int(IntTy::I32),
+        LangItem::I64 => PrimTy::Int(IntTy::I64),
+        LangItem::I128 => PrimTy::Int(IntTy::I128),
+        LangItem::Isize => PrimTy::Int(IntTy::Isize),
+        LangItem::U8 => PrimTy::Int(IntTy::U8),
+        LangItem::U16 => PrimTy::Int(IntTy::U16),
+        LangItem::U32 => PrimTy::Int(IntTy::U32),
+        LangItem::U64 => PrimTy::Int(IntTy::U64),
+        LangItem::U128 => PrimTy::Int(IntTy::U128),
+        LangItem::Usize => PrimTy::Int(IntTy::Usize),
+        LangItem::F32 => PrimTy::Float(FloatTy::F32),
+        LangItem::F64 => PrimTy::Float(FloatTy::F64),
+        LangItem::Bool => PrimTy::Bool,
+        LangItem::Char => PrimTy::Char,
+        LangItem::Str => PrimTy::Str,
+        _ => return None,
+    };
+
+    Some(Res::PrimTy { ty: prim })
 }
 
 /// Resolve a path by walking the module tree.
@@ -406,6 +442,7 @@ fn resolve_via_module_tree(ctx: &LoweringContext, path: &yelang_ast::Path) -> Op
 }
 
 pub(crate) fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block {
+    ctx.push_scope();
     let mut stmts: Vec<_> = block
         .statements
         .iter()
@@ -430,6 +467,7 @@ pub(crate) fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block
         (stmts, None)
     };
 
+    ctx.pop_scope();
     Block {
         stmts,
         expr,
@@ -472,10 +510,7 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                     .and_then(|opt| opt.clone())
                     .unwrap_or_else(|| Item {
                         def_id,
-                        ident: yelang_ast::Ident::new(
-                            yelang_interner::Symbol::from(0u32),
-                            span,
-                        ),
+                        ident: yelang_ast::Ident::new(yelang_interner::Symbol::from(0u32), span),
                         attrs: vec![],
                         kind: crate::hir::core::ItemKind::Mod { items: vec![] },
                         vis: yelang_ast::Visibility::Private,
@@ -484,7 +519,9 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
             }
         }
         yelang_ast::StmtKind::Empty => Stmt::Expr {
-            expr: ctx.crate_hir.alloc_expr(Expr::Tuple { exprs: vec![] }, span),
+            expr: ctx
+                .crate_hir
+                .alloc_expr(Expr::Tuple { exprs: vec![] }, span),
         },
     };
 
@@ -500,11 +537,17 @@ fn lower_while_expr(ctx: &mut LoweringContext, while_expr: &WhileExpr) -> Expr {
     let cond = lower_expr(ctx, &while_expr.condition);
     let body = lower_block(ctx, &while_expr.body);
     let body_span = body.span;
-    let body_expr = ctx.crate_hir.alloc_expr(Expr::Block { block: body }, body_span);
-
-    let break_expr = ctx
+    let body_expr = ctx
         .crate_hir
-        .alloc_expr(Expr::Break { label: None, expr: None }, Span::default());
+        .alloc_expr(Expr::Block { block: body }, body_span);
+
+    let break_expr = ctx.crate_hir.alloc_expr(
+        Expr::Break {
+            label: None,
+            expr: None,
+        },
+        Span::default(),
+    );
 
     let else_block = Block {
         stmts: vec![],
@@ -525,9 +568,10 @@ fn lower_while_expr(ctx: &mut LoweringContext, while_expr: &WhileExpr) -> Expr {
     );
 
     let loop_block = Block {
-        stmts: vec![ctx
-            .crate_hir
-            .alloc_stmt(Stmt::Expr { expr: if_expr }, Span::default())],
+        stmts: vec![
+            ctx.crate_hir
+                .alloc_stmt(Stmt::Expr { expr: if_expr }, Span::default()),
+        ],
         expr: None,
         span: Span::default(),
     };
@@ -586,9 +630,13 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
         for_expr.pat.span,
     );
 
-    let break_expr = ctx
-        .crate_hir
-        .alloc_expr(Expr::Break { label: None, expr: None }, Span::default());
+    let break_expr = ctx.crate_hir.alloc_expr(
+        Expr::Break {
+            label: None,
+            expr: None,
+        },
+        Span::default(),
+    );
 
     let match_arms = vec![
         Arm {
@@ -607,7 +655,9 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
 
     let iter_path = ctx.crate_hir.alloc_expr(
         Expr::Path {
-            res: Res::Local { pat_id: iter_pat_id },
+            res: Res::Local {
+                pat_id: iter_pat_id,
+            },
         },
         for_expr.pat.span,
     );
@@ -621,9 +671,10 @@ fn lower_for_expr(ctx: &mut LoweringContext, for_expr: &ForLoopExpr) -> Expr {
     );
 
     let loop_block = Block {
-        stmts: vec![ctx
-            .crate_hir
-            .alloc_stmt(Stmt::Expr { expr: match_expr }, Span::default())],
+        stmts: vec![
+            ctx.crate_hir
+                .alloc_stmt(Stmt::Expr { expr: match_expr }, Span::default()),
+        ],
         expr: None,
         span: Span::default(),
     };
@@ -651,10 +702,7 @@ fn lower_if_expr(ctx: &mut LoweringContext, if_expr: &IfExpr) -> Expr {
             .map_or(Span::default(), |l| l.span),
     );
 
-    let else_branch = if_expr
-        .else_expr
-        .as_ref()
-        .map(|e| lower_expr(ctx, e));
+    let else_branch = if_expr.else_expr.as_ref().map(|e| lower_expr(ctx, e));
 
     Expr::If {
         cond,
@@ -668,15 +716,26 @@ fn lower_match_expr(ctx: &mut LoweringContext, match_expr: &MatchExpr) -> Expr {
     let arms: Vec<Arm> = match_expr
         .arms
         .iter()
-        .map(|arm| Arm {
-            pat: crate::lowering::pat::lower_pat(ctx, &arm.pattern),
-            guard: arm.guard.as_ref().map(|g| lower_expr(ctx, g)),
-            body: lower_expr(ctx, &arm.body),
-            span: arm.span,
+        .map(|arm| {
+            // Each match arm introduces its bindings in its own scope.
+            ctx.push_scope();
+            let pat = crate::lowering::pat::lower_pat(ctx, &arm.pattern);
+            let guard = arm.guard.as_ref().map(|g| lower_expr(ctx, g));
+            let body = lower_expr(ctx, &arm.body);
+            ctx.pop_scope();
+            Arm {
+                pat,
+                guard,
+                body,
+                span: arm.span,
+            }
         })
         .collect();
 
-    Expr::Match { expr: scrutinee, arms }
+    Expr::Match {
+        expr: scrutinee,
+        arms,
+    }
 }
 
 fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> Expr {
@@ -694,15 +753,14 @@ fn lower_struct_expr(ctx: &mut LoweringContext, struct_expr: &StructExpr) -> Exp
     Expr::Struct {
         path: res,
         fields,
-        rest: struct_expr
-            .rest
-            .as_ref()
-            .map(|e| lower_expr(ctx, e)),
+        rest: struct_expr.rest.as_ref().map(|e| lower_expr(ctx, e)),
     }
 }
 
 fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr) -> Expr {
-    // Lower parameters and body into a synthetic Body.
+    // Lower parameters and body into a synthetic Body. Parameters are scoped to
+    // the closure body so they do not leak into the enclosing expression.
+    ctx.push_scope();
     let params: Vec<crate::hir::body::Param> = lambda
         .fn_sig
         .params
@@ -715,6 +773,7 @@ fn lower_lambda_expr(ctx: &mut LoweringContext, lambda: &yelang_ast::LambdaExpr)
         .collect();
 
     let body_expr = lower_expr(ctx, &lambda.body);
+    ctx.pop_scope();
     let body = crate::hir::body::Body {
         params,
         value: body_expr,

@@ -8,4 +8,4 @@ pub mod item;
 pub mod pat;
 pub mod ty;
 
-pub use context::{lower_crate, LoweringContext};
+pub use context::{LoweringContext, lower_crate};

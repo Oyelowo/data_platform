@@ -4,8 +4,7 @@ use yelang_ast::Ident;
 use yelang_lexer::Span;
 
 use crate::hir::core::{
-    EnumDef, FnSig, Generics, Mutability, UseKind, UsePath, VariantData,
-    Visibility,
+    EnumDef, FnSig, Generics, Mutability, UseKind, UsePath, VariantData, Visibility,
 };
 use crate::ids::{BodyId, DefId, HirTyId};
 

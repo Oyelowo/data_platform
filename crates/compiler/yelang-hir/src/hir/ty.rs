@@ -31,7 +31,10 @@ pub enum Ty {
     /// Type literal: `"pending" | "active"`
     TypeLit { variants: Vec<Lit> },
     /// Utility type: `Omit<T, K>`
-    Utility { kind: UtilityKind, args: Vec<HirTyId> },
+    Utility {
+        kind: UtilityKind,
+        args: Vec<HirTyId>,
+    },
     /// `typeof expr` type.
     TypeOf { expr: ExprId },
     /// Reference: `&T` or `&mut T`

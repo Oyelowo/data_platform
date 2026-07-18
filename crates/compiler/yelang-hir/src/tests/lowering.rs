@@ -49,7 +49,11 @@ fn lower_simple_fn() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     assert_eq!(crate_hir.items.len(), 1);
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     assert!(matches!(&item.kind, ItemKind::Fn { .. }));
 }
 
@@ -61,7 +65,11 @@ fn lower_struct_item() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     assert_eq!(crate_hir.items.len(), 1);
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     assert!(matches!(&item.kind, ItemKind::Struct { .. }));
 }
 
@@ -73,7 +81,11 @@ fn lower_enum_item() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     assert_eq!(crate_hir.items.len(), 1);
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     assert!(matches!(&item.kind, ItemKind::Enum { .. }));
 }
 
@@ -84,7 +96,11 @@ fn lower_binary_expr() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
@@ -100,7 +116,11 @@ fn lower_call_expr() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
@@ -123,7 +143,11 @@ fn lower_match_expr() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };

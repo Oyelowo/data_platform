@@ -26,7 +26,7 @@ use yelang_ty::predicate::{Predicate, TraitPredicate, TraitRef};
 use yelang_ty::subst::substitute;
 use yelang_ty::ty::{ImplPolarity, Mutability, PolyFnSig, Ty, TyId};
 
-use crate::autoderef::{ Adjustment, probe_types };
+use crate::autoderef::{Adjustment, probe_types};
 use crate::check::check_expr;
 use crate::fn_ctxt::FnCtxt;
 use crate::tcx::{ImplDefId, ImplItemDefData, TraitItemDefData};
@@ -112,6 +112,14 @@ pub fn check_method_call(
         }
     }
 
+    let span = crate::check::expr_span(fcx, receiver);
+    fcx.report_type_error(
+        span,
+        yelang_infer::error::TypeError::NoSuchMethod {
+            ty: receiver_ty,
+            method,
+        },
+    );
     fcx.mk_error()
 }
 

@@ -39,10 +39,7 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &hir::Ty, cx: &mut Cx) -> TyId {
     match ty {
         hir::Ty::Path { res, args } => lower_res(res, args, cx),
         hir::Ty::Tuple { tys } => {
-            let lowered: Vec<_> = tys
-                .iter()
-                .map(|t| lower_hir_ty_id(*t, cx))
-                .collect();
+            let lowered: Vec<_> = tys.iter().map(|t| lower_hir_ty_id(*t, cx)).collect();
             let args = cx.interner().mk_generic_args(
                 &lowered
                     .iter()
@@ -61,14 +58,19 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &hir::Ty, cx: &mut Cx) -> TyId {
             cx.mk_ty(Ty::Slice(elem_ty))
         }
         hir::Ty::FnPtr { sig } => {
-            let lowered_inputs: Vec<_> = sig.inputs
+            let lowered_inputs: Vec<_> = sig
+                .inputs
                 .iter()
                 .map(|t| GenericArg::Type(lower_hir_ty_id(*t, cx)))
                 .collect();
             let inputs = cx.interner().mk_generic_args(&lowered_inputs);
             let output = lower_hir_ty_id(sig.output, cx);
             cx.mk_ty(Ty::FnPtr(yelang_ty::ty::PolyFnSig {
-                sig: yelang_ty::ty::FnSig { inputs, output, return_ty_infer: false },
+                sig: yelang_ty::ty::FnSig {
+                    inputs,
+                    output,
+                    return_ty_infer: false,
+                },
             }))
         }
         hir::Ty::AnonStruct { fields } => {
@@ -80,9 +82,7 @@ fn lower_hir_ty_value<Cx: TyLowerCtxt>(ty: &hir::Ty, cx: &mut Cx) -> TyId {
                 })
                 .collect();
             let field_list = yelang_ty::list::List::from_slice(&lowered_fields);
-            cx.mk_ty(Ty::AnonStruct(AnonStructDef {
-                fields: field_list,
-            }))
+            cx.mk_ty(Ty::AnonStruct(AnonStructDef { fields: field_list }))
         }
         hir::Ty::TypeLit { .. } => {
             // Type literals are union-like; for now return a fresh variable
@@ -243,9 +243,7 @@ fn lower_res<Cx: TyLowerCtxt>(res: &Res, args: &[HirGenericArg], cx: &mut Cx) ->
                 cx.mk_ty(Ty::Adt(AdtDef { def_id: *def_id }, lowered_args))
             }
         }
-        Res::SelfVal { def_id } => {
-            cx.mk_ty(Ty::Adt(AdtDef { def_id: *def_id }, lowered_args))
-        }
+        Res::SelfVal { def_id } => cx.mk_ty(Ty::Adt(AdtDef { def_id: *def_id }, lowered_args)),
         Res::Err => cx.mk_error(),
     }
 }

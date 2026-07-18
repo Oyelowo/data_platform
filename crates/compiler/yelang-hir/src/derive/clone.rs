@@ -9,9 +9,9 @@ use crate::derive::helpers::{
     impl_item, make_body, match_expr, method_call_expr, method_impl_item, path_pat, self_expr,
     self_param, struct_literal, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
-use crate::hir::core::{Arm, Expr, ImplItem, Item};
-use crate::ids::{ExprId, PatId, HirTyId};
 use crate::hir::adt::VariantData;
+use crate::hir::core::{Arm, Expr, ImplItem, Item};
+use crate::ids::{ExprId, HirTyId, PatId};
 
 /// Expand `#[derive(Clone)]` for a struct or enum.
 pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]) -> Option<Item> {
@@ -43,7 +43,13 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty);
     let generics = derive_generics(ctx, &adt.generics, clone_trait);
 
-    Some(impl_item(ctx, clone_trait, self_ty, generics, vec![clone_method]))
+    Some(impl_item(
+        ctx,
+        clone_trait,
+        self_ty,
+        generics,
+        vec![clone_method],
+    ))
 }
 
 fn clone_method(

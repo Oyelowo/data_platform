@@ -2,7 +2,7 @@
 
 use yelang_lexer::Span;
 
-use crate::ids::{ExprId, PatId, HirTyId};
+use crate::ids::{ExprId, HirTyId, PatId};
 
 /// A function body.
 #[derive(Debug, Clone)]

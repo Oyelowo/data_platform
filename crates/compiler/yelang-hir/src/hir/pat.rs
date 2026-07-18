@@ -29,7 +29,10 @@ pub enum Pat {
     /// Tuple-struct pattern: `Some(x)`
     TupleStruct { res: Res, pats: Vec<PatId> },
     /// Reference pattern: `&pat` or `&mut pat`.
-    Ref { pat: PatId, mutability: yelang_ast::Mutability },
+    Ref {
+        pat: PatId,
+        mutability: yelang_ast::Mutability,
+    },
     /// Path pattern (enum variant without data, or constant).
     Path { res: Res },
     /// Literal pattern.

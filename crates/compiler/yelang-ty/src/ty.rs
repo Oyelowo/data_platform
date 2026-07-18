@@ -92,13 +92,7 @@ impl Ty {
     pub fn is_primitive(&self) -> bool {
         matches!(
             self,
-            Ty::Bool
-                | Ty::Char
-                | Ty::Str
-                | Ty::Int(_)
-                | Ty::Uint(_)
-                | Ty::Float(_)
-                | Ty::Never
+            Ty::Bool | Ty::Char | Ty::Str | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) | Ty::Never
         )
     }
 
@@ -452,7 +446,11 @@ impl fmt::Debug for AliasTy {
 
 impl fmt::Debug for ProjectionTy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Projection({:?}, {:?})", self.trait_ref.def_id, self.item_def_id)
+        write!(
+            f,
+            "Projection({:?}, {:?})",
+            self.trait_ref.def_id, self.item_def_id
+        )
     }
 }
 

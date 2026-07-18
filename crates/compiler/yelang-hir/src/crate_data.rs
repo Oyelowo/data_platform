@@ -8,7 +8,7 @@ use yelang_arena::{Arena, ArenaMap, IndexVec};
 use yelang_lexer::Span;
 
 use crate::hir::core::{ForeignItem, Impl};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 
 /// The root of the HIR for a single compilation unit.
 #[derive(Debug, Clone)]
@@ -194,9 +194,9 @@ impl Crate {
 // Re-export `Body` and `Item` so that `crate_data.rs` can reference them in the
 // `Crate` struct above without needing an extra import everywhere.
 pub use crate::hir::body::Body;
-pub use crate::hir::expr::Expr;
-pub use crate::hir::pat::Pat;
-pub use crate::hir::ty::Ty;
 pub use crate::hir::core::Stmt;
 pub use crate::hir::core::Trait;
+pub use crate::hir::expr::Expr;
 pub use crate::hir::item::Item;
+pub use crate::hir::pat::Pat;
+pub use crate::hir::ty::Ty;

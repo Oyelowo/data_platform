@@ -2,9 +2,9 @@
 
 use yelang_ast::{AssignOpKind, Ident, Label};
 
-use crate::hir::core::{Arm, Block, CaptureClause, FieldExpr, Lit};
 use crate::hir::body::Param;
-use crate::ids::{BodyId, ExprId, PatId, HirTyId};
+use crate::hir::core::{Arm, Block, CaptureClause, FieldExpr, Lit};
+use crate::ids::{BodyId, ExprId, HirTyId, PatId};
 use crate::res::Res;
 
 /// Kind of generator expression.
@@ -92,11 +92,19 @@ pub enum Expr {
     /// Let expression (used inside `if let`).
     Let { pat: PatId, expr: ExprId },
     /// Compound assignment: `a += b`.
-    AssignOp { op: AssignOpKind, left: ExprId, right: ExprId },
+    AssignOp {
+        op: AssignOpKind,
+        left: ExprId,
+        right: ExprId,
+    },
     /// Destructuring assignment: `(a, b) = value`.
     DestructureAssign { pat: PatId, value: ExprId },
     /// Range expression: `1..10`, `1..=10`, `..`, `..5`, `5..`.
-    Range { start: Option<ExprId>, end: Option<ExprId>, inclusive: bool },
+    Range {
+        start: Option<ExprId>,
+        end: Option<ExprId>,
+        inclusive: bool,
+    },
     /// Object literal: `{ x: 1, y: 2 }`.
     Object { fields: Vec<FieldExpr> },
     /// `expr is Type` type test.
@@ -112,7 +120,10 @@ pub enum Expr {
     /// Type ascription: `expr: Type`.
     TypeAscription { expr: ExprId, ty: HirTyId },
     /// Document/JSON access: `doc.name` or `doc["name"]`.
-    DocumentAccess { base: ExprId, projection: Vec<DocumentProjection> },
+    DocumentAccess {
+        base: ExprId,
+        projection: Vec<DocumentProjection>,
+    },
     /// List/set/dict comprehension.
     Comprehension {
         kind: ComprehensionKind,

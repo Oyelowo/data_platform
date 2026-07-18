@@ -14,7 +14,7 @@ use yelang_ty::generic::GenericArg;
 use yelang_ty::predicate::{NormalizesToPredicate, Predicate, TraitPredicate, TraitRef};
 use yelang_ty::ty::{ImplPolarity, Mutability, ProjectionTy, Ty, TyId, TypeAndMut};
 
-use crate::fn_ctxt::{collect_body_infer_vars, FnCtxt};
+use crate::fn_ctxt::{FnCtxt, collect_body_infer_vars};
 
 /// Maximum number of autoderef steps to try before giving up.
 pub const AUTODEREF_LIMIT: usize = 10;
@@ -43,10 +43,7 @@ pub enum Adjustment {
 /// deref target.  Built-in derefs (references, raw pointers) and user-defined
 /// `Deref` impls are both considered.  Autoref/automut are *not* added here;
 /// method dispatch adds them on top of this chain.
-pub fn probe_deref_steps(
-    fcx: &mut FnCtxt<'_>,
-    receiver_ty: TyId,
-) -> Vec<(TyId, Vec<Adjustment>)> {
+pub fn probe_deref_steps(fcx: &mut FnCtxt<'_>, receiver_ty: TyId) -> Vec<(TyId, Vec<Adjustment>)> {
     let mut steps: Vec<(TyId, Vec<Adjustment>)> = vec![(receiver_ty, vec![])];
     let interner = fcx.tcx.interner();
     let mut seen: yelang_arena::FxHashSet<TyId> = yelang_arena::FxHashSet::default();
@@ -131,11 +128,7 @@ pub fn try_deref_target(fcx: &mut FnCtxt<'_>, source: TyId) -> Option<TyId> {
 }
 
 /// Emit the obligations implied by a committed `DerefTrait` adjustment.
-pub fn emit_deref_trait_obligations(
-    fcx: &mut FnCtxt<'_>,
-    source: TyId,
-    target: TyId,
-) {
+pub fn emit_deref_trait_obligations(fcx: &mut FnCtxt<'_>, source: TyId, target: TyId) {
     let interner = fcx.tcx.interner();
     let deref_trait = fcx.tcx.deref_trait.unwrap_or_else(|| DefId::new(0));
     let deref_target = fcx.tcx.deref_target.unwrap_or_else(|| DefId::new(0));

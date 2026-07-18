@@ -8,9 +8,10 @@ use yelang_ast::{AssignOpKind, BinaryOp};
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
 use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
+use yelang_infer::error::TypeError;
 use yelang_ty::generic::GenericArg;
-use yelang_ty::primitive::IntTy;
 use yelang_ty::generic::Substitution;
+use yelang_ty::primitive::IntTy;
 use yelang_ty::subst::substitute;
 use yelang_ty::ty::{AdtDef, AnonStructDef, InferTy, Mutability, Ty, TyId, TypeAndMut};
 
@@ -19,12 +20,18 @@ use crate::fn_ctxt::{BreakableKind, BreakableScope, FnCtxt};
 use crate::hir_ty_lower::lower_hir_ty;
 use crate::pat::check_pat;
 
+/// Return the source span of a HIR expression.
+pub(crate) fn expr_span(fcx: &FnCtxt<'_>, expr_id: ExprId) -> yelang_lexer::Span {
+    fcx.tcx.crate_hir().expr_span(expr_id)
+}
+
 /// Type-check a function body.
 pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
     fcx.push_scope();
 
     let body = fcx
-        .tcx.crate_hir()
+        .tcx
+        .crate_hir()
         .body(body_id)
         .expect("BodyId should be valid")
         .clone();
@@ -46,10 +53,15 @@ pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
     let body_ty = check_expr(fcx, body.value);
 
     // Coerce body type to return type
-    let _ = fcx.coerce(body_ty, fcx.return_ty);
+    if let Err(()) = fcx.coerce(body_ty, fcx.return_ty) {
+        fcx.report_mismatch(body.span, fcx.return_ty, body_ty);
+    }
 
     // Prove trait/well-formedness obligations accumulated during checking.
-    let _unproven = fcx.prove_obligations();
+    let unproven = fcx.prove_obligations();
+    for pred in unproven {
+        fcx.report_obligation_error(body.span, pred);
+    }
 
     // Write final inferred types back, resolving remaining variables.
     crate::writeback::writeback_types(fcx);
@@ -60,7 +72,8 @@ pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
 /// Type-check an expression and return its inferred type.
 pub fn check_expr(fcx: &mut FnCtxt<'_>, expr_id: ExprId) -> TyId {
     let expr = fcx
-        .tcx.crate_hir()
+        .tcx
+        .crate_hir()
         .expr(expr_id)
         .expect("ExprId should be valid")
         .clone();
@@ -98,9 +111,7 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
         } => check_if(fcx, *cond, *then_branch, *else_branch),
         Expr::Let { pat, expr } => check_let_expr(fcx, *pat, *expr),
         Expr::Closure { params, body, .. } => check_closure(fcx, params, *body),
-        Expr::Struct { path, fields, rest } => {
-            check_struct_literal(fcx, path, fields, *rest)
-        }
+        Expr::Struct { path, fields, rest } => check_struct_literal(fcx, path, fields, *rest),
         Expr::Tuple { exprs } => check_tuple(fcx, exprs),
         Expr::Array { exprs } => check_array(fcx, exprs),
         Expr::Cast { expr, ty } => check_cast(fcx, *expr, *ty),
@@ -118,8 +129,17 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
         }
         Expr::TypeAscription { expr: inner, ty } => {
             let ascribed = lower_hir_ty_id(fcx, *ty);
+            let inner_span = expr_span(fcx, *inner);
             let expr_ty = check_expr(fcx, *inner);
-            let _ = fcx.eq(expr_ty, ascribed);
+            if let Err(()) = fcx.coerce(expr_ty, ascribed) {
+                fcx.report_type_error(
+                    inner_span,
+                    TypeError::Mismatch {
+                        expected: ascribed,
+                        found: expr_ty,
+                    },
+                );
+            }
             ascribed
         }
         Expr::Try { expr: inner } => check_try(fcx, *inner),
@@ -231,14 +251,10 @@ fn check_path(fcx: &mut FnCtxt<'_>, res: &Res) -> TyId {
 // Binary operator checking
 // ---------------------------------------------------------------------------
 
-fn check_binary(
-    fcx: &mut FnCtxt<'_>,
-    op: BinaryOp,
-    left: ExprId,
-    right: ExprId,
-) -> TyId {
+fn check_binary(fcx: &mut FnCtxt<'_>, op: BinaryOp, left: ExprId, right: ExprId) -> TyId {
     let left_ty = check_expr(fcx, left);
     let right_ty = check_expr(fcx, right);
+    let right_span = expr_span(fcx, right);
 
     match op {
         // Arithmetic: both operands must be numeric, result is same type
@@ -248,12 +264,12 @@ fn check_binary(
         | BinaryOp::Divide
         | BinaryOp::Modulo
         | BinaryOp::Power => {
-            let _ = fcx.eq(left_ty, right_ty);
+            fcx.demand_eq(right_span, left_ty, right_ty);
             left_ty
         }
         // Bitwise: both operands must be integer, result is same type
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
-            let _ = fcx.eq(left_ty, right_ty);
+            fcx.demand_eq(right_span, left_ty, right_ty);
             left_ty
         }
         // Comparison: both operands must be comparable, result is bool
@@ -268,13 +284,13 @@ fn check_binary(
         | BinaryOp::Regex
         | BinaryOp::In
         | BinaryOp::NotIn => {
-            let _ = fcx.eq(left_ty, right_ty);
+            fcx.demand_eq(right_span, left_ty, right_ty);
             fcx.mk_bool()
         }
         // Logical: both operands must be bool, result is bool
         BinaryOp::And | BinaryOp::Or => {
-            let _ = fcx.eq(left_ty, fcx.mk_bool());
-            let _ = fcx.eq(right_ty, fcx.mk_bool());
+            fcx.demand_eq(expr_span(fcx, left), left_ty, fcx.mk_bool());
+            fcx.demand_eq(right_span, right_ty, fcx.mk_bool());
             fcx.mk_bool()
         }
     }
@@ -284,11 +300,7 @@ fn check_binary(
 // Unary operator checking
 // ---------------------------------------------------------------------------
 
-fn check_unary(
-    fcx: &mut FnCtxt<'_>,
-    op: yelang_ast::UnaryOp,
-    expr: ExprId,
-) -> TyId {
+fn check_unary(fcx: &mut FnCtxt<'_>, op: yelang_ast::UnaryOp, expr: ExprId) -> TyId {
     let expr_ty = check_expr(fcx, expr);
     let interner = fcx.tcx.interner();
 
@@ -303,15 +315,25 @@ fn check_unary(
         }
         yelang_ast::UnaryOp::Deref => {
             // Operand must be pointer or reference; result is pointee
+            let span = expr_span(fcx, expr);
             match interner.ty(expr_ty) {
                 Ty::Ref(ty, _) | Ty::RawPtr(TypeAndMut { ty, .. }) => ty,
                 Ty::Infer(InferTy::TyVar(_)) => {
                     let inner = fcx.new_ty_var();
                     let ptr = fcx.mk_ref(inner, Mutability::Not);
-                    let _ = fcx.eq(expr_ty, ptr);
+                    fcx.demand_eq(span, expr_ty, ptr);
                     inner
                 }
-                _ => fcx.mk_error(),
+                _ => {
+                    fcx.report_type_error(
+                        span,
+                        TypeError::Custom(format!(
+                            "cannot dereference a value of type `{:?}`",
+                            expr_ty
+                        )),
+                    );
+                    fcx.mk_error()
+                }
             }
         }
         yelang_ast::UnaryOp::Ref => {
@@ -330,6 +352,7 @@ fn check_unary(
 // ---------------------------------------------------------------------------
 
 fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
+    let func_span = expr_span(fcx, func);
     let func_ty = check_expr(fcx, func);
     let interner = fcx.tcx.interner();
 
@@ -339,16 +362,30 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
             let output = sig.sig.output;
 
             if inputs.len() != args.len() {
+                fcx.report_type_error(
+                    func_span,
+                    TypeError::ArgCount {
+                        expected: inputs.len(),
+                        found: args.len(),
+                    },
+                );
                 return fcx.mk_error();
             }
 
             for (input, arg) in inputs.iter().zip(args.iter()) {
+                let arg_span = expr_span(fcx, *arg);
                 let arg_ty = check_expr(fcx, *arg);
                 let expected = match input {
                     GenericArg::Type(t) => *t,
-                    _ => fcx.mk_error(),
+                    _ => {
+                        fcx.report_type_error(
+                            arg_span,
+                            TypeError::GenericArgKindMismatch { index: 0 },
+                        );
+                        continue;
+                    }
                 };
-                let _ = fcx.eq(expected, arg_ty);
+                fcx.demand_eq(arg_span, expected, arg_ty);
             }
 
             output
@@ -359,25 +396,49 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
             // record the callee's where-clause obligations.
             let poly_sig = match fcx.tcx.fn_sig(fd.def_id) {
                 Some(sig) => sig,
-                None => return fcx.mk_error(),
+                None => {
+                    fcx.report_type_error(
+                        func_span,
+                        TypeError::Custom("missing signature for function item".into()),
+                    );
+                    return fcx.mk_error();
+                }
             };
 
             let subst = fcx.fresh_substitution_for_generics(fd.def_id);
             let inputs = substitute(interner, poly_sig.sig.inputs, &subst);
             let output = substitute(interner, poly_sig.sig.output, &subst);
-            let sig = yelang_ty::ty::FnSig { inputs, output, return_ty_infer: poly_sig.sig.return_ty_infer };
+            let sig = yelang_ty::ty::FnSig {
+                inputs,
+                output,
+                return_ty_infer: poly_sig.sig.return_ty_infer,
+            };
 
             if sig.inputs.len() != args.len() {
+                fcx.report_type_error(
+                    func_span,
+                    TypeError::ArgCount {
+                        expected: sig.inputs.len(),
+                        found: args.len(),
+                    },
+                );
                 return fcx.mk_error();
             }
 
             for (input, arg) in sig.inputs.iter().zip(args.iter()) {
+                let arg_span = expr_span(fcx, *arg);
                 let arg_ty = check_expr(fcx, *arg);
                 let expected = match input {
                     GenericArg::Type(t) => *t,
-                    _ => fcx.mk_error(),
+                    _ => {
+                        fcx.report_type_error(
+                            arg_span,
+                            TypeError::GenericArgKindMismatch { index: 0 },
+                        );
+                        continue;
+                    }
                 };
-                let _ = fcx.eq(expected, arg_ty);
+                fcx.demand_eq(arg_span, expected, arg_ty);
             }
 
             // Emit substituted where-clause obligations.
@@ -401,10 +462,16 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
             );
             let ret_ty = fcx.new_ty_var();
             let expected = fcx.mk_fn_ptr(arg_args, ret_ty);
-            let _ = fcx.eq(func_ty, expected);
+            fcx.demand_eq(func_span, func_ty, expected);
             ret_ty
         }
-        _ => fcx.mk_error(),
+        _ => {
+            fcx.report_type_error(
+                func_span,
+                TypeError::Custom(format!("expected function, found `{:?}`", func_ty)),
+            );
+            fcx.mk_error()
+        }
     }
 }
 
@@ -425,11 +492,8 @@ fn check_method_call(
 // Field access checking
 // ---------------------------------------------------------------------------
 
-fn check_field(
-    fcx: &mut FnCtxt<'_>,
-    expr: ExprId,
-    field: &yelang_ast::Ident,
-) -> TyId {
+fn check_field(fcx: &mut FnCtxt<'_>, expr: ExprId, field: &yelang_ast::Ident) -> TyId {
+    let expr_span = expr_span(fcx, expr);
     let expr_ty = check_expr(fcx, expr);
     let steps = crate::autoderef::probe_deref_steps(fcx, expr_ty);
 
@@ -449,15 +513,18 @@ fn check_field(
         }
     }
 
+    fcx.report_type_error(
+        expr_span,
+        TypeError::NoSuchField {
+            ty: expr_ty,
+            field: field.symbol,
+        },
+    );
     fcx.mk_error()
 }
 
 /// Look up a named field in a type (without considering deref).
-fn lookup_field(
-    fcx: &mut FnCtxt<'_>,
-    ty: TyId,
-    field: &yelang_ast::Ident,
-) -> Option<TyId> {
+fn lookup_field(fcx: &mut FnCtxt<'_>, ty: TyId, field: &yelang_ast::Ident) -> Option<TyId> {
     let interner = fcx.tcx.interner();
 
     match interner.ty(ty) {
@@ -483,10 +550,9 @@ fn lookup_field(
                 Some(substitute(interner, field_data.ty, &subst))
             }
         }
-        Ty::AnonStruct(AnonStructDef { fields }) => fields
-            .iter()
-            .find(|f| f.name == field.symbol)
-            .map(|f| f.ty),
+        Ty::AnonStruct(AnonStructDef { fields }) => {
+            fields.iter().find(|f| f.name == field.symbol).map(|f| f.ty)
+        }
         _ => None,
     }
 }
@@ -496,22 +562,30 @@ fn lookup_field(
 // ---------------------------------------------------------------------------
 
 fn check_index(fcx: &mut FnCtxt<'_>, expr: ExprId, index: ExprId) -> TyId {
+    let base_span = expr_span(fcx, expr);
+    let index_span = expr_span(fcx, index);
     let expr_ty = check_expr(fcx, expr);
     let index_ty = check_expr(fcx, index);
     let interner = fcx.tcx.interner();
 
     // Index must be integer
-    let _ = fcx.eq(index_ty, fcx.mk_int(IntTy::I32));
+    fcx.demand_eq(index_span, fcx.mk_int(IntTy::I32), index_ty);
 
     match interner.ty(expr_ty) {
         Ty::Array(ty, _) | Ty::Slice(ty) => ty,
         Ty::Infer(InferTy::TyVar(_)) => {
             let elem_ty = fcx.new_ty_var();
             let expected = fcx.mk_slice(elem_ty);
-            let _ = fcx.eq(expr_ty, expected);
+            fcx.demand_eq(base_span, expr_ty, expected);
             elem_ty
         }
-        _ => fcx.mk_error(),
+        _ => {
+            fcx.report_type_error(
+                base_span,
+                TypeError::Custom(format!("cannot index a value of type `{:?}`", expr_ty)),
+            );
+            fcx.mk_error()
+        }
     }
 }
 
@@ -520,9 +594,10 @@ fn check_index(fcx: &mut FnCtxt<'_>, expr: ExprId, index: ExprId) -> TyId {
 // ---------------------------------------------------------------------------
 
 fn check_assign(fcx: &mut FnCtxt<'_>, left: ExprId, right: ExprId) -> TyId {
+    let left_span = expr_span(fcx, left);
     let left_ty = check_expr(fcx, left);
     let right_ty = check_expr(fcx, right);
-    let _ = fcx.eq(left_ty, right_ty);
+    fcx.demand_eq(left_span, left_ty, right_ty);
     fcx.mk_unit()
 }
 
@@ -549,7 +624,8 @@ fn check_block(fcx: &mut FnCtxt<'_>, block: &Block) -> TyId {
 
 fn check_stmt(fcx: &mut FnCtxt<'_>, stmt_id: StmtId) {
     let stmt = fcx
-        .tcx.crate_hir()
+        .tcx
+        .crate_hir()
         .stmt(stmt_id)
         .expect("StmtId should be valid")
         .clone();
@@ -566,7 +642,14 @@ fn check_stmt(fcx: &mut FnCtxt<'_>, stmt_id: StmtId) {
 
             let expected_ty = if let Some(hir_ty) = ty {
                 let annotated = lower_hir_ty_id(fcx, *hir_ty);
-                let _ = fcx.eq(annotated, init_ty);
+                let init_span = init
+                    .map(|e| expr_span(fcx, e))
+                    .unwrap_or_else(yelang_lexer::Span::default);
+                if let Some(init_expr) = init {
+                    if let Err(()) = fcx.coerce(init_ty, annotated) {
+                        fcx.report_mismatch(init_span, annotated, init_ty);
+                    }
+                }
                 annotated
             } else {
                 init_ty
@@ -584,11 +667,7 @@ fn check_stmt(fcx: &mut FnCtxt<'_>, stmt_id: StmtId) {
 // Loop checking
 // ---------------------------------------------------------------------------
 
-fn check_loop(
-    fcx: &mut FnCtxt<'_>,
-    block: &Block,
-    label: Option<&yelang_ast::Label>,
-) -> TyId {
+fn check_loop(fcx: &mut FnCtxt<'_>, block: &Block, label: Option<&yelang_ast::Label>) -> TyId {
     fcx.push_breakable(BreakableScope {
         label: label.cloned(),
         kind: BreakableKind::Loop,
@@ -629,21 +708,30 @@ fn check_break(
     };
 
     if let Some(idx) = breakable_idx {
-        let expr_ty = if let Some(e) = expr {
-            check_expr(fcx, e)
+        let _expr_ty = if let Some(e) = expr {
+            let span = expr_span(fcx, e);
+            let ty = check_expr(fcx, e);
+            // We need to mutate the scope, so we can't hold a reference.
+            let scope = &mut fcx.breakable_scopes[idx];
+            if fcx.tcx.interner().ty(scope.expr_ty).is_never() {
+                // First break: set the scope type
+                scope.expr_ty = ty;
+            } else {
+                let scope_expr_ty = scope.expr_ty;
+                fcx.demand_eq(span, scope_expr_ty, ty);
+            }
+            ty
         } else {
-            fcx.mk_unit()
+            let unit = fcx.mk_unit();
+            let scope = &mut fcx.breakable_scopes[idx];
+            if fcx.tcx.interner().ty(scope.expr_ty).is_never() {
+                scope.expr_ty = unit;
+            } else {
+                let scope_expr_ty = scope.expr_ty;
+                fcx.demand_eq(yelang_lexer::Span::default(), scope_expr_ty, unit);
+            }
+            unit
         };
-
-        // We need to mutate the scope, so we can't hold a reference.
-        let scope = &mut fcx.breakable_scopes[idx];
-        if fcx.tcx.interner().ty(scope.expr_ty).is_never() {
-            // First break: set the scope type
-            scope.expr_ty = expr_ty;
-        } else {
-            let scope_expr_ty = scope.expr_ty;
-            let _ = fcx.eq(scope_expr_ty, expr_ty);
-        }
     }
 
     fcx.mk_never()
@@ -673,13 +761,14 @@ fn check_continue(fcx: &mut FnCtxt<'_>, label: Option<&yelang_ast::Label>) -> Ty
 // ---------------------------------------------------------------------------
 
 fn check_return(fcx: &mut FnCtxt<'_>, expr: Option<ExprId>) -> TyId {
-    let expr_ty = if let Some(e) = expr {
-        check_expr(fcx, e)
+    if let Some(e) = expr {
+        let span = expr_span(fcx, e);
+        let ty = check_expr(fcx, e);
+        fcx.demand_eq(span, fcx.return_ty, ty);
     } else {
-        fcx.mk_unit()
-    };
+        fcx.demand_eq(yelang_lexer::Span::default(), fcx.return_ty, fcx.mk_unit());
+    }
 
-    let _ = fcx.eq(fcx.return_ty, expr_ty);
     fcx.mk_never()
 }
 
@@ -694,11 +783,13 @@ fn check_match(fcx: &mut FnCtxt<'_>, expr: ExprId, arms: &[Arm]) -> TyId {
     for arm in arms {
         check_pat(fcx, arm.pat, scrutinee_ty);
         if let Some(guard) = &arm.guard {
+            let guard_span = expr_span(fcx, *guard);
             let guard_ty = check_expr(fcx, *guard);
-            let _ = fcx.eq(guard_ty, fcx.mk_bool());
+            fcx.demand_eq(guard_span, guard_ty, fcx.mk_bool());
         }
+        let body_span = expr_span(fcx, arm.body);
         let body_ty = check_expr(fcx, arm.body);
-        let _ = fcx.eq(result_ty, body_ty);
+        fcx.demand_eq(body_span, result_ty, body_ty);
     }
 
     result_ty
@@ -714,18 +805,21 @@ fn check_if(
     then_branch: ExprId,
     else_branch: Option<ExprId>,
 ) -> TyId {
+    let cond_span = expr_span(fcx, cond);
     let cond_ty = check_expr(fcx, cond);
-    let _ = fcx.eq(cond_ty, fcx.mk_bool());
+    fcx.demand_eq(cond_span, cond_ty, fcx.mk_bool());
 
     let then_ty = check_expr(fcx, then_branch);
 
     if let Some(else_expr) = else_branch {
+        let else_span = expr_span(fcx, else_expr);
         let else_ty = check_expr(fcx, else_expr);
-        let _ = fcx.eq(then_ty, else_ty);
+        fcx.demand_eq(else_span, then_ty, else_ty);
         then_ty
     } else {
         // No else branch: then branch must evaluate to unit
-        let _ = fcx.eq(then_ty, fcx.mk_unit());
+        let then_span = expr_span(fcx, then_branch);
+        fcx.demand_eq(then_span, then_ty, fcx.mk_unit());
         fcx.mk_unit()
     }
 }
@@ -785,7 +879,8 @@ fn check_struct_literal(
 fn check_tuple(fcx: &mut FnCtxt<'_>, exprs: &[ExprId]) -> TyId {
     let tys: Vec<_> = exprs.iter().map(|e| check_expr(fcx, *e)).collect();
     let args = fcx
-        .tcx.interner()
+        .tcx
+        .interner()
         .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
     fcx.mk_ty(Ty::Tuple(args))
 }
@@ -807,8 +902,9 @@ fn check_array(fcx: &mut FnCtxt<'_>, exprs: &[ExprId]) -> TyId {
 
     let first_ty = check_expr(fcx, exprs[0]);
     for expr in exprs.iter().skip(1) {
+        let span = expr_span(fcx, *expr);
         let ty = check_expr(fcx, *expr);
-        let _ = fcx.eq(first_ty, ty);
+        fcx.demand_eq(span, first_ty, ty);
     }
 
     let len = interner.mk_const_from_parts(
@@ -833,7 +929,8 @@ fn check_cast(fcx: &mut FnCtxt<'_>, expr: ExprId, ty: HirTyId) -> TyId {
 
 fn lower_hir_ty_id(fcx: &mut FnCtxt<'_>, ty_id: HirTyId) -> TyId {
     let hir_ty = fcx
-        .tcx.crate_hir()
+        .tcx
+        .crate_hir()
         .ty(ty_id)
         .expect("TyId should be valid")
         .clone();
@@ -844,12 +941,7 @@ fn lower_hir_ty_id(fcx: &mut FnCtxt<'_>, ty_id: HirTyId) -> TyId {
 // Assign-op, range, object, try
 // ---------------------------------------------------------------------------
 
-fn check_assign_op(
-    fcx: &mut FnCtxt<'_>,
-    op: AssignOpKind,
-    left: ExprId,
-    right: ExprId,
-) -> TyId {
+fn check_assign_op(fcx: &mut FnCtxt<'_>, op: AssignOpKind, left: ExprId, right: ExprId) -> TyId {
     let bin_op = assign_op_to_bin_op(op);
     let left_ty = check_expr(fcx, left);
     let right_ty = check_expr(fcx, right);
@@ -867,7 +959,7 @@ fn check_assign_op(
         | BinaryOp::BitXor
         | BinaryOp::Shl
         | BinaryOp::Shr => {
-            let _ = fcx.eq(left_ty, right_ty);
+            fcx.demand_eq(expr_span(fcx, right), left_ty, right_ty);
         }
         _ => unreachable!("assignment operators cannot map to {bin_op:?}"),
     }
@@ -891,11 +983,7 @@ fn assign_op_to_bin_op(op: AssignOpKind) -> BinaryOp {
     }
 }
 
-fn check_range(
-    fcx: &mut FnCtxt<'_>,
-    start: Option<ExprId>,
-    end: Option<ExprId>,
-) -> TyId {
+fn check_range(fcx: &mut FnCtxt<'_>, start: Option<ExprId>, end: Option<ExprId>) -> TyId {
     if let Some(e) = start {
         let _ = check_expr(fcx, e);
     }

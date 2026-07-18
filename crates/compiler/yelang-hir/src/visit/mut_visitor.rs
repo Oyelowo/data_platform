@@ -6,15 +6,15 @@
 //! its children top-down.
 
 use crate::crate_data::Crate;
+use crate::hir::body::Body;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
     ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
-use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 use crate::res::Res;
 
 /// In-place mutating visitor over the HIR.
@@ -96,7 +96,11 @@ pub fn walk_crate_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate) {
 
 /// Visit the item stored at `def_id` in place.
 pub fn visit_item_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, def_id: DefId) {
-    if let Some(mut item) = crate_hir.items.get_mut(def_id).and_then(|o| std::mem::take(o)) {
+    if let Some(mut item) = crate_hir
+        .items
+        .get_mut(def_id)
+        .and_then(|o| std::mem::take(o))
+    {
         v.visit_item(&mut item);
         walk_item_mut(v, crate_hir, &mut item);
         crate_hir.items[def_id] = Some(item);
@@ -105,7 +109,11 @@ pub fn visit_item_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, def_id:
 
 /// Visit the trait definition stored at `def_id` in place.
 pub fn visit_trait_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, def_id: DefId) {
-    if let Some(mut trait_) = crate_hir.traits.get_mut(def_id).and_then(|o| std::mem::take(o)) {
+    if let Some(mut trait_) = crate_hir
+        .traits
+        .get_mut(def_id)
+        .and_then(|o| std::mem::take(o))
+    {
         v.visit_trait(&mut trait_);
         walk_trait_mut(v, crate_hir, &mut trait_);
         crate_hir.traits[def_id] = Some(trait_);
@@ -114,7 +122,10 @@ pub fn visit_trait_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, def_id
 
 /// Visit the expression at `expr_id` in place.
 pub fn visit_expr_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr_id: ExprId) {
-    let Some(mut expr) = crate_hir.exprs.get_mut(expr_id).and_then(|slot| std::mem::take(slot))
+    let Some(mut expr) = crate_hir
+        .exprs
+        .get_mut(expr_id)
+        .and_then(|slot| std::mem::take(slot))
     else {
         return;
     };
@@ -127,7 +138,10 @@ pub fn visit_expr_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr_id
 
 /// Visit the statement at `stmt_id` in place.
 pub fn visit_stmt_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, stmt_id: StmtId) {
-    let Some(mut stmt) = crate_hir.stmts.get_mut(stmt_id).and_then(|slot| std::mem::take(slot))
+    let Some(mut stmt) = crate_hir
+        .stmts
+        .get_mut(stmt_id)
+        .and_then(|slot| std::mem::take(slot))
     else {
         return;
     };
@@ -140,7 +154,11 @@ pub fn visit_stmt_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, stmt_id
 
 /// Visit the type at `ty_id` in place.
 pub fn visit_ty_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty_id: HirTyId) {
-    let Some(mut ty) = crate_hir.tys.get_mut(ty_id).and_then(|slot| std::mem::take(slot)) else {
+    let Some(mut ty) = crate_hir
+        .tys
+        .get_mut(ty_id)
+        .and_then(|slot| std::mem::take(slot))
+    else {
         return;
     };
     v.visit_ty(&mut ty);
@@ -152,7 +170,10 @@ pub fn visit_ty_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty_id: Hi
 
 /// Visit the pattern at `pat_id` in place.
 pub fn visit_pat_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, pat_id: PatId) {
-    let Some(mut pat) = crate_hir.pats.get_mut(pat_id).and_then(|slot| std::mem::take(slot))
+    let Some(mut pat) = crate_hir
+        .pats
+        .get_mut(pat_id)
+        .and_then(|slot| std::mem::take(slot))
     else {
         return;
     };
@@ -181,7 +202,11 @@ pub fn visit_body_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, body_id
 
 pub fn walk_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut Item) {
     match &mut item.kind {
-        ItemKind::Fn { sig, body, generics } => {
+        ItemKind::Fn {
+            sig,
+            body,
+            generics,
+        } => {
             walk_generics_mut(v, crate_hir, generics);
             walk_fn_sig_mut(v, crate_hir, sig);
             visit_body_id_mut(v, crate_hir, *body);
@@ -403,10 +428,7 @@ pub fn walk_expr_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr: &mut 
                 visit_expr_id_mut(v, crate_hir, *cond);
             }
         }
-        Expr::Lit { .. }
-        | Expr::Path { .. }
-        | Expr::Continue { .. }
-        | Expr::Err => {}
+        Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
     }
 }
 
@@ -509,11 +531,7 @@ pub fn walk_ty_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty: &mut Ty) 
     }
 }
 
-pub fn walk_generic_arg_mut(
-    v: &mut impl MutVisitor,
-    crate_hir: &mut Crate,
-    arg: &mut GenericArg,
-) {
+pub fn walk_generic_arg_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, arg: &mut GenericArg) {
     match arg {
         GenericArg::Type(ty) => visit_ty_id_mut(v, crate_hir, *ty),
         GenericArg::Const(c) => walk_const_mut(v, crate_hir, c),
@@ -612,9 +630,7 @@ pub fn walk_generic_param_mut(
                 visit_ty_id_mut(v, crate_hir, *ty);
             }
         }
-        GenericParam::Const {
-            ty, default, ..
-        } => {
+        GenericParam::Const { ty, default, .. } => {
             visit_ty_id_mut(v, crate_hir, *ty);
             if let Some(expr) = default {
                 visit_expr_id_mut(v, crate_hir, *expr);
@@ -754,11 +770,7 @@ pub fn walk_impl_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, impl_: &mut
     }
 }
 
-pub fn walk_impl_item_mut(
-    v: &mut impl MutVisitor,
-    crate_hir: &mut Crate,
-    item: &mut ImplItem,
-) {
+pub fn walk_impl_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut ImplItem) {
     v.visit_impl_item(item);
     match &mut item.kind {
         crate::hir::core::ImplItemKind::Fn { sig, body } => {
@@ -785,11 +797,7 @@ pub fn walk_trait_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, trait_: &m
     }
 }
 
-pub fn walk_trait_item_mut(
-    v: &mut impl MutVisitor,
-    crate_hir: &mut Crate,
-    item: &mut TraitItem,
-) {
+pub fn walk_trait_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut TraitItem) {
     v.visit_trait_item(item);
     match &mut item.kind {
         crate::hir::core::TraitItemKind::Fn { sig, default } => {

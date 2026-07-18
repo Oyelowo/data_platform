@@ -8,14 +8,14 @@ use std::collections::HashSet;
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
+use crate::crate_data::Crate;
 use crate::hir::core::{
     Expr, ImplItem, ImplItemKind, Item, ItemKind, Pat, TraitBound, TraitItem, TraitItemKind,
     TraitRef, Ty, UsePath,
 };
-use crate::crate_data::Crate;
-use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
-use crate::res::Res;
 use crate::hir::ty::Const;
+use crate::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
+use crate::res::Res;
 use crate::visit::visitor::{Visitor, walk_crate, walk_expr, walk_item, walk_pat, walk_ty};
 
 /// An error reported by the HIR validation pass.
@@ -141,7 +141,10 @@ impl<'hir> Validator<'hir> {
                 .any(|l| *l == label.symbol);
             if !found {
                 self.error(
-                    format!("Label '{}' does not refer to an in-scope loop", label.symbol),
+                    format!(
+                        "Label '{}' does not refer to an in-scope loop",
+                        label.symbol
+                    ),
                     Some(label.span),
                 );
             }
@@ -339,4 +342,3 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
         self.check_res(&path.res, Some(path.span));
     }
 }
-

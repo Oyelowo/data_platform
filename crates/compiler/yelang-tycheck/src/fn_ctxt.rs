@@ -8,6 +8,7 @@ use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Label;
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::ids::{ExprId, PatId};
+use yelang_infer::error::TypeError;
 use yelang_lexer::Span;
 use yelang_ty::canonical::{CanonicalResponse, CanonicalVarValue};
 use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
@@ -16,17 +17,19 @@ use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate};
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{AdtDef, Const, ConstId, ConstVid, FloatVid, ImplPolarity, InferTy, IntVid, Mutability, Ty, TyId, TyVid, TypeAndMut};
+use yelang_ty::ty::{
+    AdtDef, Const, ConstId, ConstVid, FloatVid, ImplPolarity, InferTy, IntVid, Mutability, Ty,
+    TyId, TyVid, TypeAndMut,
+};
 
+use crate::lower_ctx::TyLowerCtxt;
+use crate::tcx::TyCtxt;
+use crate::typeck_results::TypeckResults;
 use yelang_infer::context::InferCtxt;
-use yelang_infer::error::TypeError;
 use yelang_infer::type_variable::{FloatVarValue, IntVarValue, TypeVarValue};
 use yelang_trait_solver::eval_ctxt::EvalCtxt;
 use yelang_trait_solver::goal::Goal;
 use yelang_trait_solver::response::Certainty;
-use crate::lower_ctx::TyLowerCtxt;
-use crate::tcx::TyCtxt;
-use crate::typeck_results::TypeckResults;
 
 /// A breakable scope for loop/break type checking.
 #[derive(Debug, Clone)]
@@ -66,14 +69,12 @@ pub struct FnCtxt<'a> {
     /// Accumulated trait/well-formedness obligations to prove at the end of
     /// the function body.
     pub obligations: Vec<Predicate>,
+    /// Type errors discovered while checking this body.
+    pub errors: Vec<(Span, TypeError)>,
 }
 
 impl<'a> FnCtxt<'a> {
-    pub fn new(
-        tcx: &'a TyCtxt,
-        def_id: DefId,
-        return_ty: TyId,
-    ) -> Self {
+    pub fn new(tcx: &'a TyCtxt, def_id: DefId, return_ty: TyId) -> Self {
         Self {
             tcx,
             infer: InferCtxt::new(),
@@ -85,6 +86,7 @@ impl<'a> FnCtxt<'a> {
             in_irrefutable_pat: false,
             param_env: tcx.param_env(def_id),
             obligations: Vec::new(),
+            errors: Vec::new(),
         }
     }
 
@@ -98,7 +100,8 @@ impl<'a> FnCtxt<'a> {
 
     pub fn mk_tuple(&self, tys: &[TyId]) -> TyId {
         let args = self
-            .tcx.interner()
+            .tcx
+            .interner()
             .mk_generic_args(&tys.iter().map(|&t| GenericArg::Type(t)).collect::<Vec<_>>());
         self.mk_ty(Ty::Tuple(args))
     }
@@ -161,7 +164,11 @@ impl<'a> FnCtxt<'a> {
 
     pub fn mk_fn_ptr(&self, inputs: List<GenericArg>, output: TyId) -> TyId {
         self.mk_ty(Ty::FnPtr(yelang_ty::ty::PolyFnSig {
-            sig: yelang_ty::ty::FnSig { inputs, output, return_ty_infer: false },
+            sig: yelang_ty::ty::FnSig {
+                inputs,
+                output,
+                return_ty_infer: false,
+            },
         }))
     }
 
@@ -191,12 +198,30 @@ impl<'a> FnCtxt<'a> {
 
     pub fn demand_eq(&mut self, span: Span, expected: TyId, found: TyId) -> TyId {
         if let Err(e) = self.eq(expected, found) {
-            // TODO: emit diagnostic
-            let _ = (span, e);
-            self.mk_error()
+            self.report_type_error(span, e);
+            expected
         } else {
             expected
         }
+    }
+
+    /// Record a type error to be reported later.
+    pub fn report_type_error(&mut self, span: Span, err: TypeError) {
+        self.errors.push((span, err));
+    }
+
+    /// Report a simple expected/found mismatch.
+    pub fn report_mismatch(&mut self, span: Span, expected: TyId, found: TyId) {
+        self.report_type_error(span, TypeError::Mismatch { expected, found });
+    }
+
+    /// Report an unproven or ambiguous trait obligation.
+    pub fn report_obligation_error(&mut self, span: Span, pred: Predicate) {
+        let err = match pred {
+            Predicate::Trait(trait_pred) => TypeError::TraitNotImplemented(trait_pred),
+            _ => TypeError::Custom(format!("unsolved obligation: {:?}", pred)),
+        };
+        self.report_type_error(span, err);
     }
 
     /// Create a fresh substitution that maps an item's generic parameters to
@@ -217,10 +242,10 @@ impl<'a> FnCtxt<'a> {
                     crate::tcx::GenericParamKind::Const => {
                         // TODO: fresh const inference variables.
                         let ty = self.tcx.interner().mk_ty(Ty::Error);
-                        let ct = self.tcx.interner().mk_const_from_parts(
-                            yelang_ty::ty::Const::Error,
-                            ty,
-                        );
+                        let ct = self
+                            .tcx
+                            .interner()
+                            .mk_const_from_parts(yelang_ty::ty::Const::Error, ty);
                         args.push(yelang_ty::generic::GenericArg::Const(ct));
                     }
                 }
@@ -240,7 +265,10 @@ impl<'a> FnCtxt<'a> {
 
     /// Emit a trait obligation `ty: trait`.
     pub fn emit_trait_obligation(&mut self, ty: TyId, trait_def_id: DefId) {
-        let args = self.tcx.interner().mk_generic_args(&[yelang_ty::generic::GenericArg::Type(ty)]);
+        let args = self
+            .tcx
+            .interner()
+            .mk_generic_args(&[yelang_ty::generic::GenericArg::Type(ty)]);
         self.emit_obligation(Predicate::Trait(TraitPredicate {
             trait_ref: yelang_ty::predicate::TraitRef {
                 def_id: trait_def_id,
@@ -252,7 +280,9 @@ impl<'a> FnCtxt<'a> {
 
     /// Emit a well-formedness obligation for a type.
     pub fn emit_wf_obligation(&mut self, ty: TyId) {
-        self.emit_obligation(Predicate::WellFormed(yelang_ty::predicate::WellFormedPredicate { ty }));
+        self.emit_obligation(Predicate::WellFormed(
+            yelang_ty::predicate::WellFormedPredicate { ty },
+        ));
     }
 
     /// Resolve inference variables inside a predicate as far as possible using
@@ -315,7 +345,11 @@ pub(crate) enum BodyInferVar {
 
 /// Collect the body inference variables in `pred` in first-occurrence order,
 /// matching the order produced by the trait solver's canonicalizer.
-pub(crate) fn collect_body_infer_vars(interner: &Interner, infcx: &mut yelang_infer::InferCtxt, pred: &Predicate) -> Vec<BodyInferVar> {
+pub(crate) fn collect_body_infer_vars(
+    interner: &Interner,
+    infcx: &mut yelang_infer::InferCtxt,
+    pred: &Predicate,
+) -> Vec<BodyInferVar> {
     struct Collector<'a> {
         interner: &'a Interner,
         infcx: &'a mut yelang_infer::InferCtxt,
@@ -455,8 +489,6 @@ impl<'a> FnCtxt<'a> {
         }
     }
 }
-
-
 
 impl<'a> FnCtxt<'a> {
     // -----------------------------------------------------------------------

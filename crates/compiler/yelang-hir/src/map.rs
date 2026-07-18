@@ -1,11 +1,11 @@
 //! HIR node lookup map (like rustc's `hir::map`).
 
 use crate::crate_data::Crate;
-use crate::hir::core::{Expr, Item, Stmt};
 use crate::hir::body::Body;
+use crate::hir::core::{Expr, Item, Stmt};
 use crate::hir::pat::Pat;
 use crate::hir::ty::Ty;
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 
 /// Provides O(1) lookup from HIR ids to HIR nodes.
 pub struct Map<'hir> {
@@ -19,7 +19,10 @@ impl<'hir> Map<'hir> {
 
     /// Lookup an item by `DefId`.
     pub fn item(&self, def_id: DefId) -> Option<&Item> {
-        self.crate_hir.items.get(def_id).and_then(|opt| opt.as_ref())
+        self.crate_hir
+            .items
+            .get(def_id)
+            .and_then(|opt| opt.as_ref())
     }
 
     /// Lookup a body by `BodyId`.

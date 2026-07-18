@@ -142,8 +142,7 @@ impl<'a> DefCollector<'a> {
     }
 
     fn seed_primitives(&mut self) {
-        let (registry, to_add) =
-            seed_primitive_lang_items(self.interner, &mut self.definitions);
+        let (registry, to_add) = seed_primitive_lang_items(self.interner, &mut self.definitions);
         // Merge primitive lang items into the existing registry (which already
         // contains prelude lang items). Detect duplicates just in case.
         for (li, def_id) in registry.iter() {
@@ -248,7 +247,12 @@ impl<'a> DefCollector<'a> {
             lang_item,
         );
         self.collect_generic_params(def_id, &func.generics, visibility.clone());
-        self.add_to_module(crate::namespaces::Namespace::Value, func.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Value,
+            func.name.symbol,
+            def_id,
+            span,
+        );
     }
 
     fn collect_struct(
@@ -266,7 +270,12 @@ impl<'a> DefCollector<'a> {
             lang_item,
         );
         self.collect_generic_params(def_id, &s.generics, visibility.clone());
-        self.add_to_module(crate::namespaces::Namespace::Type, s.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Type,
+            s.name.symbol,
+            def_id,
+            span,
+        );
 
         // Collect struct fields as definitions with their own visibility
         if let yelang_ast::StructFields::Named(fields) = &s.fields {
@@ -297,7 +306,12 @@ impl<'a> DefCollector<'a> {
             lang_item,
         );
         self.collect_generic_params(def_id, &e.generics, visibility.clone());
-        self.add_to_module(crate::namespaces::Namespace::Type, e.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Type,
+            e.name.symbol,
+            def_id,
+            span,
+        );
 
         // Variants are definitions in both the type and value namespaces.
         // Inherit visibility from the parent enum.
@@ -342,7 +356,12 @@ impl<'a> DefCollector<'a> {
             lang_item,
         );
         self.collect_generic_params(def_id, &ta.generics, visibility);
-        self.add_to_module(crate::namespaces::Namespace::Type, ta.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Type,
+            ta.name.symbol,
+            def_id,
+            span,
+        );
     }
 
     fn collect_trait(
@@ -360,7 +379,12 @@ impl<'a> DefCollector<'a> {
             lang_item,
         );
         self.collect_generic_params(def_id, &t.generics, visibility);
-        self.add_to_module(crate::namespaces::Namespace::Type, t.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Type,
+            t.name.symbol,
+            def_id,
+            span,
+        );
     }
 
     fn collect_module(
@@ -371,7 +395,12 @@ impl<'a> DefCollector<'a> {
         _attributes: &[yelang_ast::Attribute],
     ) {
         let def_id = self.add_def(m.name.symbol, span, DefKind::Module, visibility.clone());
-        self.add_to_module(crate::namespaces::Namespace::Type, m.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Type,
+            m.name.symbol,
+            def_id,
+            span,
+        );
 
         let parent = self.current_module;
         let mut node = ModuleNode::new(def_id, m.name.symbol, Some(parent), visibility);
@@ -406,14 +435,14 @@ impl<'a> DefCollector<'a> {
         visibility: Visibility,
         lang_item: Option<LangItem>,
     ) {
-        let def_id = self.add_def_with_lang_item(
+        let def_id =
+            self.add_def_with_lang_item(c.name.symbol, span, DefKind::Const, visibility, lang_item);
+        self.add_to_module(
+            crate::namespaces::Namespace::Value,
             c.name.symbol,
+            def_id,
             span,
-            DefKind::Const,
-            visibility,
-            lang_item,
         );
-        self.add_to_module(crate::namespaces::Namespace::Value, c.name.symbol, def_id, span);
     }
 
     fn collect_static(
@@ -430,7 +459,12 @@ impl<'a> DefCollector<'a> {
             visibility,
             lang_item,
         );
-        self.add_to_module(crate::namespaces::Namespace::Value, s.name.symbol, def_id, span);
+        self.add_to_module(
+            crate::namespaces::Namespace::Value,
+            s.name.symbol,
+            def_id,
+            span,
+        );
     }
 
     fn collect_impl(&mut self, i: &Impl, span: Span, visibility: Visibility) {
@@ -476,18 +510,10 @@ impl<'a> DefCollector<'a> {
                     (const_def.name.symbol, DefKind::Const, const_def.span)
                 }
             };
-            let item_def_id = self.add_def(
-                item_name,
-                item_span,
-                item_kind,
-                item.visibility.clone(),
-            );
+            let item_def_id =
+                self.add_def(item_name, item_span, item_kind, item.visibility.clone());
             if let ImplItemKind::Method(fn_def) = &item.item {
-                self.collect_generic_params(
-                    item_def_id,
-                    &fn_def.generics,
-                    item.visibility.clone(),
-                );
+                self.collect_generic_params(item_def_id, &fn_def.generics, item.visibility.clone());
             }
             item_names.insert(item_name, item_def_id);
         }
@@ -595,13 +621,8 @@ impl<'a> DefCollector<'a> {
             // privacy checking their containing module is the current module
             // (the module that owns the item). The `generic_params` map still
             // records the item -> params relationship.
-            let def_id = self.add_child_def(
-                name,
-                span,
-                kind,
-                visibility.clone(),
-                self.current_module,
-            );
+            let def_id =
+                self.add_child_def(name, span, kind, visibility.clone(), self.current_module);
             self.generic_param_defs.insert(span, def_id);
             ids.push(def_id);
         }

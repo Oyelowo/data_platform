@@ -10,15 +10,15 @@
 //! passed to the trait method for final transformation.
 
 use crate::crate_data::Crate;
+use crate::hir::body::Body;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
     ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
-use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 use crate::res::Res;
 
 /// Functional HIR -> HIR rewrite.
@@ -141,7 +141,11 @@ pub fn fold_crate(f: &mut impl Folder, crate_hir: &mut Crate) {
 
 /// Fold the item stored at `def_id` in place and return the same `DefId`.
 pub fn fold_item_id(f: &mut impl Folder, crate_hir: &mut Crate, def_id: DefId) -> DefId {
-    if let Some(item) = crate_hir.items.get_mut(def_id).and_then(|o| std::mem::take(o)) {
+    if let Some(item) = crate_hir
+        .items
+        .get_mut(def_id)
+        .and_then(|o| std::mem::take(o))
+    {
         // The walked item has all child IDs folded.
         let walked = walk_item(f, crate_hir, item);
         crate_hir.items[def_id] = Some(f.fold_item(walked));
@@ -152,7 +156,11 @@ pub fn fold_item_id(f: &mut impl Folder, crate_hir: &mut Crate, def_id: DefId) -
 /// Fold the trait definition stored at `def_id` in place and return the same
 /// `DefId`.
 pub fn fold_trait_id(f: &mut impl Folder, crate_hir: &mut Crate, def_id: DefId) -> DefId {
-    if let Some(trait_) = crate_hir.traits.get_mut(def_id).and_then(|o| std::mem::take(o)) {
+    if let Some(trait_) = crate_hir
+        .traits
+        .get_mut(def_id)
+        .and_then(|o| std::mem::take(o))
+    {
         let walked = walk_trait(f, crate_hir, trait_);
         crate_hir.traits[def_id] = Some(f.fold_trait(walked));
     }
@@ -230,7 +238,11 @@ pub fn fold_body_id(f: &mut impl Folder, crate_hir: &mut Crate, body_id: BodyId)
 
 pub fn walk_item(f: &mut impl Folder, crate_hir: &mut Crate, item: Item) -> Item {
     let new_kind = match item.kind {
-        ItemKind::Fn { sig, body, generics } => ItemKind::Fn {
+        ItemKind::Fn {
+            sig,
+            body,
+            generics,
+        } => ItemKind::Fn {
             sig: walk_fn_sig(f, crate_hir, sig),
             body: fold_body_id(f, crate_hir, body),
             generics: walk_generics(f, crate_hir, generics),
@@ -631,11 +643,17 @@ pub fn walk_ty(f: &mut impl Folder, crate_hir: &mut Crate, ty: Ty) -> Ty {
         Ty::TypeOf { expr } => Ty::TypeOf {
             expr: fold_expr_id(f, crate_hir, expr),
         },
-        Ty::Ref { mutability, ty: inner } => Ty::Ref {
+        Ty::Ref {
+            mutability,
+            ty: inner,
+        } => Ty::Ref {
             mutability,
             ty: fold_ty_id(f, crate_hir, inner),
         },
-        Ty::RawPtr { mutability, ty: inner } => Ty::RawPtr {
+        Ty::RawPtr {
+            mutability,
+            ty: inner,
+        } => Ty::RawPtr {
             mutability,
             ty: fold_ty_id(f, crate_hir, inner),
         },
@@ -831,11 +849,7 @@ pub fn walk_binder_param(
     param: BinderParam,
 ) -> BinderParam {
     match param {
-        BinderParam::Type {
-            name,
-            bounds,
-            span,
-        } => BinderParam::Type {
+        BinderParam::Type { name, bounds, span } => BinderParam::Type {
             name,
             bounds: bounds
                 .into_iter()
@@ -886,7 +900,11 @@ pub fn walk_where_predicate(
     }
 }
 
-pub fn walk_trait_bound(f: &mut impl Folder, crate_hir: &mut Crate, mut bound: TraitBound) -> TraitBound {
+pub fn walk_trait_bound(
+    f: &mut impl Folder,
+    crate_hir: &mut Crate,
+    mut bound: TraitBound,
+) -> TraitBound {
     bound.args = bound
         .args
         .into_iter()
@@ -895,11 +913,7 @@ pub fn walk_trait_bound(f: &mut impl Folder, crate_hir: &mut Crate, mut bound: T
     f.fold_trait_bound(bound)
 }
 
-pub fn walk_trait_ref(
-    f: &mut impl Folder,
-    crate_hir: &mut Crate,
-    trait_ref: TraitRef,
-) -> TraitRef {
+pub fn walk_trait_ref(f: &mut impl Folder, crate_hir: &mut Crate, trait_ref: TraitRef) -> TraitRef {
     let _ = crate_hir;
     f.fold_trait_ref(trait_ref)
 }
@@ -998,23 +1012,19 @@ pub fn walk_impl(f: &mut impl Folder, crate_hir: &mut Crate, impl_: Impl) -> Imp
 
 pub fn walk_impl_item(f: &mut impl Folder, crate_hir: &mut Crate, item: ImplItem) -> ImplItem {
     let new_kind = match item.kind {
-        crate::hir::core::ImplItemKind::Fn { sig, body } => {
-            crate::hir::core::ImplItemKind::Fn {
-                sig: walk_fn_sig(f, crate_hir, sig),
-                body: fold_body_id(f, crate_hir, body),
-            }
-        }
+        crate::hir::core::ImplItemKind::Fn { sig, body } => crate::hir::core::ImplItemKind::Fn {
+            sig: walk_fn_sig(f, crate_hir, sig),
+            body: fold_body_id(f, crate_hir, body),
+        },
         crate::hir::core::ImplItemKind::Const { ty, body } => {
             crate::hir::core::ImplItemKind::Const {
                 ty: fold_ty_id(f, crate_hir, ty),
                 body: fold_body_id(f, crate_hir, body),
             }
         }
-        crate::hir::core::ImplItemKind::Type { ty } => {
-            crate::hir::core::ImplItemKind::Type {
-                ty: fold_ty_id(f, crate_hir, ty),
-            }
-        }
+        crate::hir::core::ImplItemKind::Type { ty } => crate::hir::core::ImplItemKind::Type {
+            ty: fold_ty_id(f, crate_hir, ty),
+        },
     };
     ImplItem {
         def_id: item.def_id,

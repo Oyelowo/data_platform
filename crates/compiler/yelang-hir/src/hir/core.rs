@@ -6,14 +6,14 @@
 pub use yelang_ast::{Attribute, Ident, Label, Mutability, Visibility};
 use yelang_lexer::Span;
 
+pub use crate::hir::adt::{FieldDef, StructField, VariantData};
 pub use crate::hir::body::{Body, Param};
 pub use crate::hir::expr::Expr;
 pub use crate::hir::item::{Item, ItemKind};
 pub use crate::hir::pat::Pat;
-pub use crate::hir::adt::{FieldDef, StructField, VariantData};
 pub use crate::hir::ty::Ty;
 
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 use crate::res::Res;
 
 /// Re-export commonly-used AST types that contain no unresolved names.
@@ -162,8 +162,14 @@ pub struct WhereClause {
 /// A single predicate in a `where` clause.
 #[derive(Debug, Clone)]
 pub enum WherePredicate {
-    TraitBound { ty: HirTyId, bounds: Vec<TraitBound> },
-    TypeEq { lhs: HirTyId, rhs: HirTyId },
+    TraitBound {
+        ty: HirTyId,
+        bounds: Vec<TraitBound>,
+    },
+    TypeEq {
+        lhs: HirTyId,
+        rhs: HirTyId,
+    },
 }
 
 // ---------------------------------------------------------------------------

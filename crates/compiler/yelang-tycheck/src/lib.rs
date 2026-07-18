@@ -18,6 +18,7 @@ pub mod autoderef;
 pub mod check;
 pub mod coerce;
 pub mod collector;
+pub mod diagnostics;
 pub mod fn_ctxt;
 pub mod hir_ty_lower;
 pub mod lower_ctx;
@@ -25,16 +26,19 @@ pub mod method;
 pub mod pat;
 pub mod solver_ctxt;
 pub mod tcx;
+pub mod type_check_crate;
 pub mod typeck_results;
 pub mod writeback;
 
 pub use check::*;
 pub use coerce::*;
 pub use collector::*;
+pub use diagnostics::*;
 pub use fn_ctxt::*;
 pub use hir_ty_lower::*;
 pub use method::*;
 pub use pat::*;
+pub use type_check_crate::*;
 pub use typeck_results::*;
 pub use writeback::*;
 

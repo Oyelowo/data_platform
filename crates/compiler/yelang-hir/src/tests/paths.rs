@@ -36,7 +36,9 @@ fn lower_resolved_fn_path() {
     let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = crate_hir.expr(block.expr.expect("expected tail expr")).unwrap();
+    let tail = crate_hir
+        .expr(block.expr.expect("expected tail expr"))
+        .unwrap();
     assert!(matches!(tail, Expr::Call { .. }));
 }
 
@@ -47,7 +49,11 @@ fn lower_unresolved_path_falls_back_to_err() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -56,7 +62,9 @@ fn lower_unresolved_path_falls_back_to_err() {
     let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = crate_hir.expr(block.expr.expect("expected tail expr")).unwrap();
+    let tail = crate_hir
+        .expr(block.expr.expect("expected tail expr"))
+        .unwrap();
     // Unresolved paths still lower; resolution is Err
     assert!(matches!(tail, Expr::Call { .. }));
 }
@@ -72,7 +80,11 @@ fn lower_absolute_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -81,7 +93,9 @@ fn lower_absolute_path() {
     let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = crate_hir.expr(block.expr.expect("expected tail expr")).unwrap();
+    let tail = crate_hir
+        .expr(block.expr.expect("expected tail expr"))
+        .unwrap();
     assert!(matches!(tail, Expr::Call { .. }));
 }
 
@@ -92,7 +106,11 @@ fn lower_crate_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -101,7 +119,9 @@ fn lower_crate_path() {
     let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = crate_hir.expr(block.expr.expect("expected tail expr")).unwrap();
+    let tail = crate_hir
+        .expr(block.expr.expect("expected tail expr"))
+        .unwrap();
     assert!(matches!(tail, Expr::Call { .. }));
 }
 
@@ -112,7 +132,11 @@ fn lower_self_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -121,7 +145,9 @@ fn lower_self_path() {
     let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = crate_hir.expr(block.expr.expect("expected tail expr")).unwrap();
+    let tail = crate_hir
+        .expr(block.expr.expect("expected tail expr"))
+        .unwrap();
     assert!(matches!(tail, Expr::Call { .. }));
 }
 
@@ -132,7 +158,11 @@ fn lower_super_path() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn")
     };
@@ -141,6 +171,8 @@ fn lower_super_path() {
     let Expr::Block { block, .. } = expr else {
         panic!("expected block")
     };
-    let tail = crate_hir.expr(block.expr.expect("expected tail expr")).unwrap();
+    let tail = crate_hir
+        .expr(block.expr.expect("expected tail expr"))
+        .unwrap();
     assert!(matches!(tail, Expr::Call { .. }));
 }

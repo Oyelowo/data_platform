@@ -11,14 +11,10 @@ use crate::binder::DebruijnIndex;
 use crate::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use crate::generic::{GenericArg, Substitution};
 use crate::interner::Interner;
-use crate::ty::{Binder, Const, Ty, TyId, ConstId};
+use crate::ty::{Binder, Const, ConstId, Ty, TyId};
 
 /// Apply a substitution to a type-like value.
-pub fn substitute<T>(
-    interner: &Interner,
-    value: T,
-    subst: &Substitution,
-) -> T
+pub fn substitute<T>(interner: &Interner, value: T, subst: &Substitution) -> T
 where
     T: TypeFoldable,
 {
@@ -129,7 +125,8 @@ impl<'a> TypeFolder for ShiftBoundVars<'a> {
                     ShiftDirection::In => debruijn.shifted_out(),
                 };
                 let ty = self.interner.const_ty(ct).fold_with(self);
-                self.interner.mk_const_from_parts(Const::Bound(new_index, bound_var), ty)
+                self.interner
+                    .mk_const_from_parts(Const::Bound(new_index, bound_var), ty)
             }
             _ => ct,
         }
@@ -145,11 +142,7 @@ impl<'a> TypeFolder for ShiftBoundVars<'a> {
 ///
 /// The caller must ensure that `args` provides one argument for each bound
 /// variable in the binder's `bound_vars`.
-pub fn instantiate_binder<T>(
-    interner: &Interner,
-    binder: Binder<T>,
-    args: &[GenericArg],
-) -> T
+pub fn instantiate_binder<T>(interner: &Interner, binder: Binder<T>, args: &[GenericArg]) -> T
 where
     T: TypeFoldable + Copy,
 {
@@ -187,9 +180,7 @@ impl<'a> TypeFolder for InstantiateBinderFolder<'a> {
 
     fn fold_const(&mut self, ct: ConstId) -> ConstId {
         match self.interner.const_kind(ct) {
-            Const::Bound(debruijn, bound_var)
-                if debruijn == self.binder_index =>
-            {
+            Const::Bound(debruijn, bound_var) if debruijn == self.binder_index => {
                 match self.args.get(bound_var.0 as usize) {
                     Some(GenericArg::Const(replacement)) => *replacement,
                     _ => ct,
@@ -203,9 +194,9 @@ impl<'a> TypeFolder for InstantiateBinderFolder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binder::{BoundTy, BoundTyKind, BoundVar, BoundVariableKind, DebruijnIndex};
     use crate::generic::GenericArg;
     use crate::interner::Interner;
-    use crate::binder::{BoundTy, BoundTyKind, BoundVar, BoundVariableKind, DebruijnIndex};
     use crate::primitive::IntTy;
     use crate::ty::{AdtDef, ConstValue, ParamConst, ParamTy, Ty};
     use yelang_arena::DefId;
@@ -246,10 +237,7 @@ mod tests {
             Const::Value(ConstValue::Int(42)),
             interner.mk_ty(Ty::Int(IntTy::I32)),
         );
-        let array = interner.mk_ty(Ty::Array(
-            interner.mk_ty(Ty::Int(IntTy::I32)),
-            c_param,
-        ));
+        let array = interner.mk_ty(Ty::Array(interner.mk_ty(Ty::Int(IntTy::I32)), c_param));
 
         let subst = Substitution::from_args(vec![GenericArg::Const(c_value)]);
         let result = substitute(&interner, array, &subst);
@@ -278,19 +266,20 @@ mod tests {
 
         // Vec<T> (represented as Adt with generic arg T)
         let vec_t = interner.mk_ty(Ty::Adt(
-            AdtDef { def_id: DefId::new(1) },
+            AdtDef {
+                def_id: DefId::new(1),
+            },
             interner.mk_generic_args(&[GenericArg::Type(t_param_t)]),
         ));
 
         // Substitute T -> Vec<U>, U -> i64. Expected: Vec<Vec<i64>>.
         let vec_u = interner.mk_ty(Ty::Adt(
-            AdtDef { def_id: DefId::new(1) },
+            AdtDef {
+                def_id: DefId::new(1),
+            },
             interner.mk_generic_args(&[GenericArg::Type(t_param_u)]),
         ));
-        let subst = Substitution::from_args(vec![
-            GenericArg::Type(vec_u),
-            GenericArg::Type(t_i64),
-        ]);
+        let subst = Substitution::from_args(vec![GenericArg::Type(vec_u), GenericArg::Type(t_i64)]);
         let result = substitute(&interner, vec_t, &subst);
 
         match interner.ty(result) {
@@ -333,12 +322,10 @@ mod tests {
             },
         ));
         let binder = Binder {
-            bound_vars: interner.mk_bound_var_list(&[BoundVariableKind::Ty(
-                BoundTy {
-                    var: BoundVar(0),
-                    kind: BoundTyKind::Anon,
-                },
-            )]),
+            bound_vars: interner.mk_bound_var_list(&[BoundVariableKind::Ty(BoundTy {
+                var: BoundVar(0),
+                kind: BoundTyKind::Anon,
+            })]),
             value: bound0,
         };
 

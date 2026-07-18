@@ -19,7 +19,11 @@ pub struct LoweringContext<'a> {
     pub synthetic_def_count: u32,
     pub current_module: DefId,
     pub current_owner: DefId,
-    pub local_map: yelang_arena::FxHashMap<Symbol, PatId>,
+    /// Local variable bindings, scoped by block/function body. Each scope is a
+    /// map from name to the `PatId` that introduced the binding. Searching from
+    /// the top of the stack gives the innermost binding, matching Rust's
+    /// lexical scoping and preventing bindings from leaking across functions.
+    pub local_scopes: Vec<yelang_arena::FxHashMap<Symbol, PatId>>,
     pub errors: Vec<LoweringError>,
     /// The `DefId` of the type that `Self` refers to inside the current
     /// `impl` or `trait` block. `None` when not inside such a block.
@@ -36,7 +40,7 @@ impl<'a> LoweringContext<'a> {
             synthetic_def_count: 0,
             current_module: root_module,
             current_owner: root_module,
-            local_map: yelang_arena::FxHashMap::new(),
+            local_scopes: vec![yelang_arena::FxHashMap::new()],
             errors: Vec::new(),
             self_type: None,
         }
@@ -56,19 +60,31 @@ impl<'a> LoweringContext<'a> {
         self.errors.push(err);
     }
 
-    /// Push a local variable into scope.
+    /// Push a new local-variable scope. Use `pop_scope` to remove every binding
+    /// introduced since the matching push.
+    pub fn push_scope(&mut self) {
+        self.local_scopes.push(yelang_arena::FxHashMap::new());
+    }
+
+    /// Pop the innermost local-variable scope, discarding all bindings that were
+    /// introduced inside it.
+    pub fn pop_scope(&mut self) {
+        self.local_scopes.pop();
+    }
+
+    /// Push a local variable into the innermost scope.
     pub fn push_local(&mut self, name: Symbol, pat_id: PatId) {
-        self.local_map.insert(name, pat_id);
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(name, pat_id);
+        }
     }
 
-    /// Pop a local variable from scope.
-    pub fn pop_local(&mut self, name: Symbol) {
-        self.local_map.remove(&name);
-    }
-
-    /// Look up a local variable.
+    /// Look up a local variable, searching from the innermost scope outward.
     pub fn local(&self, name: Symbol) -> Option<PatId> {
-        self.local_map.get(&name).copied()
+        self.local_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&name).copied())
     }
 }
 

@@ -1,9 +1,7 @@
 //! Lowering of AST items to HIR items.
 
 use yelang_ast::item::{Enum as AstEnum, Struct as AstStruct};
-use yelang_ast::{
-    FnDef as AstFnDef, FnRefType, Item as AstItem, ItemKind as AstItemKind,
-};
+use yelang_ast::{FnDef as AstFnDef, FnRefType, Item as AstItem, ItemKind as AstItemKind};
 
 use crate::hir::core::{
     EnumDef, FieldDef, FnSig, GenericParam, Generics, ImplPolarity, Item, ItemKind, StructField,
@@ -15,9 +13,8 @@ use crate::lowering::LoweringContext;
 /// Lower a single AST item into HIR.
 pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
     // Try to reuse the DefId assigned during name resolution.
-    let def_id =
-        crate::lowering::context::lookup_item_def_id(ctx, item)
-            .unwrap_or_else(|| ctx.next_synthetic_def_id());
+    let def_id = crate::lowering::context::lookup_item_def_id(ctx, item)
+        .unwrap_or_else(|| ctx.next_synthetic_def_id());
     let prev_owner = ctx.current_owner;
     let prev_module = ctx.current_module;
     ctx.current_owner = def_id;
@@ -68,8 +65,14 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
 }
 
 fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> ItemKind {
-    let sig = lower_fn_sig(ctx, &f.sig, f.is_const);
-    let body_id = crate::lowering::body::lower_block_as_body(ctx, &f.body, &sig.inputs);
+    let inputs: Vec<HirTyId> = f
+        .sig
+        .params
+        .iter()
+        .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
+        .collect();
+    let sig = lower_fn_sig(ctx, &f.sig, f.is_const, inputs.clone());
+    let body_id = crate::lowering::body::lower_block_as_body(ctx, &f.body, &f.sig.params, &inputs);
 
     ItemKind::Fn {
         sig,
@@ -78,18 +81,17 @@ fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> Ite
     }
 }
 
-fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bool) -> FnSig {
-    let inputs: Vec<HirTyId> = sig
-        .params
-        .iter()
-        .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
-        .collect();
-
+fn lower_fn_sig(
+    ctx: &mut LoweringContext,
+    sig: &yelang_ast::FnSig,
+    is_const: bool,
+    inputs: Vec<HirTyId>,
+) -> FnSig {
     let output = match &sig.return_type {
         FnRefType::Type(ty) => crate::lowering::ty::lower_ty(ctx, ty),
-        FnRefType::Default(span) => {
-            ctx.crate_hir.alloc_ty(crate::hir::ty::Ty::Tuple { tys: vec![] }, *span)
-        }
+        FnRefType::Default(span) => ctx
+            .crate_hir
+            .alloc_ty(crate::hir::ty::Ty::Tuple { tys: vec![] }, *span),
     };
 
     FnSig {
@@ -204,10 +206,7 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
 
 /// Try to extract an integer value from an explicit discriminant expression so
 /// that subsequent implicit discriminants can be inferred sequentially.
-fn explicit_discriminant_value(
-    ctx: &LoweringContext,
-    expr: &yelang_ast::Expr,
-) -> Option<u128> {
+fn explicit_discriminant_value(ctx: &LoweringContext, expr: &yelang_ast::Expr) -> Option<u128> {
     match &expr.kind {
         yelang_ast::ExprKind::Literal(yelang_ast::Literal::Int(lit)) => {
             ctx.interner.resolve(&lit.value).parse().ok()
@@ -251,13 +250,25 @@ fn lower_trait_item(
         .map(|item| {
             let def_id = ctx.next_synthetic_def_id();
             let kind = match &item.item {
-                yelang_ast::TraitItemKind::Method(m) => crate::hir::core::TraitItemKind::Fn {
-                    sig: lower_fn_sig(ctx, &m.sig, m.is_const),
-                    default: m
-                        .body
-                        .as_ref()
-                        .map(|body| crate::lowering::body::lower_block_as_body(ctx, body, &[])),
-                },
+                yelang_ast::TraitItemKind::Method(m) => {
+                    let inputs: Vec<HirTyId> = m
+                        .sig
+                        .params
+                        .iter()
+                        .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
+                        .collect();
+                    crate::hir::core::TraitItemKind::Fn {
+                        sig: lower_fn_sig(ctx, &m.sig, m.is_const, inputs.clone()),
+                        default: m.body.as_ref().map(|body| {
+                            crate::lowering::body::lower_block_as_body(
+                                ctx,
+                                body,
+                                &m.sig.params,
+                                &inputs,
+                            )
+                        }),
+                    }
+                }
                 yelang_ast::TraitItemKind::Constant(c) => crate::hir::core::TraitItemKind::Const {
                     ty: crate::lowering::ty::lower_ty(ctx, &c.ty),
                     body: c
@@ -265,17 +276,19 @@ fn lower_trait_item(
                         .as_ref()
                         .map(|v| crate::lowering::body::lower_expr_as_body(ctx, v)),
                 },
-                yelang_ast::TraitItemKind::AssociatedType(ty) => crate::hir::core::TraitItemKind::Type {
-                    bounds: ty
-                        .bounds
-                        .iter()
-                        .map(|b| crate::lowering::ty::lower_trait_bound(ctx, b))
-                        .collect(),
-                    default: ty
-                        .default
-                        .as_ref()
-                        .map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
-                },
+                yelang_ast::TraitItemKind::AssociatedType(ty) => {
+                    crate::hir::core::TraitItemKind::Type {
+                        bounds: ty
+                            .bounds
+                            .iter()
+                            .map(|b| crate::lowering::ty::lower_trait_bound(ctx, b))
+                            .collect(),
+                        default: ty
+                            .default
+                            .as_ref()
+                            .map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
+                    }
+                }
             };
             let ident = match &item.item {
                 yelang_ast::TraitItemKind::Method(m) => m.segment,
@@ -329,23 +342,23 @@ fn lower_impl_item(
 ) -> ItemKind {
     let impl_def_id = ctx.next_synthetic_def_id();
     let self_ty = crate::lowering::ty::lower_ty(ctx, &i.self_ty);
-    let self_ty_def_id = ctx
-        .crate_hir
-        .ty(self_ty)
-        .and_then(|ty| match ty {
-            crate::hir::ty::Ty::Path {
-                res: crate::res::Res::Def { def_id },
-                ..
-            } => Some(*def_id),
-            _ => None,
-        });
+    let self_ty_def_id = ctx.crate_hir.ty(self_ty).and_then(|ty| match ty {
+        crate::hir::ty::Ty::Path {
+            res: crate::res::Res::Def { def_id },
+            ..
+        } => Some(*def_id),
+        _ => None,
+    });
     let prev_self_type = ctx.self_type;
     ctx.self_type = self_ty_def_id;
 
-    let of_trait = i.trait_impl.as_ref().map(|path| crate::hir::core::TraitRef {
-        path: crate::lowering::expr::resolve_ast_path(ctx, path),
-        span: path.span,
-    });
+    let of_trait = i
+        .trait_impl
+        .as_ref()
+        .map(|path| crate::hir::core::TraitRef {
+            path: crate::lowering::expr::resolve_ast_path(ctx, path),
+            span: path.span,
+        });
 
     let items: Vec<crate::hir::core::ImplItem> = i
         .items
@@ -354,14 +367,26 @@ fn lower_impl_item(
             let def_id = ctx.next_synthetic_def_id();
             let kind = match &item.item {
                 yelang_ast::ImplItemKind::Method(m) => {
-                    let sig = lower_fn_sig(ctx, &m.sig, m.is_const);
-                    let body_id =
-                        crate::lowering::body::lower_block_as_body(ctx, &m.body, &sig.inputs);
+                    let inputs: Vec<HirTyId> = m
+                        .sig
+                        .params
+                        .iter()
+                        .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
+                        .collect();
+                    let sig = lower_fn_sig(ctx, &m.sig, m.is_const, inputs.clone());
+                    let body_id = crate::lowering::body::lower_block_as_body(
+                        ctx,
+                        &m.body,
+                        &m.sig.params,
+                        &inputs,
+                    );
                     crate::hir::core::ImplItemKind::Fn { sig, body: body_id }
                 }
-                yelang_ast::ImplItemKind::AssociatedType(at) => crate::hir::core::ImplItemKind::Type {
-                    ty: crate::lowering::ty::lower_ty(ctx, &at.ty),
-                },
+                yelang_ast::ImplItemKind::AssociatedType(at) => {
+                    crate::hir::core::ImplItemKind::Type {
+                        ty: crate::lowering::ty::lower_ty(ctx, &at.ty),
+                    }
+                }
                 yelang_ast::ImplItemKind::Constant(c) => {
                     let ty = crate::lowering::ty::lower_ty(ctx, &c.ty);
                     let body_id = c
@@ -391,7 +416,9 @@ fn lower_impl_item(
                 attrs: item.attributes.clone(),
                 span: item.span,
                 defaultness: match item.defaultness {
-                    yelang_ast::item::Defaultness::Default => crate::hir::core::Defaultness::Default,
+                    yelang_ast::item::Defaultness::Default => {
+                        crate::hir::core::Defaultness::Default
+                    }
                     yelang_ast::item::Defaultness::Final => crate::hir::core::Defaultness::Final,
                 },
             }
@@ -503,19 +530,17 @@ fn lower_use_tree(
 ) -> (UsePath, UseKind) {
     use yelang_ast::item::UseTree;
     match tree {
-        UseTree::Simple { path, span } => (
-            make_use_path(ctx, path, *span, None),
-            UseKind::Single,
-        ),
+        UseTree::Simple { path, span } => (make_use_path(ctx, path, *span, None), UseKind::Single),
         UseTree::Rename { path, alias, span } => (
             make_use_path(ctx, path, *span, Some(*alias)),
             UseKind::Single,
         ),
-        UseTree::Glob { path, span } => (
-            make_use_path(ctx, path, *span, None),
-            UseKind::Glob,
-        ),
-        UseTree::Nested { prefix, items, span } => {
+        UseTree::Glob { path, span } => (make_use_path(ctx, path, *span, None), UseKind::Glob),
+        UseTree::Nested {
+            prefix,
+            items,
+            span,
+        } => {
             let prefix_path = make_use_path(ctx, prefix, *span, None);
             let nested: Vec<UsePath> = items
                 .iter()

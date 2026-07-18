@@ -1,9 +1,9 @@
 use slotmap::{Key, SecondaryMap, SlotMap as InnerSlotMap, SparseSecondaryMap};
 
+pub use slotmap::Key as SlotMapKey;
 /// Re-export the slotmap key trait and macro so callers can define their own
 /// typed keys (e.g. `ExprId`, `PatId`) and use them with the arenas below.
 pub use slotmap::new_key_type;
-pub use slotmap::Key as SlotMapKey;
 
 /// A generational arena allocator with typed keys.
 ///

@@ -23,12 +23,7 @@ pub fn occurs_check(
     occurs_check_ty(interner, tables, vid, ty)
 }
 
-fn occurs_check_ty(
-    interner: &Interner,
-    tables: &mut VariableTables,
-    vid: TyVid,
-    ty: TyId,
-) -> bool {
+fn occurs_check_ty(interner: &Interner, tables: &mut VariableTables, vid: TyVid, ty: TyId) -> bool {
     match interner.ty(ty) {
         Ty::Infer(InferTy::TyVar(other_vid)) => {
             let root = tables.ty_vars.find(other_vid);
@@ -59,22 +54,17 @@ fn occurs_check_ty(
             occurs_check_ty(interner, tables, vid, ty)
                 || occurs_check_const(interner, tables, vid, len)
         }
-        Ty::Slice(ty) | Ty::Ref(ty, _) => {
-            occurs_check_ty(interner, tables, vid, ty)
-        }
+        Ty::Slice(ty) | Ty::Ref(ty, _) => occurs_check_ty(interner, tables, vid, ty),
         Ty::RawPtr(tam) => occurs_check_ty(interner, tables, vid, tam.ty),
         Ty::AnonStruct(anon) => anon
             .fields
             .iter()
             .any(|f| occurs_check_ty(interner, tables, vid, f.ty)),
         Ty::Union(a, b) => {
-            occurs_check_ty(interner, tables, vid, a)
-                || occurs_check_ty(interner, tables, vid, b)
+            occurs_check_ty(interner, tables, vid, a) || occurs_check_ty(interner, tables, vid, b)
         }
         Ty::Alias(alias) => occurs_check_generic_args(interner, tables, vid, &alias.args),
-        Ty::Projection(proj) => {
-            occurs_check_trait_ref(interner, tables, vid, &proj.trait_ref)
-        }
+        Ty::Projection(proj) => occurs_check_trait_ref(interner, tables, vid, &proj.trait_ref),
         Ty::Dynamic(binder) => binder.value.iter().any(|pred| match pred {
             ExistentialPredicate::Trait(tr) => {
                 occurs_check_generic_args(interner, tables, vid, &tr.args)

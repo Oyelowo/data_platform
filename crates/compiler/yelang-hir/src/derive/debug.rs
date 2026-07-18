@@ -16,12 +16,12 @@ use crate::derive::context::{AdtInfo, AdtShape, DeriveContext};
 use crate::derive::error::DeriveError;
 use crate::derive::helpers::{
     FieldView, access_field, arm, binding_pat, derive_generics, enum_variant_literal, expr, fn_sig,
-    formatter_param, impl_item, make_body, match_expr, method_call_expr, method_impl_item, path_pat,
-    self_expr, self_param, string_expr, struct_pat, tuple_field_expr, tuple_struct_pat,
+    formatter_param, impl_item, make_body, match_expr, method_call_expr, method_impl_item,
+    path_pat, self_expr, self_param, string_expr, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
-use crate::hir::core::{Arm, Expr, ImplItem, Item};
-use crate::ids::{ExprId, PatId, HirTyId};
 use crate::hir::adt::VariantData;
+use crate::hir::core::{Arm, Expr, ImplItem, Item};
+use crate::ids::{ExprId, HirTyId, PatId};
 
 /// Expand `#[derive(Debug)]` for a struct or enum.
 pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]) -> Option<Item> {
@@ -96,7 +96,13 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
 
     let debug_self_ty = adt.self_ty(ctx);
     let generics = derive_generics(ctx, &adt.generics, debug_trait);
-    Some(impl_item(ctx, debug_trait, debug_self_ty, generics, vec![fmt_method]))
+    Some(impl_item(
+        ctx,
+        debug_trait,
+        debug_self_ty,
+        generics,
+        vec![fmt_method],
+    ))
 }
 
 fn look_up_formatter(ctx: &DeriveContext<'_, '_>) -> Option<DefId> {
@@ -120,10 +126,7 @@ fn fmt_method(
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let formatter_param = formatter_param(ctx, formatter_def_id);
-    let sig = fn_sig(
-        vec![self_param.ty, ref_formatter_ty],
-        result_ty,
-    );
+    let sig = fn_sig(vec![self_param.ty, ref_formatter_ty], result_ty);
 
     let formatter_local = ctx.intern("f");
     let body_value = match &adt.shape {
@@ -154,7 +157,11 @@ fn ok_unit_expr(ctx: &mut DeriveContext<'_, '_>, result_def_id: DefId) -> ExprId
 }
 
 /// Build `f.write_str(literal)` as a statement.
-fn write_str_stmt(ctx: &mut DeriveContext<'_, '_>, formatter_local: Symbol, s: &str) -> crate::ids::StmtId {
+fn write_str_stmt(
+    ctx: &mut DeriveContext<'_, '_>,
+    formatter_local: Symbol,
+    s: &str,
+) -> crate::ids::StmtId {
     let formatter_pat_id = ctx.ctx.local(formatter_local).expect("formatter local");
     let formatter = expr(
         ctx,

@@ -37,10 +37,7 @@ pub enum TypeError {
     /// Floating-point type mismatch (e.g. `f32` vs `f64`).
     FloatMismatch { expected: FloatTy, found: FloatTy },
     /// Constant value mismatch.
-    ConstMismatch {
-        expected: ConstId,
-        found: ConstId,
-    },
+    ConstMismatch { expected: ConstId, found: ConstId },
     /// Trait reference mismatch (e.g. different trait in a projection).
     TraitRefMismatch {
         expected: yelang_ty::predicate::TraitRef,

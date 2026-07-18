@@ -4,8 +4,8 @@ use crate::crate_data::Crate;
 use crate::hir::core::{GenericParam, ItemKind};
 use crate::hir::item::Item;
 use crate::hir::ty::{GenericArg, Ty};
-use crate::lowering::{LoweringContext, lower_crate};
 use crate::lowering::err::LoweringError;
+use crate::lowering::{LoweringContext, lower_crate};
 use crate::res::ResolvedCrate;
 use yelang_interner::Interner;
 
@@ -407,11 +407,7 @@ fn first_impl_for_type<'a>(
     impls[0]
 }
 
-fn assert_generic_self_ty(
-    crate_hir: &Crate,
-    item: &Item,
-    expected_param_count: usize,
-) {
+fn assert_generic_self_ty(crate_hir: &Crate, item: &Item, expected_param_count: usize) {
     let ItemKind::Impl { self_ty, .. } = &item.kind else {
         panic!("expected impl item");
     };
@@ -520,7 +516,10 @@ fn derive_eq_generic_struct_requires_partial_eq() {
         .filter_map(|opt| opt.as_ref())
         .filter(|item| matches!(&item.kind, ItemKind::Impl { .. }))
         .collect();
-    assert!(impls.is_empty(), "Eq derive without PartialEq should not generate impls");
+    assert!(
+        impls.is_empty(),
+        "Eq derive without PartialEq should not generate impls"
+    );
 }
 
 #[test]

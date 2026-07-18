@@ -11,6 +11,6 @@ pub mod folder;
 pub mod mut_visitor;
 pub mod visitor;
 
-pub use folder::{fold_crate, Folder};
-pub use mut_visitor::{walk_crate_mut, MutVisitor};
-pub use visitor::{walk_crate, Visitor};
+pub use folder::{Folder, fold_crate};
+pub use mut_visitor::{MutVisitor, walk_crate_mut};
+pub use visitor::{Visitor, walk_crate};

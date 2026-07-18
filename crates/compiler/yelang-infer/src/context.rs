@@ -166,12 +166,8 @@ impl InferCtxt {
             (Ty::Infer(InferTy::TyVar(vid_a)), Ty::Infer(InferTy::TyVar(vid_b))) => {
                 self.unify_var_var(interner, vid_a, vid_b)
             }
-            (Ty::Infer(InferTy::TyVar(vid)), _other) => {
-                self.unify_var_value(interner, vid, b)
-            }
-            (_other, Ty::Infer(InferTy::TyVar(vid))) => {
-                self.unify_var_value(interner, vid, a)
-            }
+            (Ty::Infer(InferTy::TyVar(vid)), _other) => self.unify_var_value(interner, vid, b),
+            (_other, Ty::Infer(InferTy::TyVar(vid))) => self.unify_var_value(interner, vid, a),
 
             // Int variables
             (Ty::Infer(InferTy::IntVar(vid_a)), Ty::Infer(InferTy::IntVar(vid_b))) => {
@@ -179,12 +175,8 @@ impl InferCtxt {
                 Ok(())
             }
 
-            (Ty::Infer(InferTy::IntVar(vid)), Ty::Int(it)) => {
-                self.unify_int_var_value(vid, it)
-            }
-            (Ty::Int(it), Ty::Infer(InferTy::IntVar(vid))) => {
-                self.unify_int_var_value(vid, it)
-            }
+            (Ty::Infer(InferTy::IntVar(vid)), Ty::Int(it)) => self.unify_int_var_value(vid, it),
+            (Ty::Int(it), Ty::Infer(InferTy::IntVar(vid))) => self.unify_int_var_value(vid, it),
 
             // Float variables
             (Ty::Infer(InferTy::FloatVar(vid_a)), Ty::Infer(InferTy::FloatVar(vid_b))) => {
@@ -199,9 +191,7 @@ impl InferCtxt {
             }
 
             // Primitive types (already handled by a == b above for interned types)
-            (Ty::Bool, Ty::Bool)
-            | (Ty::Char, Ty::Char)
-            | (Ty::Never, Ty::Never) => Ok(()),
+            (Ty::Bool, Ty::Bool) | (Ty::Char, Ty::Char) | (Ty::Never, Ty::Never) => Ok(()),
 
             (Ty::Int(a), Ty::Int(b)) if a == b => Ok(()),
             (Ty::Uint(a), Ty::Uint(b)) if a == b => Ok(()),
@@ -346,9 +336,7 @@ impl InferCtxt {
             }
 
             // Bound variables (under the same binder, same index)
-            (Ty::Bound(d_a, b_a), Ty::Bound(d_b, b_b)) if d_a == d_b && b_a == b_b => {
-                Ok(())
-            }
+            (Ty::Bound(d_a, b_a), Ty::Bound(d_b, b_b)) if d_a == d_b && b_a == b_b => Ok(()),
 
             // Error type unifies with anything (error recovery)
             (Ty::Error, _) | (_, Ty::Error) => Ok(()),

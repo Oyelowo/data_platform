@@ -40,9 +40,9 @@ pub fn assoc_type_from_impl<C: SolverCtxt>(
     })?;
 
     match &impl_assoc.kind {
-        AssocItemKind::Type { default: Some(ty), .. } => {
-            Some(substitute(interner, *ty, impl_subst))
-        }
+        AssocItemKind::Type {
+            default: Some(ty), ..
+        } => Some(substitute(interner, *ty, impl_subst)),
         _ => None,
     }
 }

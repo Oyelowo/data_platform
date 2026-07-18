@@ -25,7 +25,9 @@ impl<'a> TypeFolder for IdentityFolder<'a> {
 fn fold_identity() {
     let interner = Interner::new();
     let t = interner.mk_ty(Ty::Int(IntTy::I32));
-    let mut folder = IdentityFolder { interner: &interner };
+    let mut folder = IdentityFolder {
+        interner: &interner,
+    };
     let folded = t.fold_with(&mut folder);
     assert_eq!(t, folded);
 }
@@ -35,12 +37,13 @@ fn fold_visits_all_nodes() {
     let interner = Interner::new();
     let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
     let t_bool = interner.mk_ty(Ty::Bool);
-    let tuple = interner.mk_ty(Ty::Tuple(interner.mk_generic_args(&[
-        GenericArg::Type(t_i32),
-        GenericArg::Type(t_bool),
-    ])));
+    let tuple = interner.mk_ty(Ty::Tuple(
+        interner.mk_generic_args(&[GenericArg::Type(t_i32), GenericArg::Type(t_bool)]),
+    ));
 
-    let mut folder = IdentityFolder { interner: &interner };
+    let mut folder = IdentityFolder {
+        interner: &interner,
+    };
     let folded = tuple.fold_with(&mut folder);
     assert_eq!(tuple, folded);
 }
@@ -53,9 +56,9 @@ fn fold_substitutes_param() {
         name: yelang_interner::Symbol::from(1),
     }));
     let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
-    let tuple = interner.mk_ty(Ty::Tuple(interner.mk_generic_args(&[
-        GenericArg::Type(t_param),
-    ])));
+    let tuple = interner.mk_ty(Ty::Tuple(
+        interner.mk_generic_args(&[GenericArg::Type(t_param)]),
+    ));
 
     struct ReplaceParamFolder<'a> {
         interner: &'a Interner,
@@ -150,12 +153,10 @@ fn fold_substitutes_anon_struct_fields() {
     }));
     let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
     let anon = interner.mk_ty(Ty::AnonStruct(crate::ty::AnonStructDef {
-        fields: interner.mk_anon_struct_fields(&[
-            crate::ty::AnonField {
-                name: yelang_interner::Symbol::from(1),
-                ty: t_param,
-            },
-        ]),
+        fields: interner.mk_anon_struct_fields(&[crate::ty::AnonField {
+            name: yelang_interner::Symbol::from(1),
+            ty: t_param,
+        }]),
     }));
 
     struct ReplaceParamFolder<'a> {

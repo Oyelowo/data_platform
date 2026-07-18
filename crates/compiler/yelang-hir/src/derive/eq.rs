@@ -2,7 +2,7 @@
 
 use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
-use crate::derive::helpers::{derive_generics, FieldView, impl_item, iter_fields};
+use crate::derive::helpers::{FieldView, derive_generics, impl_item, iter_fields};
 use crate::hir::core::Item;
 use crate::hir::ty::Ty;
 use yelang_resolve::lang_items::LangItem;
@@ -98,7 +98,10 @@ fn find_float_in_fields(
     None
 }
 
-fn is_float(ty_id: crate::ids::HirTyId, ctx: &crate::derive::context::DeriveContext<'_, '_>) -> bool {
+fn is_float(
+    ty_id: crate::ids::HirTyId,
+    ctx: &crate::derive::context::DeriveContext<'_, '_>,
+) -> bool {
     let ty = ctx.ctx.crate_hir.ty(ty_id).expect("field type");
     if let Ty::Path {
         res: crate::res::Res::PrimTy {

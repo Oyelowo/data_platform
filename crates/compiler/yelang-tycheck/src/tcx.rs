@@ -126,7 +126,10 @@ impl TyCtxt {
 
     /// Return all impls for a given trait, if any.
     pub fn trait_impls(&self, trait_def_id: DefId) -> &[ImplDefId] {
-        self.trait_impl_index.get(&trait_def_id).map(|v| v.as_slice()).unwrap_or(&[])
+        self.trait_impl_index
+            .get(&trait_def_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Look up the generic data of an item.

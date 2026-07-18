@@ -16,9 +16,7 @@ use yelang_trait_solver::solver_ctx::{
 use yelang_ty::predicate::TraitRef;
 use yelang_ty::ty::{GenericArgsRef, TyId};
 
-use crate::tcx::{
-    ImplDefData, ImplItemDefData, TraitItemDefData, TyCtxt,
-};
+use crate::tcx::{ImplDefData, ImplItemDefData, TraitItemDefData, TyCtxt};
 
 impl SolverCtxt for TyCtxt {
     fn interner(&self) -> &yelang_ty::interner::Interner {
@@ -84,7 +82,8 @@ impl TyCtxt {
                 .into_iter()
                 .map(|impl_id| impl_info_from_impl(&self.impl_defs[impl_id]))
                 .collect();
-            self.trait_impl_info_cache.insert(trait_id, infos.into_boxed_slice());
+            self.trait_impl_info_cache
+                .insert(trait_id, infos.into_boxed_slice());
         }
 
         // Trait assoc items.
@@ -126,7 +125,8 @@ impl TyCtxt {
                         tys.push(field.ty);
                     }
                 }
-                self.adt_field_tys_cache.insert(adt_id, tys.into_boxed_slice());
+                self.adt_field_tys_cache
+                    .insert(adt_id, tys.into_boxed_slice());
             }
         }
     }
@@ -159,7 +159,12 @@ fn trait_item_to_assoc(item: &TraitItemDefData) -> AssocItemInfo {
             ident: ident.symbol,
             kind: AssocItemKind::Const { ty: *ty },
         },
-        TraitItemDefData::Type { def_id, ident, bounds, default } => AssocItemInfo {
+        TraitItemDefData::Type {
+            def_id,
+            ident,
+            bounds,
+            default,
+        } => AssocItemInfo {
             def_id: *def_id,
             trait_item_def_id: Some(*def_id),
             ident: ident.symbol,

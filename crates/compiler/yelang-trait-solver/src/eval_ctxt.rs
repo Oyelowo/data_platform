@@ -15,7 +15,9 @@
  */
 
 use yelang_infer::{ConstVarValue, FloatVarValue, InferCtxt, IntVarValue, TypeVarValue};
-use yelang_ty::canonical::{Canonical, CanonicalVarKinds, CanonicalVarValue, Certainty, NoSolution, Response};
+use yelang_ty::canonical::{
+    Canonical, CanonicalVarKinds, CanonicalVarValue, Certainty, NoSolution, Response,
+};
 use yelang_ty::generic::{GenericArg, Substitution};
 use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
@@ -110,17 +112,17 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     // -----------------------------------------------------------------------
 
     /// Evaluate a canonical goal.
-    pub fn evaluate_canonical_goal(
-        &mut self,
-        canonical_goal: CanonicalGoal,
-    ) -> SolverResult {
+    pub fn evaluate_canonical_goal(&mut self, canonical_goal: CanonicalGoal) -> SolverResult {
         // Set up this goal's canonical-variable context. This must happen before
         // cycle handling so that `make_response` can populate `var_values` for
         // the current goal.
         let prev_variables = self.canonical_variables;
         let prev_var_map = std::mem::take(&mut self.canonical_var_map);
-        let (instantiated_goal, var_map) =
-            crate::instantiate::instantiate_with_mapping(canonical_goal, self.interner, &mut self.infcx);
+        let (instantiated_goal, var_map) = crate::instantiate::instantiate_with_mapping(
+            canonical_goal,
+            self.interner,
+            &mut self.infcx,
+        );
         self.canonical_variables = canonical_goal.variables;
         self.canonical_var_map = var_map;
 
@@ -195,11 +197,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     }
 
     /// Handle a goal that is already on the evaluation stack.
-    fn handle_cycle(
-        &mut self,
-        stack_index: usize,
-        canonical_goal: CanonicalGoal,
-    ) -> SolverResult {
+    fn handle_cycle(&mut self, stack_index: usize, canonical_goal: CanonicalGoal) -> SolverResult {
         let is_coinductive = self.is_coinductive_goal(&canonical_goal.value);
 
         self.search_graph.mark_cycle(stack_index);
@@ -213,7 +211,8 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                 }
             }
             let provisional = self.make_response(Certainty::Yes);
-            self.search_graph.set_provisional(stack_index, provisional.clone());
+            self.search_graph
+                .set_provisional(stack_index, provisional.clone());
             Ok(provisional)
         } else {
             Ok(self.make_response(Certainty::Maybe))
@@ -241,12 +240,16 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     fn compute_goal(&mut self, goal: Goal) -> SolverResult {
         match goal.predicate {
             Predicate::Trait(trait_pred) => self.compute_trait_goal(goal, trait_pred),
-            Predicate::Projection(proj_pred) => {
-                self.compute_projection_like_goal(goal.param_env, proj_pred.projection_ty, Some(proj_pred.term))
-            }
-            Predicate::NormalizesTo(norm_pred) => {
-                self.compute_projection_like_goal(goal.param_env, norm_pred.projection_ty, Some(norm_pred.term))
-            }
+            Predicate::Projection(proj_pred) => self.compute_projection_like_goal(
+                goal.param_env,
+                proj_pred.projection_ty,
+                Some(proj_pred.term),
+            ),
+            Predicate::NormalizesTo(norm_pred) => self.compute_projection_like_goal(
+                goal.param_env,
+                norm_pred.projection_ty,
+                Some(norm_pred.term),
+            ),
             Predicate::WellFormed(wf_pred) => {
                 // TODO(Phase 5): structural well-formedness.
                 if matches!(self.interner.ty(wf_pred.ty), Ty::Error) {
@@ -271,11 +274,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     // -----------------------------------------------------------------------
 
     /// Compute a trait goal.
-    fn compute_trait_goal(
-        &mut self,
-        goal: Goal,
-        trait_pred: TraitPredicate,
-    ) -> SolverResult {
+    fn compute_trait_goal(&mut self, goal: Goal, trait_pred: TraitPredicate) -> SolverResult {
         let candidates = self.assemble_candidates(goal, trait_pred);
 
         if candidates.is_empty() {
@@ -353,11 +352,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     }
 
     /// Assemble candidates for a trait goal.
-    fn assemble_candidates(
-        &mut self,
-        goal: Goal,
-        trait_pred: TraitPredicate,
-    ) -> Vec<Candidate> {
+    fn assemble_candidates(&mut self, goal: Goal, trait_pred: TraitPredicate) -> Vec<Candidate> {
         let mut candidates = Vec::new();
         let is_positive = trait_pred.polarity == yelang_ty::ty::ImplPolarity::Positive;
 
@@ -449,11 +444,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
 
     /// Evaluate a single candidate. On success this commits the unifications
     /// and nested-goal proofs performed by the candidate.
-    fn try_candidate(
-        &mut self,
-        goal: Goal,
-        candidate: &Candidate,
-    ) -> SolverResult {
+    fn try_candidate(&mut self, goal: Goal, candidate: &Candidate) -> SolverResult {
         match &candidate.source {
             CandidateSource::ParamEnv(assumption) => {
                 self.try_param_env_candidate(goal, *assumption)
@@ -465,11 +456,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         }
     }
 
-    fn try_param_env_candidate(
-        &mut self,
-        goal: Goal,
-        assumption: Predicate,
-    ) -> SolverResult {
+    fn try_param_env_candidate(&mut self, goal: Goal, assumption: Predicate) -> SolverResult {
         let Predicate::Trait(assumption) = assumption else {
             return Err(NoSolution);
         };
@@ -486,17 +473,17 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         }
 
         self.infcx
-            .eq_generic_args(self.interner, &assumption.trait_ref.args, &goal_pred.trait_ref.args)
+            .eq_generic_args(
+                self.interner,
+                &assumption.trait_ref.args,
+                &goal_pred.trait_ref.args,
+            )
             .map_err(|_| NoSolution)?;
 
         Ok(self.make_response(Certainty::Yes))
     }
 
-    fn try_builtin_candidate(
-        &mut self,
-        goal: Goal,
-        kind: BuiltinTraitKind,
-    ) -> SolverResult {
+    fn try_builtin_candidate(&mut self, goal: Goal, kind: BuiltinTraitKind) -> SolverResult {
         let Predicate::Trait(trait_pred) = goal.predicate else {
             return Err(NoSolution);
         };
@@ -515,11 +502,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         }
     }
 
-    fn try_user_impl_candidate(
-        &mut self,
-        goal: Goal,
-        impl_info: &ImplInfo,
-    ) -> SolverResult {
+    fn try_user_impl_candidate(&mut self, goal: Goal, impl_info: &ImplInfo) -> SolverResult {
         let goal_pred = match goal.predicate {
             Predicate::Trait(tp) => tp,
             _ => return Err(NoSolution),
@@ -710,10 +693,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     /// Extract the `Self` type from a trait reference.
     ///
     /// In Yelang the first generic argument of a `TraitRef` is always `Self`.
-    fn trait_self_ty(
-        &self,
-        trait_ref: &TraitRef,
-    ) -> Result<TyId, NoSolution> {
+    fn trait_self_ty(&self, trait_ref: &TraitRef) -> Result<TyId, NoSolution> {
         trait_ref
             .args
             .iter()
@@ -744,12 +724,15 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
 
         for candidate in candidates {
             let probe_result: Result<Option<TyId>, NoSolution> = self.probe(|this| {
-                let ty = match this.try_projection_candidate(param_env, projection_ty, &candidate)? {
-                    Some(ty) => ty,
-                    None => return Ok(None),
-                };
+                let ty =
+                    match this.try_projection_candidate(param_env, projection_ty, &candidate)? {
+                        Some(ty) => ty,
+                        None => return Ok(None),
+                    };
                 if let Some(expected) = expected {
-                    this.infcx.eq(this.interner, ty, expected).map_err(|_| NoSolution)?;
+                    this.infcx
+                        .eq(this.interner, ty, expected)
+                        .map_err(|_| NoSolution)?;
                 }
                 Ok(Some(ty))
             });
@@ -788,7 +771,9 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         let selected = &yes_results[0].0;
         if let Some(ty) = self.try_projection_candidate(param_env, projection_ty, selected)? {
             if let Some(expected) = expected {
-                self.infcx.eq(self.interner, ty, expected).map_err(|_| NoSolution)?;
+                self.infcx
+                    .eq(self.interner, ty, expected)
+                    .map_err(|_| NoSolution)?;
             }
             Ok(self.make_response(Certainty::Yes))
         } else {
@@ -865,7 +850,9 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         let mut maybe = false;
 
         for candidate in candidates {
-            match self.probe(|this| this.try_projection_candidate(param_env, projection_ty, &candidate)) {
+            match self
+                .probe(|this| this.try_projection_candidate(param_env, projection_ty, &candidate))
+            {
                 Ok(Some(ty)) => yes_results.push(ty),
                 Ok(None) => maybe = true,
                 Err(_) => {}

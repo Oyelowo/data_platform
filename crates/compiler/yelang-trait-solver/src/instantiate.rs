@@ -12,7 +12,10 @@ use yelang_ty::binder::{BoundTy, DebruijnIndex};
 use yelang_ty::canonical::{Canonical, CanonicalTyVarKind, CanonicalVarKind, CanonicalVarKinds};
 use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use yelang_ty::interner::Interner;
-use yelang_ty::ty::{Const, ConstId, ConstVid, FloatVid, InferTy, IntVid, PlaceholderType, Ty, TyId, TyVid, UniverseIndex};
+use yelang_ty::ty::{
+    Const, ConstId, ConstVid, FloatVid, InferTy, IntVid, PlaceholderType, Ty, TyId, TyVid,
+    UniverseIndex,
+};
 
 /// Mapping from a canonical variable index to the solver variable or
 /// placeholder that was created for it.
@@ -61,7 +64,8 @@ impl<'a> InstantiationCtxt<'a> {
     /// Record a mapping for canonical variable `index`.
     fn record_mapping(&mut self, index: usize, mapping: CanonicalVarMapping) {
         if index >= self.mapping.len() {
-            self.mapping.resize(index + 1, CanonicalVarMapping::Ty(TyVid(0)));
+            self.mapping
+                .resize(index + 1, CanonicalVarMapping::Ty(TyVid(0)));
         }
         self.mapping[index] = mapping;
     }
@@ -80,9 +84,7 @@ impl<'a> TypeFolder for InstantiationCtxt<'a> {
 
     fn fold_ty(&mut self, ty: TyId) -> TyId {
         match self.interner.ty(ty) {
-            Ty::Bound(debruijn, BoundTy { var, .. })
-                if debruijn == DebruijnIndex::INNERMOST =>
-            {
+            Ty::Bound(debruijn, BoundTy { var, .. }) if debruijn == DebruijnIndex::INNERMOST => {
                 let index = var.0 as usize;
                 assert!(
                     index < self.variables.len(),
@@ -180,11 +182,7 @@ where
 
 /// Instantiate a canonical value, producing a value with fresh inference
 /// variables in place of the canonical bound variables.
-pub fn instantiate<V>(
-    canonical: Canonical<V>,
-    interner: &Interner,
-    infcx: &mut InferCtxt,
-) -> V
+pub fn instantiate<V>(canonical: Canonical<V>, interner: &Interner, infcx: &mut InferCtxt) -> V
 where
     V: TypeFoldable,
 {

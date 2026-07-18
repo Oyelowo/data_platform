@@ -33,12 +33,32 @@ pub struct Interner {
     arena: bumpalo::Bump,
     ty_lists: RefCell<FxHashMap<SliceKey<TyId>, List<TyId>>>,
     generic_args: RefCell<FxHashMap<SliceKey<GenericArg>, List<GenericArg>>>,
-    bound_var_lists: RefCell<FxHashMap<SliceKey<crate::binder::BoundVariableKind>, List<crate::binder::BoundVariableKind>>>,
-    existential_predicates: RefCell<FxHashMap<SliceKey<crate::ty::ExistentialPredicate>, List<crate::ty::ExistentialPredicate>>>,
-    anon_struct_fields: RefCell<FxHashMap<SliceKey<crate::ty::AnonField>, List<crate::ty::AnonField>>>,
-    predicates: RefCell<FxHashMap<SliceKey<crate::predicate::Predicate>, List<crate::predicate::Predicate>>>,
-    canonical_var_kinds: RefCell<FxHashMap<SliceKey<crate::canonical::CanonicalVarKind>, List<crate::canonical::CanonicalVarKind>>>,
-    canonical_var_values: RefCell<FxHashMap<SliceKey<crate::canonical::CanonicalVarValue>, List<crate::canonical::CanonicalVarValue>>>,
+    bound_var_lists: RefCell<
+        FxHashMap<
+            SliceKey<crate::binder::BoundVariableKind>,
+            List<crate::binder::BoundVariableKind>,
+        >,
+    >,
+    existential_predicates: RefCell<
+        FxHashMap<SliceKey<crate::ty::ExistentialPredicate>, List<crate::ty::ExistentialPredicate>>,
+    >,
+    anon_struct_fields:
+        RefCell<FxHashMap<SliceKey<crate::ty::AnonField>, List<crate::ty::AnonField>>>,
+    predicates: RefCell<
+        FxHashMap<SliceKey<crate::predicate::Predicate>, List<crate::predicate::Predicate>>,
+    >,
+    canonical_var_kinds: RefCell<
+        FxHashMap<
+            SliceKey<crate::canonical::CanonicalVarKind>,
+            List<crate::canonical::CanonicalVarKind>,
+        >,
+    >,
+    canonical_var_values: RefCell<
+        FxHashMap<
+            SliceKey<crate::canonical::CanonicalVarValue>,
+            List<crate::canonical::CanonicalVarValue>,
+        >,
+    >,
 }
 
 /// A hash key that compares slices by their **contents**, not by pointer.
@@ -156,10 +176,7 @@ impl Interner {
     }
 
     /// Intern a list of generic arguments.
-    pub fn mk_generic_args(
-        &self,
-        elems: &[GenericArg],
-    ) -> List<GenericArg> {
+    pub fn mk_generic_args(&self, elems: &[GenericArg]) -> List<GenericArg> {
         if elems.is_empty() {
             return List::empty();
         }
@@ -419,7 +436,10 @@ mod tests {
         let ty_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
         let c1 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(42)), ty_i32);
         let c2 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(43)), ty_i32);
-        let c3 = interner.mk_const_from_parts(Const::Value(crate::ty::ConstValue::Int(42)), interner.mk_ty(Ty::Int(IntTy::I64)));
+        let c3 = interner.mk_const_from_parts(
+            Const::Value(crate::ty::ConstValue::Int(42)),
+            interner.mk_ty(Ty::Int(IntTy::I64)),
+        );
         assert_ne!(c1, c2);
         assert_ne!(c1, c3);
         assert_ne!(c2, c3);

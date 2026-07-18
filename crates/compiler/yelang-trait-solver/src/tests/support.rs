@@ -133,12 +133,7 @@ impl<'a> TestCtxt<'a> {
         self.adt_fields.insert(adt_def_id, fields);
     }
 
-    pub fn add_trait_assoc_type(
-        &mut self,
-        trait_def_id: DefId,
-        item_def_id: DefId,
-        ident: Symbol,
-    ) {
+    pub fn add_trait_assoc_type(&mut self, trait_def_id: DefId, item_def_id: DefId, ident: Symbol) {
         self.add_trait_assoc_item(
             trait_def_id,
             AssocItemInfo {
@@ -175,7 +170,12 @@ impl<'a> TestCtxt<'a> {
         );
     }
 
-    fn projection_ty(&self, trait_def_id: DefId, item_def_id: DefId, self_ty: TyId) -> ProjectionTy {
+    fn projection_ty(
+        &self,
+        trait_def_id: DefId,
+        item_def_id: DefId,
+        self_ty: TyId,
+    ) -> ProjectionTy {
         let args = self
             .interner
             .mk_generic_args(&[yelang_ty::generic::GenericArg::Type(self_ty)]);
@@ -199,7 +199,10 @@ impl<'a> TestCtxt<'a> {
         let projection_ty = self.projection_ty(trait_def_id, item_def_id, self_ty);
         crate::goal::Goal::new(
             param_env,
-            Predicate::Projection(ProjectionPredicate { projection_ty, term }),
+            Predicate::Projection(ProjectionPredicate {
+                projection_ty,
+                term,
+            }),
         )
     }
 
@@ -214,7 +217,10 @@ impl<'a> TestCtxt<'a> {
         let projection_ty = self.projection_ty(trait_def_id, item_def_id, self_ty);
         crate::goal::Goal::new(
             param_env,
-            Predicate::NormalizesTo(NormalizesToPredicate { projection_ty, term }),
+            Predicate::NormalizesTo(NormalizesToPredicate {
+                projection_ty,
+                term,
+            }),
         )
     }
 
@@ -223,8 +229,10 @@ impl<'a> TestCtxt<'a> {
             .iter()
             .map(|&ty| yelang_ty::generic::GenericArg::Type(ty))
             .collect();
-        self.interner
-            .mk_ty(Ty::Adt(AdtDef { def_id }, self.interner.mk_generic_args(&args)))
+        self.interner.mk_ty(Ty::Adt(
+            AdtDef { def_id },
+            self.interner.mk_generic_args(&args),
+        ))
     }
 
     pub fn trait_ref(&self, trait_def_id: DefId, args: &[TyId]) -> TraitRef {
@@ -276,7 +284,9 @@ impl<'a> TestCtxt<'a> {
             .mk_generic_args(&[yelang_ty::generic::GenericArg::Type(elem)]);
         // Use a synthetic ADT def id for Vec.
         self.interner.mk_ty(Ty::Adt(
-            yelang_ty::ty::AdtDef { def_id: DefId::new(100) },
+            yelang_ty::ty::AdtDef {
+                def_id: DefId::new(100),
+            },
             args,
         ))
     }
@@ -286,7 +296,9 @@ impl<'a> TestCtxt<'a> {
             .interner
             .mk_generic_args(&[yelang_ty::generic::GenericArg::Type(inner)]);
         self.interner.mk_ty(Ty::Adt(
-            yelang_ty::ty::AdtDef { def_id: DefId::new(101) },
+            yelang_ty::ty::AdtDef {
+                def_id: DefId::new(101),
+            },
             args,
         ))
     }
@@ -296,14 +308,18 @@ impl<'a> TestCtxt<'a> {
             .interner
             .mk_generic_args(&[yelang_ty::generic::GenericArg::Type(a)]);
         let inner = self.interner.mk_ty(Ty::Adt(
-            yelang_ty::ty::AdtDef { def_id: DefId::new(102) },
+            yelang_ty::ty::AdtDef {
+                def_id: DefId::new(102),
+            },
             args,
         ));
         let args = self
             .interner
             .mk_generic_args(&[yelang_ty::generic::GenericArg::Type(inner)]);
         self.interner.mk_ty(Ty::Adt(
-            yelang_ty::ty::AdtDef { def_id: DefId::new(103) },
+            yelang_ty::ty::AdtDef {
+                def_id: DefId::new(103),
+            },
             args,
         ))
     }
@@ -341,6 +357,9 @@ impl<'a> SolverCtxt for TestCtxt<'a> {
     }
 
     fn adt_field_tys(&self, adt_def_id: DefId) -> &[TyId] {
-        self.adt_fields.get(&adt_def_id).map(|v| v.as_slice()).unwrap_or(&[])
+        self.adt_fields
+            .get(&adt_def_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 }

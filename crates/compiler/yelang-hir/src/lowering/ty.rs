@@ -8,7 +8,10 @@ use crate::ids::HirTyId;
 use crate::lowering::LoweringContext;
 
 /// Extract and lower generic arguments from an AST path.
-fn lower_generic_args_from_path(ctx: &mut LoweringContext, path: &yelang_ast::Path) -> Vec<GenericArg> {
+fn lower_generic_args_from_path(
+    ctx: &mut LoweringContext,
+    path: &yelang_ast::Path,
+) -> Vec<GenericArg> {
     let mut args = Vec::new();
     for segment in &path.segments {
         let Some(seg_args) = &segment.args else {
@@ -28,10 +31,7 @@ fn lower_generic_args_from_path(ctx: &mut LoweringContext, path: &yelang_ast::Pa
     args
 }
 
-fn lower_generic_arg(
-    ctx: &mut LoweringContext,
-    arg: &yelang_ast::AngleBracketedArg,
-) -> GenericArg {
+fn lower_generic_arg(ctx: &mut LoweringContext, arg: &yelang_ast::AngleBracketedArg) -> GenericArg {
     match arg {
         yelang_ast::AngleBracketedArg::Type(ty) => GenericArg::Type(lower_ty(ctx, ty)),
         yelang_ast::AngleBracketedArg::Const(expr) => {

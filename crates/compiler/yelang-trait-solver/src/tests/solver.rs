@@ -23,23 +23,14 @@ fn param_ty(interner: &Interner, index: u32) -> TyId {
     }))
 }
 
-fn trait_ref_with_self(
-    interner: &Interner,
-    trait_def_id: DefId,
-    self_ty: TyId,
-) -> TraitRef {
+fn trait_ref_with_self(interner: &Interner, trait_def_id: DefId, self_ty: TyId) -> TraitRef {
     TraitRef {
         def_id: trait_def_id,
         args: interner.mk_generic_args(&[yelang_ty::generic::GenericArg::Type(self_ty)]),
     }
 }
 
-fn add_simple_impl(
-    cx: &mut TestCtxt<'_>,
-    impl_def_id: DefId,
-    trait_def_id: DefId,
-    self_ty: TyId,
-) {
+fn add_simple_impl(cx: &mut TestCtxt<'_>, impl_def_id: DefId, trait_def_id: DefId, self_ty: TyId) {
     cx.add_impl(impl_def_id, trait_def_id, self_ty, 0, Vec::new());
 }
 
@@ -108,7 +99,10 @@ fn response_var_values_resolved() {
     let response = ecx.evaluate_root_goal(goal).unwrap();
     assert_eq!(response.value.certainty, Certainty::Yes);
     assert_eq!(response.value.var_values.len(), 1);
-    assert_eq!(response.value.var_values.as_slice()[0], CanonicalVarValue::Ty(i32_ty));
+    assert_eq!(
+        response.value.var_values.as_slice()[0],
+        CanonicalVarValue::Ty(i32_ty)
+    );
 }
 
 #[test]
@@ -250,7 +244,9 @@ fn coinductive_auto_trait_cycle_succeeds() {
     // cycle and should succeed.
     let recursive_def = DefId::new(200);
     let recursive_ty = interner.mk_ty(Ty::Adt(
-        yelang_ty::ty::AdtDef { def_id: recursive_def },
+        yelang_ty::ty::AdtDef {
+            def_id: recursive_def,
+        },
         yelang_ty::list::List::empty(),
     ));
     cx.set_adt_fields(recursive_def, vec![recursive_ty]);
@@ -388,7 +384,13 @@ fn normalizes_to_simple_impl() {
     let bool_ty = interner.mk_ty(Ty::Bool);
     let impl_foo_i32 = DefId::new(302);
     cx.add_impl(impl_foo_i32, foo, i32_ty, 0, Vec::new());
-    cx.add_impl_assoc_type(impl_foo_i32, DefId::new(3021), foo_item, yelang_interner::Symbol::from(1u32), bool_ty);
+    cx.add_impl_assoc_type(
+        impl_foo_i32,
+        DefId::new(3021),
+        foo_item,
+        yelang_interner::Symbol::from(1u32),
+        bool_ty,
+    );
 
     let goal = cx.normalizes_to_goal(foo, foo_item, i32_ty, bool_ty, empty_env(&interner));
 
@@ -418,14 +420,26 @@ fn normalizes_to_generic_impl() {
     });
     let impl_foo_vec = DefId::new(303);
     cx.add_impl(impl_foo_vec, foo, vec_t, 1, vec![bar_t]);
-    cx.add_impl_assoc_type(impl_foo_vec, DefId::new(3031), foo_item, yelang_interner::Symbol::from(1u32), t);
+    cx.add_impl_assoc_type(
+        impl_foo_vec,
+        DefId::new(3031),
+        foo_item,
+        yelang_interner::Symbol::from(1u32),
+        t,
+    );
 
     // impl Bar for i32
     let i32_ty = cx.mk_i32();
     add_simple_impl(&mut cx, DefId::new(305), bar, i32_ty);
 
     // Goal: <Vec<i32> as Foo>::Item normalizes-to i32
-    let goal = cx.normalizes_to_goal(foo, foo_item, cx.mk_vec(i32_ty), i32_ty, empty_env(&interner));
+    let goal = cx.normalizes_to_goal(
+        foo,
+        foo_item,
+        cx.mk_vec(i32_ty),
+        i32_ty,
+        empty_env(&interner),
+    );
 
     let mut ecx = EvalCtxt::new(&interner, &cx);
     let response = ecx.evaluate_root_goal(goal).unwrap();
@@ -442,7 +456,13 @@ fn normalizes_to_no_impl_fails() {
     cx.add_trait(foo, false);
     cx.add_trait_assoc_type(foo, foo_item, yelang_interner::Symbol::from(1u32));
 
-    let goal = cx.normalizes_to_goal(foo, foo_item, cx.mk_i32(), interner.mk_ty(Ty::Bool), empty_env(&interner));
+    let goal = cx.normalizes_to_goal(
+        foo,
+        foo_item,
+        cx.mk_i32(),
+        interner.mk_ty(Ty::Bool),
+        empty_env(&interner),
+    );
 
     let mut ecx = EvalCtxt::new(&interner, &cx);
     assert!(ecx.evaluate_root_goal(goal).is_err());
@@ -462,7 +482,13 @@ fn projection_equality_via_normalization() {
     let bool_ty = interner.mk_ty(Ty::Bool);
     let impl_foo_i32 = DefId::new(302);
     cx.add_impl(impl_foo_i32, foo, i32_ty, 0, Vec::new());
-    cx.add_impl_assoc_type(impl_foo_i32, DefId::new(3021), foo_item, yelang_interner::Symbol::from(1u32), bool_ty);
+    cx.add_impl_assoc_type(
+        impl_foo_i32,
+        DefId::new(3021),
+        foo_item,
+        yelang_interner::Symbol::from(1u32),
+        bool_ty,
+    );
 
     let goal = cx.projection_goal(foo, foo_item, i32_ty, bool_ty, empty_env(&interner));
 
@@ -544,10 +570,7 @@ fn auto_trait_nested_generic_adt() {
 
     let t = param_ty(&interner, 0);
     cx.set_adt_fields(DefId::new(102), vec![t]);
-    cx.set_adt_fields(
-        DefId::new(103),
-        vec![cx.mk_adt(DefId::new(102), &[i32_ty])],
-    );
+    cx.set_adt_fields(DefId::new(103), vec![cx.mk_adt(DefId::new(102), &[i32_ty])]);
 
     let goal = cx.trait_goal(send, pair_ty, empty_env(&interner));
 

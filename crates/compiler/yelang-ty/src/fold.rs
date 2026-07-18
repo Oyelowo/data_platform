@@ -18,8 +18,8 @@ use crate::predicate::{
     TypeOutlivesPredicate, WellFormedPredicate,
 };
 use crate::ty::{
-    AnonField, Const, ExistentialProjection, ExistentialTraitRef, GenericArgsRef,
-    ProjectionTy, Ty, TypeAndMut, TyId, ConstId,
+    AnonField, Const, ConstId, ExistentialProjection, ExistentialTraitRef, GenericArgsRef,
+    ProjectionTy, Ty, TyId, TypeAndMut,
 };
 
 /// A folder that transforms types.
@@ -242,12 +242,10 @@ impl TypeFoldable for ProjectionTy {
 impl TypeFoldable for ExistentialPredicate {
     fn fold_with<F: TypeFolder>(self, folder: &mut F) -> Self {
         match self {
-            ExistentialPredicate::Trait(tr) => {
-                ExistentialPredicate::Trait(ExistentialTraitRef {
-                    def_id: tr.def_id,
-                    args: tr.args.fold_with(folder),
-                })
-            }
+            ExistentialPredicate::Trait(tr) => ExistentialPredicate::Trait(ExistentialTraitRef {
+                def_id: tr.def_id,
+                args: tr.args.fold_with(folder),
+            }),
             ExistentialPredicate::Projection(pr) => {
                 ExistentialPredicate::Projection(ExistentialProjection {
                     def_id: pr.def_id,
@@ -281,9 +279,7 @@ impl TypeFoldable for Predicate {
             Predicate::TypeOutlives(p) => Predicate::TypeOutlives(TypeOutlivesPredicate {
                 ty: p.ty.fold_with(folder),
             }),
-            Predicate::ConstEvaluatable(ct) => {
-                Predicate::ConstEvaluatable(ct.fold_with(folder))
-            }
+            Predicate::ConstEvaluatable(ct) => Predicate::ConstEvaluatable(ct.fold_with(folder)),
         }
     }
 }
@@ -316,7 +312,9 @@ mod tests {
     #[test]
     fn fold_identity_preserves_interning() {
         let interner = Interner::new();
-        let mut folder = IdentityFolder { interner: &interner };
+        let mut folder = IdentityFolder {
+            interner: &interner,
+        };
 
         let t_i32 = interner.mk_ty(Ty::Int(IntTy::I32));
         let folded = t_i32.fold_with(&mut folder);
@@ -377,11 +375,13 @@ mod tests {
             name: Symbol::from(1),
         }));
         let t_bool = interner.mk_ty(Ty::Bool);
-        let args = interner.mk_generic_args(&[
-            GenericArg::Type(t_param),
-            GenericArg::Type(t_bool),
-        ]);
-        let t_adt = interner.mk_ty(Ty::Adt(AdtDef { def_id: yelang_arena::DefId::new(1) }, args));
+        let args = interner.mk_generic_args(&[GenericArg::Type(t_param), GenericArg::Type(t_bool)]);
+        let t_adt = interner.mk_ty(Ty::Adt(
+            AdtDef {
+                def_id: yelang_arena::DefId::new(1),
+            },
+            args,
+        ));
 
         let mut folder = ReplaceParamFolder {
             interner: &interner,

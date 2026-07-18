@@ -1,8 +1,8 @@
 use yelang_arena::DefId;
 use yelang_ast::item::{Enum, Struct, Trait, TypeAlias};
 use yelang_ast::{
-    BlockExpr, BreakExpr, ContinueExpr, Expr, ExprKind, FnDef, Item, ItemKind,
-    ModKind, Param, Path, Pattern, PatternKind, Program, Stmt, StmtKind, Type, TypeKind,
+    BlockExpr, BreakExpr, ContinueExpr, Expr, ExprKind, FnDef, Item, ItemKind, ModKind, Param,
+    Path, Pattern, PatternKind, Program, Stmt, StmtKind, Type, TypeKind,
 };
 use yelang_interner::Symbol;
 use yelang_lexer::Span;

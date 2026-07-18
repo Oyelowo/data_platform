@@ -46,7 +46,11 @@ fn desugar_while() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
@@ -64,7 +68,11 @@ fn desugar_for() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
@@ -81,7 +89,11 @@ fn desugar_try_operator() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
@@ -105,7 +117,11 @@ fn desugar_let_chain() {
     let resolved = stub_resolved();
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
-    let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
+    let item = crate_hir
+        .items
+        .values()
+        .find_map(|opt| opt.as_ref())
+        .unwrap();
     let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };

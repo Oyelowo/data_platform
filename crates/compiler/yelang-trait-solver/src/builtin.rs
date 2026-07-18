@@ -97,8 +97,7 @@ mod tests {
         assert!(is_sized(interner.mk_ty(Ty::Bool), &interner));
         assert!(is_sized(interner.mk_ty(Ty::Int(IntTy::I32)), &interner));
         assert!(is_sized(
-            interner
-                .mk_ty(Ty::Float(yelang_ty::primitive::FloatTy::F64)),
+            interner.mk_ty(Ty::Float(yelang_ty::primitive::FloatTy::F64)),
             &interner
         ));
     }

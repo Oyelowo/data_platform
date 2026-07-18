@@ -64,9 +64,7 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
             res: crate::lowering::expr::resolve_ast_path(ctx, path),
             pats: patterns.iter().map(|p| lower_pat(ctx, p)).collect(),
         },
-        yelang_ast::PatternKind::Slice { patterns } => {
-            return lower_slice_pat(ctx, patterns, span)
-        }
+        yelang_ast::PatternKind::Slice { patterns } => return lower_slice_pat(ctx, patterns, span),
         yelang_ast::PatternKind::Ref { pattern, is_mut } => {
             let mutability = if *is_mut {
                 yelang_ast::Mutability::Mutable
@@ -74,9 +72,7 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
                 yelang_ast::Mutability::Immutable
             };
             if let yelang_ast::PatternKind::Binding {
-                name,
-                subpattern,
-                ..
+                name, subpattern, ..
             } = &pattern.pattern
             {
                 Pat::Binding {
@@ -96,14 +92,8 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
             pats: pats.iter().map(|p| lower_pat(ctx, p)).collect(),
         },
         yelang_ast::PatternKind::Range(range) => Pat::Range {
-            start: range
-                .start
-                .as_ref()
-                .map(|e| lower_range_bound_pat(ctx, e)),
-            end: range
-                .end
-                .as_ref()
-                .map(|e| lower_range_bound_pat(ctx, e)),
+            start: range.start.as_ref().map(|e| lower_range_bound_pat(ctx, e)),
+            end: range.end.as_ref().map(|e| lower_range_bound_pat(ctx, e)),
             end_inclusive: range.op.is_inclusive(),
         },
         yelang_ast::PatternKind::Grouped(inner) => return lower_pat(ctx, inner),

@@ -8,15 +8,15 @@ use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
 use crate::derive::context::DeriveContext;
-use crate::hir::core::{
-    Arm, Block, Expr, FieldExpr, FnSig, ImplItem, ImplItemKind, Item, ItemKind, Lit,
-    Param, Stmt, TraitRef,
-};
-use crate::hir::body::Body;
-use crate::hir::pat::{BindingMode, FieldPat, Pat};
 use crate::hir::adt::VariantData;
+use crate::hir::body::Body;
+use crate::hir::core::{
+    Arm, Block, Expr, FieldExpr, FnSig, ImplItem, ImplItemKind, Item, ItemKind, Lit, Param, Stmt,
+    TraitRef,
+};
+use crate::hir::pat::{BindingMode, FieldPat, Pat};
 use crate::hir::ty::Ty;
-use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use crate::res::Res;
 
 /// An identifier constructed from a string, using the derive span as its span.
@@ -268,7 +268,14 @@ pub fn enum_variant_literal(
 /// Build a match expression.
 pub fn match_expr(ctx: &mut DeriveContext<'_, '_>, scrutinee: ExprId, arms: Vec<Arm>) -> ExprId {
     let span = ctx.derive_span;
-    expr(ctx, Expr::Match { expr: scrutinee, arms }, span)
+    expr(
+        ctx,
+        Expr::Match {
+            expr: scrutinee,
+            arms,
+        },
+        span,
+    )
 }
 
 /// Build a match arm.
@@ -366,10 +373,10 @@ pub fn other_param(ctx: &mut DeriveContext<'_, '_>, self_def_id: DefId) -> Param
     );
     ctx.ctx.push_local(name, pat);
     let self_ty_id = self_ty(ctx, self_def_id);
-    let ty = ctx.ctx.crate_hir.alloc_ty(
-        ref_ty(self_ty_id, false),
-        ctx.derive_span,
-    );
+    let ty = ctx
+        .ctx
+        .crate_hir
+        .alloc_ty(ref_ty(self_ty_id, false), ctx.derive_span);
     param(ctx, pat, ty)
 }
 
@@ -386,10 +393,10 @@ pub fn formatter_param(ctx: &mut DeriveContext<'_, '_>, formatter_def_id: DefId)
     );
     ctx.ctx.push_local(name, pat);
     let formatter_ty = path_ty(ctx, formatter_def_id);
-    let ty = ctx.ctx.crate_hir.alloc_ty(
-        ref_ty(formatter_ty, true),
-        ctx.derive_span,
-    );
+    let ty = ctx
+        .ctx
+        .crate_hir
+        .alloc_ty(ref_ty(formatter_ty, true), ctx.derive_span);
     param(ctx, pat, ty)
 }
 
@@ -463,9 +470,7 @@ pub fn impl_item(
 
 /// Build a wildcard pattern.
 pub fn wild_pat(ctx: &mut DeriveContext<'_, '_>) -> PatId {
-    ctx.ctx
-        .crate_hir
-        .alloc_pat(Pat::Wild, ctx.derive_span)
+    ctx.ctx.crate_hir.alloc_pat(Pat::Wild, ctx.derive_span)
 }
 
 /// Build a binding pattern with a fresh `PatId`.
@@ -497,9 +502,14 @@ pub fn struct_pat(
             span: ctx.derive_span,
         })
         .collect();
-    ctx.ctx
-        .crate_hir
-        .alloc_pat(Pat::Struct { res, fields, rest: false }, ctx.derive_span)
+    ctx.ctx.crate_hir.alloc_pat(
+        Pat::Struct {
+            res,
+            fields,
+            rest: false,
+        },
+        ctx.derive_span,
+    )
 }
 
 /// Build a tuple-struct pattern.

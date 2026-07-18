@@ -4,7 +4,7 @@ use yelang_interner::Symbol;
 
 use crate::derive::context::DeriveContext;
 use crate::derive::error::DeriveError;
-use crate::derive::helpers::{derive_generics, FieldView, impl_item, iter_fields};
+use crate::derive::helpers::{FieldView, derive_generics, impl_item, iter_fields};
 use crate::hir::core::Item;
 use crate::hir::ty::Ty;
 
@@ -69,10 +69,7 @@ fn find_non_copy_field(ctx: &DeriveContext<'_, '_>) -> Option<Symbol> {
     }
 }
 
-fn find_non_copy_in_fields(
-    fields: &[FieldView],
-    ctx: &DeriveContext<'_, '_>,
-) -> Option<Symbol> {
+fn find_non_copy_in_fields(fields: &[FieldView], ctx: &DeriveContext<'_, '_>) -> Option<Symbol> {
     for field in fields {
         if is_known_non_copy(field.ty, ctx) {
             return field.ident.map(|i| i.symbol).or_else(|| {

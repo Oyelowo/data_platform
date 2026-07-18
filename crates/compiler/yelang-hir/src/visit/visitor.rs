@@ -1,15 +1,15 @@
 //! HIR visitor trait with default `walk_*` implementations.
 
 use crate::crate_data::Crate;
+use crate::hir::body::Body;
 use crate::hir::core::{
     Arm, BinderParam, Block, Expr, FieldDef, FnSig, GenericParam, Generics, Impl, ImplItem, Item,
     ItemKind, Stmt, StructField, Trait, TraitBound, TraitItem, TraitRef, Ty, UsePath, VariantData,
     VariantDef, WhereClause, WherePredicate,
 };
-use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, ExprId, PatId, StmtId, HirTyId};
+use crate::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use crate::res::Res;
 
 /// Visitor over the HIR.
@@ -195,7 +195,11 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
         None => return,
     };
     match &item.kind {
-        ItemKind::Fn { sig, body, generics } => {
+        ItemKind::Fn {
+            sig,
+            body,
+            generics,
+        } => {
             visitor.visit_generics(generics);
             walk_fn_sig(visitor, sig);
             visitor.visit_body_by_id(*body);
@@ -450,10 +454,7 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &'hir Expr) {
                 visitor.visit_expr_by_id(*cond);
             }
         }
-        Expr::Lit { .. }
-        | Expr::Path { .. }
-        | Expr::Continue { .. }
-        | Expr::Err => {}
+        Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
     }
 }
 

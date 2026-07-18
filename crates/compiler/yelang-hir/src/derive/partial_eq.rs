@@ -9,9 +9,9 @@ use crate::derive::helpers::{
     impl_item, iter_fields, make_body, match_expr, method_impl_item, other_param, path_pat,
     self_expr, self_param, struct_pat, tuple_struct_pat, wildcard_false_arm,
 };
-use crate::hir::core::{Arm, Expr, ImplItem, Item};
-use crate::ids::{ExprId, PatId, HirTyId};
 use crate::hir::adt::VariantData;
+use crate::hir::core::{Arm, Expr, ImplItem, Item};
+use crate::ids::{ExprId, HirTyId, PatId};
 
 /// Expand `#[derive(PartialEq)]` for a struct or enum.
 pub fn derive_partial_eq(
@@ -46,7 +46,13 @@ pub fn derive_partial_eq(
     let eq_method = eq_method(ctx, adt.def_id, &adt, ref_self_ty);
     let generics = derive_generics(ctx, &adt.generics, partial_eq_trait);
 
-    Some(impl_item(ctx, partial_eq_trait, self_ty, generics, vec![eq_method]))
+    Some(impl_item(
+        ctx,
+        partial_eq_trait,
+        self_ty,
+        generics,
+        vec![eq_method],
+    ))
 }
 
 fn eq_method(

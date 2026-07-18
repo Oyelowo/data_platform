@@ -20,15 +20,10 @@ pub fn expand_test_attributes(ctx: &mut DeriveContext<'_, '_>) {
         };
         if first.symbol == test_sym {
             saw_test = true;
-            if !matches!(
-                &ctx.hir_item.kind,
-                crate::hir::core::ItemKind::Fn { .. }
-            ) {
+            if !matches!(&ctx.hir_item.kind, crate::hir::core::ItemKind::Fn { .. }) {
                 ctx.error(DeriveError::UnsupportedItem {
                     derive: test_sym,
-                    item_kind: crate::derive::context::item_kind_name(
-                        &ctx.hir_item.kind,
-                    ),
+                    item_kind: crate::derive::context::item_kind_name(&ctx.hir_item.kind),
                     span: attr.span,
                 });
             }

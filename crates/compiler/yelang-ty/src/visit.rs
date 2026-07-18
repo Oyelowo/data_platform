@@ -7,7 +7,7 @@ use crate::existential::ExistentialPredicate;
 use crate::interner::Interner;
 use crate::list::List;
 use crate::predicate::Predicate;
-use crate::ty::{Const, Ty, TyId, ConstId};
+use crate::ty::{Const, ConstId, Ty, TyId};
 
 /// Control flow for visitation.
 pub type ControlFlow = std::ops::ControlFlow<()>;
@@ -103,9 +103,7 @@ impl TypeSuperVisitable for TyId {
             }
             Ty::Utility(_, args) => visit_generic_args(&args, visitor),
             Ty::Alias(alias) => visit_generic_args(&alias.args, visitor),
-            Ty::Projection(proj) => {
-                visit_generic_args(&proj.trait_ref.args, visitor)
-            }
+            Ty::Projection(proj) => visit_generic_args(&proj.trait_ref.args, visitor),
             Ty::Dynamic(binder) => {
                 for pred in binder.value.iter() {
                     match pred {
@@ -212,9 +210,17 @@ mod tests {
             crate::generic::GenericArg::Type(t_i32),
             crate::generic::GenericArg::Type(t_bool),
         ]);
-        let t_adt = interner.mk_ty(Ty::Adt(AdtDef { def_id: yelang_arena::DefId::new(1) }, args));
+        let t_adt = interner.mk_ty(Ty::Adt(
+            AdtDef {
+                def_id: yelang_arena::DefId::new(1),
+            },
+            args,
+        ));
 
-        let mut visitor = CountTysVisitor { interner: &interner, count: 0 };
+        let mut visitor = CountTysVisitor {
+            interner: &interner,
+            count: 0,
+        };
         assert!(t_adt.visit_with(&mut visitor).is_continue());
         // Adt + 2 args = 3
         assert_eq!(visitor.count, 3);
@@ -247,7 +253,9 @@ mod tests {
             }
         }
 
-        let mut visitor = FindParam { interner: &interner };
+        let mut visitor = FindParam {
+            interner: &interner,
+        };
         assert!(t_tuple.visit_with(&mut visitor).is_break());
     }
 
@@ -264,7 +272,10 @@ mod tests {
             item_def_id: yelang_arena::DefId::new(2),
         }));
 
-        let mut visitor = CountTysVisitor { interner: &interner, count: 0 };
+        let mut visitor = CountTysVisitor {
+            interner: &interner,
+            count: 0,
+        };
         assert!(projection.visit_with(&mut visitor).is_continue());
         // Projection + i32 arg = 2
         assert_eq!(visitor.count, 2);
@@ -283,7 +294,10 @@ mod tests {
             value: interner.mk_existential_predicates(&[existential]),
         }));
 
-        let mut visitor = CountTysVisitor { interner: &interner, count: 0 };
+        let mut visitor = CountTysVisitor {
+            interner: &interner,
+            count: 0,
+        };
         assert!(dynamic.visit_with(&mut visitor).is_continue());
         // Dynamic + i32 arg = 2
         assert_eq!(visitor.count, 2);

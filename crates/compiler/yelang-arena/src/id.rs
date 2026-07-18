@@ -162,5 +162,4 @@ mod tests {
         assert!(DefId::try_new(0).is_none());
         assert!(DefId::try_new(1).is_some());
     }
-
 }

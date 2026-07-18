@@ -46,15 +46,15 @@ impl<'a> AdtInfo<'a> {
             .params
             .iter()
             .filter_map(|p| match p {
-                crate::hir::core::GenericParam::Type { def_id, .. } => {
-                    Some(crate::hir::ty::GenericArg::Type(ctx.ctx.crate_hir.alloc_ty(
+                crate::hir::core::GenericParam::Type { def_id, .. } => Some(
+                    crate::hir::ty::GenericArg::Type(ctx.ctx.crate_hir.alloc_ty(
                         crate::hir::ty::Ty::Path {
                             res: Res::Def { def_id: *def_id },
                             args: vec![],
                         },
                         span,
-                    )))
-                }
+                    )),
+                ),
                 crate::hir::core::GenericParam::Const { .. } => {
                     Some(crate::hir::ty::GenericArg::Const(crate::hir::ty::Const {
                         kind: crate::hir::ty::ConstKind::Err,
@@ -96,9 +96,7 @@ impl<'a, 'b: 'a> DeriveContext<'a, 'b> {
             ItemKind::Struct { data, generics } => {
                 (generics.clone(), AdtShape::Struct(data.clone()))
             }
-            ItemKind::Enum { def, generics } => {
-                (generics.clone(), AdtShape::Enum(def.clone()))
-            }
+            ItemKind::Enum { def, generics } => (generics.clone(), AdtShape::Enum(def.clone())),
             other => {
                 return Err(DeriveError::UnsupportedItem {
                     derive: self.derive_name,
