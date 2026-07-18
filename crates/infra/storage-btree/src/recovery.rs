@@ -329,13 +329,7 @@ impl Recovery {
     }
 
     fn fetch_or_create_page(&self, page_id: PageId) -> Result<crate::buffer::PageGuard> {
-        match self.pool.fetch_or_read(page_id) {
-            Ok(g) => Ok(g),
-            Err(e) => match self.pool.new_page_with_id(page_id) {
-                Ok(g) => Ok(g),
-                Err(_) => Err(e),
-            },
-        }
+        self.pool.fetch_or_create_page(page_id)
     }
 
     fn redo_leaf_split(&self, left: &Page, right: &Page, separator: &[u8]) -> Result<()> {
@@ -399,14 +393,15 @@ impl Recovery {
         right_child: PageId,
         new_lsn: Lsn,
     ) -> Result<()> {
-        let guard = self.fetch_or_create_page(new_root_page_id)?;
-        let page = guard.page();
-        page.set_internal();
-        page.set_leftmost_child(leftmost_child);
-        let child_bytes = encode_page_id(right_child);
-        let _ = page.insert(separator, &crate::slot::ValueKind::Inline(&child_bytes))?;
-        set_page_lsn(page, new_lsn)?;
-        guard.mark_dirty();
+        self.pool
+            .with_page_or_create_mut(new_root_page_id, |page| {
+                page.set_internal();
+                page.set_leftmost_child(leftmost_child);
+                let child_bytes = encode_page_id(right_child);
+                let _ = page.insert(separator, &crate::slot::ValueKind::Inline(&child_bytes))?;
+                set_page_lsn(page, new_lsn)?;
+                Ok(())
+            })?;
         self.root_page_id.store(new_root_page_id, Ordering::SeqCst);
         Ok(())
     }
@@ -458,11 +453,11 @@ impl Recovery {
             }
             let victim_next = victim.next_page_id()?;
             survivor.set_next_page_id(victim_next);
-            if victim_next != NULL_PAGE_ID
-                && let Ok(next_guard) = self.pool.fetch_or_read(victim_next)
-            {
-                next_guard.page().set_prev_page_id(survivor.id);
-                next_guard.mark_dirty();
+            if victim_next != NULL_PAGE_ID {
+                let _ = self.pool.with_page_mut(victim_next, |next| {
+                    next.set_prev_page_id(survivor.id);
+                    Ok(())
+                });
             }
         } else {
             // Victim is the left sibling: move all of its cells into the
@@ -478,11 +473,11 @@ impl Recovery {
             }
             let victim_prev = victim.prev_page_id()?;
             survivor.set_prev_page_id(victim_prev);
-            if victim_prev != NULL_PAGE_ID
-                && let Ok(prev_guard) = self.pool.fetch_or_read(victim_prev)
-            {
-                prev_guard.page().set_next_page_id(survivor.id);
-                prev_guard.mark_dirty();
+            if victim_prev != NULL_PAGE_ID {
+                let _ = self.pool.with_page_mut(victim_prev, |prev| {
+                    prev.set_next_page_id(survivor.id);
+                    Ok(())
+                });
             }
         }
         Ok(())
@@ -535,25 +530,28 @@ impl Recovery {
                     old_header: Some(old_header),
                     ..
                 } => {
-                    let guard = self.fetch_or_create_page(record.header.page_id)?;
                     let image = undo::make_undo_image(old_cell.clone(), *old_header);
-                    undo::apply_undo_to_page(guard.page(), &old_cell.key, &image)?;
-                    guard.mark_dirty();
+                    self.pool
+                        .with_page_or_create_mut(record.header.page_id, |page| {
+                            undo::apply_undo_to_page(page, &old_cell.key, &image)
+                        })?;
                 }
                 RecordPayload::DeleteCell {
                     key,
                     old_cell: Some(old_cell),
                     old_header: Some(old_header),
                 } => {
-                    let guard = self.fetch_or_create_page(record.header.page_id)?;
                     let image = undo::make_undo_image(old_cell.clone(), *old_header);
-                    undo::apply_undo_to_page(guard.page(), key, &image)?;
-                    guard.mark_dirty();
+                    self.pool
+                        .with_page_or_create_mut(record.header.page_id, |page| {
+                            undo::apply_undo_to_page(page, key, &image)
+                        })?;
                 }
                 RecordPayload::InsertCell { cell } => {
-                    let guard = self.fetch_or_create_page(record.header.page_id)?;
-                    guard.page().delete(&cell.key)?;
-                    guard.mark_dirty();
+                    self.pool
+                        .with_page_or_create_mut(record.header.page_id, |page| {
+                            page.delete(&cell.key)
+                        })?;
                 }
                 _ => {}
             }

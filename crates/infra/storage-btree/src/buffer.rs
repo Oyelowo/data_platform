@@ -120,11 +120,24 @@ impl PageGuard {
     /// forgetting to mark the frame dirty.  The closure receives a `&Page`:
     /// `Page`'s mutation methods are `&self` and rely on the exclusive latch
     /// held by this guard for serialisation.
+    ///
+    /// The helper spins briefly with `try_write`; only if the latch remains
+    /// contended after many retries does it return `Error::Contention`.  This
+    /// matches the standard OLC pattern: latches are held for very short
+    /// durations, so yielding and retrying is almost always sufficient.
     pub fn with_mut<R>(&self, f: impl FnOnce(&Page) -> Result<R>) -> Result<R> {
-        let guard = self
-            .page
-            .try_write()
-            .ok_or_else(|| Error::Contention("could not acquire page write latch".into()))?;
+        const MAX_RETRIES: usize = 1024;
+        let mut guard = None;
+        for _ in 0..MAX_RETRIES {
+            if let Some(g) = self.page.try_write() {
+                guard = Some(g);
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let guard = guard.ok_or_else(|| {
+            Error::Contention("page write latch remained contended after retries".into())
+        })?;
         let result = f(guard.page());
         if result.is_ok() {
             self.mark_dirty();
@@ -252,6 +265,21 @@ impl BufferPool {
         Ok(PageGuard::new(frame_id, page, Arc::clone(self)))
     }
 
+    /// Fetch an existing page, or create a fresh empty page with the given id if
+    /// it is not resident and cannot be read from disk.
+    ///
+    /// This is used during recovery for pages that were allocated before a crash
+    /// but whose contents will be fully reconstructed by redo.
+    pub fn fetch_or_create_page(self: &Arc<Self>, page_id: PageId) -> Result<PageGuard> {
+        match self.fetch_or_read(page_id) {
+            Ok(g) => Ok(g),
+            Err(e) => match self.new_page_with_id(page_id) {
+                Ok(g) => Ok(g),
+                Err(_) => Err(e),
+            },
+        }
+    }
+
     /// Allocate a new page id and install an empty page in the buffer pool.
     pub fn new_page(self: &Arc<Self>) -> Result<PageGuard> {
         let page_id = self.allocator.with_mut(|alloc| alloc.allocate());
@@ -307,6 +335,21 @@ impl BufferPool {
         f: impl FnOnce(&Page) -> Result<R>,
     ) -> Result<R> {
         let guard = self.fetch_or_read(page_id)?;
+        guard.with_mut(f)
+    }
+
+    /// Fetch or create a page and run a mutating closure with the OLC write latch
+    /// held.  The frame is marked dirty automatically on success.
+    ///
+    /// This is the recovery-time variant of `with_page_mut`: if the page is not
+    /// resident and cannot be read from disk, a fresh empty page with the given
+    /// id is installed so redo can reconstruct it.
+    pub fn with_page_or_create_mut<R>(
+        self: &Arc<Self>,
+        page_id: PageId,
+        f: impl FnOnce(&Page) -> Result<R>,
+    ) -> Result<R> {
+        let guard = self.fetch_or_create_page(page_id)?;
         guard.with_mut(f)
     }
 

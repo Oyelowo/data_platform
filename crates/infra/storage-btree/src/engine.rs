@@ -70,11 +70,10 @@ impl BtreeEngine {
             None => {
                 // Fresh database: allocate an empty leaf root and recover from
                 // the beginning of the (empty) WAL.
-                let root_guard = pool.new_page()?;
-                let root_id = root_guard.page().id;
-                root_guard.page().set_leaf();
-                root_guard.mark_dirty();
-                drop(root_guard);
+                let root_id = pool.with_new_page_mut(|page| {
+                    page.set_leaf();
+                    Ok(page.id)
+                })?;
                 (root_id, NULL_LSN)
             }
         };
