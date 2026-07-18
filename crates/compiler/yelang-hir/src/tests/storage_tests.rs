@@ -46,7 +46,7 @@ fn derived_impl_def_id_is_above_resolved_definitions() {
         .items
         .values()
         .filter_map(|opt| opt.as_ref())
-        .find(|item| matches!(item.kind(&crate_hir), ItemKind::Impl { .. }))
+        .find(|item| matches!(&item.kind, ItemKind::Impl { .. }))
         .expect("derived Copy impl should be present");
 
     assert!(
@@ -76,7 +76,7 @@ fn body_ids_are_dense() {
     assert_eq!(ids.len(), crate_hir.bodies.len());
     for id in ids {
         assert!(
-            crate_hir.bodies.get(id).is_some(),
+            crate_hir.body(id).is_some(),
             "every body key should map to a body"
         );
     }

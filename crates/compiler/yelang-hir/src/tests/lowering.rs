@@ -50,7 +50,7 @@ fn lower_simple_fn() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind(&crate_hir), ItemKind::Fn { .. }));
+    assert!(matches!(&item.kind, ItemKind::Fn { .. }));
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn lower_struct_item() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind(&crate_hir), ItemKind::Struct { .. }));
+    assert!(matches!(&item.kind, ItemKind::Struct { .. }));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn lower_enum_item() {
 
     assert_eq!(crate_hir.items.len(), 1);
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    assert!(matches!(item.kind(&crate_hir), ItemKind::Enum { .. }));
+    assert!(matches!(&item.kind, ItemKind::Enum { .. }));
 }
 
 #[test]
@@ -85,11 +85,11 @@ fn lower_binary_expr() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
     assert!(matches!(expr, Expr::Block { .. }));
 }
 
@@ -101,11 +101,11 @@ fn lower_call_expr() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
     assert!(matches!(expr, Expr::Block { .. }));
 }
 
@@ -124,10 +124,10 @@ fn lower_match_expr() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
     assert!(matches!(expr, Expr::Block { .. }));
 }

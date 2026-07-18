@@ -1,5 +1,5 @@
 use yelang_arena::DefId;
-use yelang_ty::canonical::Certainty;
+use yelang_ty::canonical::{CanonicalVarValue, Certainty};
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate, TraitRef};
 use yelang_ty::ty::{ImplPolarity, ParamTy, Ty, TyId};
@@ -90,6 +90,25 @@ fn simple_user_impl() {
     let mut ecx = EvalCtxt::new(&interner, &cx);
     let response = ecx.evaluate_root_goal(goal).unwrap();
     assert_eq!(response.value.certainty, Certainty::Yes);
+}
+
+#[test]
+fn response_var_values_resolved() {
+    let interner = Interner::new();
+    let mut cx = TestCtxt::new(&interner);
+    let foo = DefId::new(1);
+    cx.add_trait(foo, false);
+    let i32_ty = cx.mk_i32();
+    add_simple_impl(&mut cx, DefId::new(2), foo, i32_ty);
+
+    let mut ecx = EvalCtxt::new(&interner, &cx);
+    let unknown = ecx.infcx_mut().new_ty_var(&interner);
+    let goal = cx.trait_goal(foo, unknown, empty_env(&interner));
+
+    let response = ecx.evaluate_root_goal(goal).unwrap();
+    assert_eq!(response.value.certainty, Certainty::Yes);
+    assert_eq!(response.value.var_values.len(), 1);
+    assert_eq!(response.value.var_values.as_slice()[0], CanonicalVarValue::Ty(i32_ty));
 }
 
 #[test]

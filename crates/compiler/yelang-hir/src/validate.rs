@@ -13,7 +13,7 @@ use crate::hir::core::{
     TraitRef, Ty, UsePath,
 };
 use crate::crate_data::Crate;
-use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
+use crate::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId};
 use crate::res::Res;
 use crate::hir::ty::Const;
 use crate::visit::visitor::{Visitor, walk_crate, walk_expr, walk_item, walk_pat, walk_ty};
@@ -185,14 +185,14 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
 
     fn visit_item(&mut self, item: &'hir Item) {
         self.check_def_id(item.def_id, Some(item.span));
-        match item.kind(self.crate_hir) {
+        match &item.kind {
             ItemKind::Fn { .. } => self.with_function(|this| walk_item(this, item)),
             _ => walk_item(self, item),
         }
     }
 
     fn visit_impl_item(&mut self, item: &'hir ImplItem) {
-        match item.kind(self.crate_hir) {
+        match &item.kind {
             ImplItemKind::Fn { .. } => {
                 self.with_function(|this| crate::visit::visitor::walk_impl_item(this, item));
             }
@@ -201,7 +201,7 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     }
 
     fn visit_trait_item(&mut self, item: &'hir TraitItem) {
-        match item.kind(self.crate_hir) {
+        match &item.kind {
             TraitItemKind::Fn {
                 default: Some(_), ..
             } => self.with_function(|this| crate::visit::visitor::walk_trait_item(this, item)),
@@ -210,7 +210,7 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     }
 
     fn visit_body_by_id(&mut self, id: BodyId) {
-        if let Some(body) = self.crate_hir.bodies.get(id) {
+        if let Some(body) = self.crate_hir.bodies.get(id).and_then(|o| o.as_ref()) {
             self.visit_body(body);
         } else {
             self.error(
@@ -221,7 +221,7 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     }
 
     fn visit_expr_by_id(&mut self, id: ExprId) {
-        if let Some(expr) = self.crate_hir.exprs.get(id) {
+        if let Some(expr) = self.crate_hir.exprs.get(id).and_then(|o| o.as_ref()) {
             self.visit_expr(expr);
         } else {
             self.error(
@@ -232,7 +232,7 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     }
 
     fn visit_pat_by_id(&mut self, id: PatId) {
-        if let Some(pat) = self.crate_hir.pats.get(id) {
+        if let Some(pat) = self.crate_hir.pats.get(id).and_then(|o| o.as_ref()) {
             self.visit_pat(pat);
         } else {
             self.error(
@@ -243,7 +243,7 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
     }
 
     fn visit_stmt_by_id(&mut self, id: StmtId) {
-        if let Some(stmt) = self.crate_hir.stmts.get(id) {
+        if let Some(stmt) = self.crate_hir.stmts.get(id).and_then(|o| o.as_ref()) {
             self.visit_stmt(stmt);
         } else {
             self.error(
@@ -253,12 +253,12 @@ impl<'hir> Visitor<'hir> for Validator<'hir> {
         }
     }
 
-    fn visit_ty_by_id(&mut self, id: TyId) {
-        if let Some(ty) = self.crate_hir.tys.get(id) {
+    fn visit_ty_by_id(&mut self, id: SyntaxTyId) {
+        if let Some(ty) = self.crate_hir.tys.get(id).and_then(|o| o.as_ref()) {
             self.visit_ty(ty);
         } else {
             self.error(
-                "TyId is not allocated",
+                "SyntaxTyId is not allocated",
                 self.crate_hir.ty_spans.get(id).copied(),
             );
         }

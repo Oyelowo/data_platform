@@ -47,11 +47,11 @@ fn desugar_while() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
 
     // The body should contain a `loop` expression (desugared from `while`).
     assert!(matches!(expr, Expr::Block { .. }));
@@ -65,11 +65,11 @@ fn desugar_for() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
     assert!(matches!(expr, Expr::Block { .. }));
 }
 
@@ -82,11 +82,11 @@ fn desugar_try_operator() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
     assert!(matches!(expr, Expr::Block { .. }));
 }
 
@@ -106,10 +106,10 @@ fn desugar_let_chain() {
     let crate_hir = lower_crate(&program, &resolved, &interner);
 
     let item = crate_hir.items.values().find_map(|opt| opt.as_ref()).unwrap();
-    let ItemKind::Fn { body, .. } = item.kind(&crate_hir) else {
+    let ItemKind::Fn { body, .. } = &item.kind else {
         panic!("expected fn");
     };
-    let body = crate_hir.bodies.get(*body).unwrap();
-    let expr = crate_hir.exprs.get(body.value).unwrap();
+    let body = crate_hir.body(*body).unwrap();
+    let expr = crate_hir.expr(body.value).unwrap();
     assert!(matches!(expr, Expr::Block { .. }));
 }

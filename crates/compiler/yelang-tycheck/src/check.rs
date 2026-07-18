@@ -6,7 +6,7 @@
 
 use yelang_ast::{AssignOpKind, BinaryOp};
 use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
-use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId as HirTyId};
+use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId as HirTyId};
 use yelang_hir::res::Res;
 use yelang_ty::generic::GenericArg;
 use yelang_ty::primitive::IntTy;
@@ -24,8 +24,7 @@ pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
 
     let body = fcx
         .tcx.crate_hir()
-        .bodies
-        .get(body_id)
+        .body(body_id)
         .expect("BodyId should be valid")
         .clone();
 
@@ -54,8 +53,7 @@ pub fn check_body(fcx: &mut FnCtxt<'_>, body_id: BodyId) {
 pub fn check_expr(fcx: &mut FnCtxt<'_>, expr_id: ExprId) -> TyId {
     let expr = fcx
         .tcx.crate_hir()
-        .exprs
-        .get(expr_id)
+        .expr(expr_id)
         .expect("ExprId should be valid")
         .clone();
     let ty = check_expr_value(fcx, &expr, expr_id);
@@ -539,8 +537,7 @@ fn check_block(fcx: &mut FnCtxt<'_>, block: &Block) -> TyId {
 fn check_stmt(fcx: &mut FnCtxt<'_>, stmt_id: StmtId) {
     let stmt = fcx
         .tcx.crate_hir()
-        .stmts
-        .get(stmt_id)
+        .stmt(stmt_id)
         .expect("StmtId should be valid")
         .clone();
     match &stmt {
@@ -824,8 +821,7 @@ fn check_cast(fcx: &mut FnCtxt<'_>, expr: ExprId, ty: HirTyId) -> TyId {
 fn lower_hir_ty_id(fcx: &mut FnCtxt<'_>, ty_id: HirTyId) -> TyId {
     let hir_ty = fcx
         .tcx.crate_hir()
-        .tys
-        .get(ty_id)
+        .ty(ty_id)
         .expect("TyId should be valid")
         .clone();
     lower_hir_ty(&hir_ty, fcx)

@@ -98,8 +98,8 @@ fn find_float_in_fields(
     None
 }
 
-fn is_float(ty_id: crate::ids::TyId, ctx: &crate::derive::context::DeriveContext<'_, '_>) -> bool {
-    let ty = ctx.ctx.crate_hir.tys.get(ty_id).expect("field type");
+fn is_float(ty_id: crate::ids::SyntaxTyId, ctx: &crate::derive::context::DeriveContext<'_, '_>) -> bool {
+    let ty = ctx.ctx.crate_hir.ty(ty_id).expect("field type");
     if let Ty::Path {
         res: crate::res::Res::PrimTy {
             ty: crate::res::PrimTy::Float(_),

@@ -6,14 +6,14 @@ use yelang_lexer::Span;
 use crate::hir::core::Expr;
 use crate::hir::body::Body;
 use crate::hir::pat::{BindingMode, Pat};
-use crate::ids::{BodyId, TyId};
+use crate::ids::{BodyId, SyntaxTyId};
 use crate::lowering::LoweringContext;
 
 /// Lower a `BlockExpr` into a standalone `Body` and register it in the crate.
 pub fn lower_block_as_body(
     ctx: &mut LoweringContext,
     block: &BlockExpr,
-    param_tys: &[TyId],
+    param_tys: &[SyntaxTyId],
 ) -> BodyId {
     // Build synthetic patterns for each parameter type so we have PatIds.
     let params: Vec<crate::hir::body::Param> = param_tys
@@ -23,8 +23,7 @@ pub fn lower_block_as_body(
             let name = yelang_interner::Symbol::from(i as u32);
             let _ty_node = ctx
                 .crate_hir
-                .tys
-                .get(*ty)
+                .ty(*ty)
                 .expect("parameter type should be allocated");
             let pat_id = ctx.crate_hir.alloc_pat(
                 Pat::Binding {
@@ -70,6 +69,6 @@ pub fn lower_expr_as_body(ctx: &mut LoweringContext, expr: &AstExpr) -> BodyId {
     ctx.crate_hir.alloc_body(body, expr.span)
 }
 
-fn ty_node_span(ctx: &LoweringContext, ty: TyId) -> Span {
+fn ty_node_span(ctx: &LoweringContext, ty: SyntaxTyId) -> Span {
     ctx.crate_hir.ty_spans.get(ty).copied().unwrap_or(Span::default())
 }

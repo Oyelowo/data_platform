@@ -59,7 +59,7 @@ pub fn collect_crate_types(tcx: &mut TyCtxt) {
 }
 
 fn collect_item(tcx: &mut TyCtxt, def_id: DefId, item: &Item) {
-    let kind = item.kind(tcx.crate_hir()).clone();
+    let kind = item.kind.clone();
     match &kind {
         ItemKind::Fn { sig, body: _, generics } => {
             let generics_data = lower_generics(tcx, generics);
@@ -150,7 +150,7 @@ fn collect_trait(tcx: &mut TyCtxt, def_id: DefId, tr: &hir::Trait) {
         .items
         .iter()
         .map(|item| {
-            let kind = item.kind(cx.crate_hir()).clone();
+            let kind = item.kind.clone();
             match &kind {
             hir::TraitItemKind::Fn { sig, default: _ } => TraitItemDefData::Fn {
                 def_id: item.def_id,
@@ -203,7 +203,7 @@ fn collect_impl(tcx: &mut TyCtxt, imp: &hir::Impl) {
         .items
         .iter()
         .map(|item| {
-            let kind = item.kind(cx.crate_hir()).clone();
+            let kind = item.kind.clone();
             match &kind {
             hir::ImplItemKind::Fn { sig, body: _ } => ImplItemDefData::Fn {
                 def_id: item.def_id,
@@ -304,7 +304,7 @@ fn collect_enum(
     }
 }
 
-fn variant_fields(data: &VariantData) -> Vec<(DefId, yelang_ast::Ident, yelang_hir::ids::TyId)> {
+fn variant_fields(data: &VariantData) -> Vec<(DefId, yelang_ast::Ident, yelang_hir::ids::SyntaxTyId)> {
     match data {
         VariantData::Struct { fields } => fields
             .iter()
@@ -349,7 +349,7 @@ fn lower_trait_ref(
     self_ty: TyId,
     tr: &hir::TraitRef,
 ) -> Option<yelang_ty::predicate::TraitRef> {
-    lower_trait_bound(cx, self_ty, &hir::TraitBound { path: tr.path.clone(), span: tr.span })
+    lower_trait_bound(cx, self_ty, &hir::TraitBound { path: tr.path.clone(), args: vec![], span: tr.span })
 }
 
 fn lower_trait_bound(
@@ -358,9 +358,22 @@ fn lower_trait_bound(
     bound: &hir::TraitBound,
 ) -> Option<yelang_ty::predicate::TraitRef> {
     if let yelang_hir::res::Res::Def { def_id } = bound.path {
-        // TODO: lower generic arguments of the trait bound (e.g. Foo<U> in
-        // `T: Foo<U>`). For now the only argument we model is `Self`.
-        let args = cx.tcx.interner().mk_generic_args(&[GenericArg::Type(self_ty)]);
+        let mut args = vec![GenericArg::Type(self_ty)];
+        for arg in &bound.args {
+            match arg {
+                yelang_hir::hir::ty::GenericArg::Type(ty_id) => {
+                    args.push(GenericArg::Type(lower_hir_ty_id(*ty_id, cx)));
+                }
+                yelang_hir::hir::ty::GenericArg::Const(c) => {
+                    args.push(GenericArg::Const(lower_hir_const(cx.tcx, c)));
+                }
+                yelang_hir::hir::ty::GenericArg::AssocBinding { .. } => {
+                    // TODO: lower associated type bindings once the type system
+                    // supports them.
+                }
+            }
+        }
+        let args = cx.tcx.interner().mk_generic_args(&args);
         Some(yelang_ty::predicate::TraitRef { def_id, args })
     } else {
         None
@@ -385,16 +398,22 @@ fn lower_generics(tcx: &mut TyCtxt, generics: &hir::Generics) -> GenericsData {
         })
         .collect();
 
-    let mut predicates: Vec<Predicate> = generics
-        .where_clause
-        .as_ref()
-        .map(|wc| wc.predicates.iter().filter_map(|p| lower_where_predicate(tcx, p)).collect())
-        .unwrap_or_default();
-
     // Add predicates from inline bounds on generic parameters, e.g.
     // `fn foo<T: Clone>()`. The `Self` type of each bound is the parameter
     // itself, looked up by its DefId.
     let mut cx = CollectorCx::new(tcx, &params);
+
+    let mut predicates: Vec<Predicate> = generics
+        .where_clause
+        .as_ref()
+        .map(|wc| {
+            wc.predicates
+                .iter()
+                .flat_map(|p| lower_where_predicate(&mut cx, p))
+                .collect()
+        })
+        .unwrap_or_default();
+
     for param in &generics.params {
         if let hir::GenericParam::Type { def_id, bounds, .. } = param {
             let self_ty = cx.param_ty(*def_id).unwrap_or_else(|| cx.tcx.interner().mk_ty(Ty::Error));
@@ -412,25 +431,24 @@ fn lower_generics(tcx: &mut TyCtxt, generics: &hir::Generics) -> GenericsData {
     GenericsData { params, predicates }
 }
 
-fn lower_where_predicate(tcx: &mut TyCtxt, pred: &hir::WherePredicate) -> Option<Predicate> {
+fn lower_where_predicate(cx: &mut CollectorCx<'_>, pred: &hir::WherePredicate) -> Vec<Predicate> {
     match pred {
         hir::WherePredicate::TraitBound { ty, bounds } => {
-            let mut cx = CollectorCx::new(tcx, &[]);
-            let self_ty = lower_hir_ty_id(*ty, &mut cx);
-            // For now only support a single bound.
+            let self_ty = lower_hir_ty_id(*ty, cx);
             bounds
-                .first()
-                .and_then(|b| lower_trait_bound(&mut cx, self_ty, b))
+                .iter()
+                .filter_map(|b| lower_trait_bound(cx, self_ty, b))
                 .map(|trait_ref| {
                     Predicate::Trait(TraitPredicate {
                         trait_ref,
                         polarity: yelang_ty::ty::ImplPolarity::Positive,
                     })
                 })
+                .collect()
         }
         hir::WherePredicate::TypeEq { .. } => {
             // TODO: associated type equality constraints.
-            None
+            Vec::new()
         }
     }
 }
@@ -556,7 +574,7 @@ mod tests {
         Span::new(Position::default(), Position::default())
     }
 
-    fn hir_i32(hir: &mut HirCrate) -> yelang_hir::ids::TyId {
+    fn hir_i32(hir: &mut HirCrate) -> yelang_hir::ids::SyntaxTyId {
         hir.alloc_ty(
             HirTy::Path {
                 res: Res::PrimTy {
@@ -594,19 +612,18 @@ mod tests {
             bound_vars: vec![],
         };
         let body = body_id(&mut hir);
-        let kind = hir.alloc_item_kind(ItemKind::Fn {
-            sig,
-            body,
-            generics: Generics {
-                params: vec![],
-                where_clause: None,
-                span: dummy_span(),
-            },
-        });
         let item = Item {
             def_id: DefId::new(2),
             ident: yelang_ast::Ident::new(Symbol::from(1), dummy_span()),
-            kind,
+            kind: ItemKind::Fn {
+                sig,
+                body,
+                generics: Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
             vis: Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
@@ -637,18 +654,17 @@ mod tests {
             vis: Visibility::Public(dummy_span()),
             attrs: vec![],
         };
-        let kind = hir.alloc_item_kind(ItemKind::Struct {
-            data: VariantData::Struct { fields: vec![field] },
-            generics: Generics {
-                params: vec![],
-                where_clause: None,
-                span: dummy_span(),
-            },
-        });
         let item = Item {
             def_id: DefId::new(2),
             ident: yelang_ast::Ident::new(Symbol::from(1), dummy_span()),
-            kind,
+            kind: ItemKind::Struct {
+                data: VariantData::Struct { fields: vec![field] },
+                generics: Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
             vis: Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
@@ -666,5 +682,110 @@ mod tests {
 
         let item_ty = tcx.item_ty(DefId::new(2)).expect("item type should be collected");
         assert!(matches!(interner.ty(item_ty), Ty::Adt(_, _)));
+    }
+
+    #[test]
+    fn collect_where_clause_with_generic_args() {
+        let mut hir = HirCrate::new(DefId::new(1));
+
+        let t_param = DefId::new(10);
+        let u_param = DefId::new(11);
+        let bar_trait = DefId::new(20);
+
+        let t_ty = hir.alloc_ty(
+            HirTy::Path {
+                res: Res::Def { def_id: t_param },
+                args: vec![],
+            },
+            dummy_span(),
+        );
+        let u_ty = hir.alloc_ty(
+            HirTy::Path {
+                res: Res::Def { def_id: u_param },
+                args: vec![],
+            },
+            dummy_span(),
+        );
+
+        let bar_bound = yelang_hir::hir::core::TraitBound {
+            path: Res::Def { def_id: bar_trait },
+            args: vec![yelang_hir::hir::ty::GenericArg::Type(u_ty)],
+            span: dummy_span(),
+        };
+
+        let sig = FnSig {
+            inputs: vec![t_ty],
+            output: u_ty,
+            is_async: false,
+            is_const: false,
+            is_variadic: false,
+            abi: None,
+            bound_vars: vec![],
+        };
+        let body = body_id(&mut hir);
+
+        let item = Item {
+            def_id: DefId::new(2),
+            ident: yelang_ast::Ident::new(Symbol::from(1), dummy_span()),
+            kind: ItemKind::Fn {
+                sig,
+                body,
+                generics: Generics {
+                    params: vec![
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: t_param,
+                            name: yelang_ast::Ident::new(Symbol::from(10), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: u_param,
+                            name: yelang_ast::Ident::new(Symbol::from(11), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                    ],
+                    where_clause: Some(yelang_hir::hir::core::WhereClause {
+                        predicates: vec![yelang_hir::hir::core::WherePredicate::TraitBound {
+                            ty: t_ty,
+                            bounds: vec![bar_bound],
+                        }],
+                        span: dummy_span(),
+                    }),
+                    span: dummy_span(),
+                },
+            },
+            vis: Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        };
+        hir.items.insert(DefId::new(2), Some(item));
+
+        let mut tcx = TyCtxt::new(hir);
+        collect_crate_types(&mut tcx);
+
+        let generics = tcx.generics_of(DefId::new(2)).expect("generics should exist");
+        assert_eq!(generics.predicates.len(), 1);
+
+        let interner = tcx.interner();
+        let pred = &generics.predicates[0];
+        let yelang_ty::predicate::Predicate::Trait(trait_pred) = pred else {
+            panic!("expected trait predicate");
+        };
+        assert_eq!(trait_pred.trait_ref.def_id, bar_trait);
+        assert_eq!(trait_pred.trait_ref.args.len(), 2);
+
+        let self_arg = &trait_pred.trait_ref.args[0];
+        let other_arg = &trait_pred.trait_ref.args[1];
+        assert_eq!(*self_arg, GenericArg::Type(interner.mk_ty(Ty::Param(yelang_ty::ty::ParamTy {
+            index: 0,
+            name: Symbol::from(10),
+        }))));
+        assert_eq!(*other_arg, GenericArg::Type(interner.mk_ty(Ty::Param(yelang_ty::ty::ParamTy {
+            index: 1,
+            name: Symbol::from(11),
+        }))));
     }
 }

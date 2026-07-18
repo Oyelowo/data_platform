@@ -38,6 +38,7 @@ pub struct Interner {
     anon_struct_fields: RefCell<FxHashMap<SliceKey<crate::ty::AnonField>, List<crate::ty::AnonField>>>,
     predicates: RefCell<FxHashMap<SliceKey<crate::predicate::Predicate>, List<crate::predicate::Predicate>>>,
     canonical_var_kinds: RefCell<FxHashMap<SliceKey<crate::canonical::CanonicalVarKind>, List<crate::canonical::CanonicalVarKind>>>,
+    canonical_var_values: RefCell<FxHashMap<SliceKey<crate::canonical::CanonicalVarValue>, List<crate::canonical::CanonicalVarValue>>>,
 }
 
 /// A hash key that compares slices by their **contents**, not by pointer.
@@ -88,6 +89,7 @@ impl Interner {
             anon_struct_fields: RefCell::new(FxHashMap::default()),
             predicates: RefCell::new(FxHashMap::default()),
             canonical_var_kinds: RefCell::new(FxHashMap::default()),
+            canonical_var_values: RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -305,6 +307,31 @@ impl Interner {
             len: slice.len(),
         };
         self.canonical_var_kinds.borrow_mut().insert(key, list);
+        list
+    }
+
+    /// Intern a list of canonical variable values.
+    pub fn mk_canonical_var_values(
+        &self,
+        elems: &[crate::canonical::CanonicalVarValue],
+    ) -> List<crate::canonical::CanonicalVarValue> {
+        if elems.is_empty() {
+            return List::empty();
+        }
+        let key = SliceKey {
+            ptr: elems.as_ptr(),
+            len: elems.len(),
+        };
+        if let Some(&existing) = self.canonical_var_values.borrow().get(&key) {
+            return existing;
+        }
+        let slice = self.arena.alloc_slice_copy(elems);
+        let list = List::from_slice(slice);
+        let key = SliceKey {
+            ptr: slice.as_ptr(),
+            len: slice.len(),
+        };
+        self.canonical_var_values.borrow_mut().insert(key, list);
         list
     }
 

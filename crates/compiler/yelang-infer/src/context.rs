@@ -10,7 +10,7 @@ use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{
-    AnonStructDef, Const, ConstVid, FloatVid, FnSig, InferTy, IntVid, Ty, TyId, TyVid,
+    AnonStructDef, Const, ConstId, ConstVid, FloatVid, FnSig, InferTy, IntVid, Ty, TyId, TyVid,
 };
 
 use crate::const_variable::ConstVarValue;
@@ -101,6 +101,26 @@ impl InferCtxt {
     /// Probe the value of a const inference variable.
     pub fn probe_const_var(&mut self, vid: ConstVid) -> &ConstVarValue {
         self.tables.const_vars.probe_value(vid)
+    }
+
+    /// Set an integral inference variable to a concrete integer type.
+    pub fn set_int_var(&mut self, vid: IntVid, it: IntTy) -> Result<(), TypeError> {
+        self.unify_int_var_value(vid, it)
+    }
+
+    /// Set a floating-point inference variable to a concrete float type.
+    pub fn set_float_var(&mut self, vid: FloatVid, ft: FloatTy) -> Result<(), TypeError> {
+        self.unify_float_var_value(vid, ft)
+    }
+
+    /// Set a const inference variable to a concrete const.
+    pub fn set_const_var(
+        &mut self,
+        interner: &Interner,
+        vid: ConstVid,
+        ct: ConstId,
+    ) -> Result<(), TypeError> {
+        self.unify_const_var_value(interner, vid, ct)
     }
 
     // -----------------------------------------------------------------------

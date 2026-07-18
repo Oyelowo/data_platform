@@ -3,7 +3,7 @@
 use yelang_ast::Ident;
 use yelang_lexer::Span;
 
-use crate::ids::TyId;
+use crate::ids::SyntaxTyId;
 
 /// The shape of a struct or enum variant.
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub enum VariantData {
 pub struct FieldDef {
     pub def_id: crate::ids::DefId,
     pub ident: Ident,
-    pub ty: TyId,
+    pub ty: SyntaxTyId,
     pub span: Span,
     pub vis: crate::hir::core::Visibility,
     pub attrs: Vec<crate::hir::core::Attribute>,
@@ -31,7 +31,7 @@ pub struct FieldDef {
 #[derive(Debug, Clone)]
 pub struct StructField {
     pub def_id: crate::ids::DefId,
-    pub ty: TyId,
+    pub ty: SyntaxTyId,
     pub span: Span,
     pub vis: crate::hir::core::Visibility,
     pub attrs: Vec<crate::hir::core::Attribute>,

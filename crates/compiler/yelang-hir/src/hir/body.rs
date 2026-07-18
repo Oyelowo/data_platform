@@ -2,7 +2,7 @@
 
 use yelang_lexer::Span;
 
-use crate::ids::{ExprId, PatId, TyId};
+use crate::ids::{ExprId, PatId, SyntaxTyId};
 
 /// A function body.
 #[derive(Debug, Clone)]
@@ -16,6 +16,6 @@ pub struct Body {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub pat: PatId,
-    pub ty: TyId,
+    pub ty: SyntaxTyId,
     pub span: Span,
 }

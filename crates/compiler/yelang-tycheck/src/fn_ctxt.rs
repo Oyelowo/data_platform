@@ -9,12 +9,14 @@ use yelang_ast::Label;
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::ids::{ExprId, PatId};
 use yelang_lexer::Span;
+use yelang_ty::canonical::{CanonicalResponse, CanonicalVarValue};
+use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 use yelang_ty::generic::GenericArg;
 use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate};
 use yelang_ty::primitive::{FloatTy, IntTy};
-use yelang_ty::ty::{AdtDef, Const, ConstId, ImplPolarity, InferTy, Mutability, Ty, TyId, TypeAndMut};
+use yelang_ty::ty::{AdtDef, Const, ConstId, ConstVid, FloatVid, ImplPolarity, InferTy, IntVid, Mutability, Ty, TyId, TyVid, TypeAndMut};
 
 use yelang_infer::context::InferCtxt;
 use yelang_infer::error::TypeError;
@@ -272,51 +274,86 @@ impl<'a> FnCtxt<'a> {
     }
 }
 
-/// Returns `true` if `pred` still contains an inference variable originating
-/// from the body `InferCtxt`.
-///
-/// Such predicates cannot be handed to the solver's separate `InferCtxt`
-/// directly (the solver's canonicalizer would panic on an unknown variable).
-/// They are kept as unproven and reported in Phase E.
-fn contains_body_infer_var(interner: &Interner, pred: &Predicate) -> bool {
-    use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
+/// A body inference variable that may be constrained by a solver response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyInferVar {
+    Ty(TyVid),
+    Int(IntVid),
+    Float(FloatVid),
+    Const(ConstVid),
+}
 
-    struct HasBodyInferVar<'a> {
+/// Collect the body inference variables in `pred` in first-occurrence order,
+/// matching the order produced by the trait solver's canonicalizer.
+fn collect_body_infer_vars(interner: &Interner, infcx: &mut yelang_infer::InferCtxt, pred: &Predicate) -> Vec<BodyInferVar> {
+    struct Collector<'a> {
         interner: &'a Interner,
-        found: bool,
+        infcx: &'a mut yelang_infer::InferCtxt,
+        vars: Vec<BodyInferVar>,
+        seen_ty: yelang_arena::FxHashSet<TyVid>,
+        seen_int: yelang_arena::FxHashSet<IntVid>,
+        seen_float: yelang_arena::FxHashSet<FloatVid>,
+        seen_const: yelang_arena::FxHashSet<ConstVid>,
     }
 
-    impl<'a> TypeFolder for HasBodyInferVar<'a> {
+    impl<'a> TypeFolder for Collector<'a> {
         fn interner(&self) -> &Interner {
             self.interner
         }
 
         fn fold_ty(&mut self, ty: TyId) -> TyId {
-            if self.found {
-                return ty;
+            match self.interner.ty(ty) {
+                Ty::Infer(InferTy::TyVar(vid)) => {
+                    let root = self.infcx.find_ty_var(vid);
+                    if self.seen_ty.insert(root) {
+                        self.vars.push(BodyInferVar::Ty(root));
+                    }
+                    ty
+                }
+                Ty::Infer(InferTy::IntVar(vid)) => {
+                    let root = self.infcx.find_int_var(vid);
+                    if self.seen_int.insert(root) {
+                        self.vars.push(BodyInferVar::Int(root));
+                    }
+                    ty
+                }
+                Ty::Infer(InferTy::FloatVar(vid)) => {
+                    let root = self.infcx.find_float_var(vid);
+                    if self.seen_float.insert(root) {
+                        self.vars.push(BodyInferVar::Float(root));
+                    }
+                    ty
+                }
+                _ => ty.super_fold_with(self),
             }
-            if matches!(self.interner.ty(ty), Ty::Infer(_)) {
-                self.found = true;
-                return ty;
-            }
-            ty.super_fold_with(self)
         }
 
         fn fold_const(&mut self, ct: ConstId) -> ConstId {
-            if self.found {
-                return ct;
+            let kind = self.interner.const_kind(ct);
+            match kind {
+                Const::Infer(vid) => {
+                    let root = self.infcx.find_const_var(vid);
+                    if self.seen_const.insert(root) {
+                        self.vars.push(BodyInferVar::Const(root));
+                    }
+                    ct
+                }
+                _ => ct.super_fold_with(self),
             }
-            if matches!(self.interner.const_kind(ct), Const::Infer(_)) {
-                self.found = true;
-                return ct;
-            }
-            ct.super_fold_with(self)
         }
     }
 
-    let mut folder = HasBodyInferVar { interner, found: false };
-    let _ = (*pred).fold_with(&mut folder);
-    folder.found
+    let mut collector = Collector {
+        interner,
+        infcx,
+        vars: Vec::new(),
+        seen_ty: yelang_arena::FxHashSet::default(),
+        seen_int: yelang_arena::FxHashSet::default(),
+        seen_float: yelang_arena::FxHashSet::default(),
+        seen_const: yelang_arena::FxHashSet::default(),
+    };
+    let _ = (*pred).fold_with(&mut collector);
+    collector.vars
 }
 
 impl<'a> FnCtxt<'a> {
@@ -331,26 +368,61 @@ impl<'a> FnCtxt<'a> {
 
         for pred in obligations {
             let pred = self.resolve_predicate(pred);
-            if contains_body_infer_var(self.tcx.interner(), &pred) {
-                // Goals that still contain body inference variables cannot be
-                // passed to the solver's separate `InferCtxt` safely. Leave them
-                // as ambiguous for Phase E.
-                unproven.push(pred);
-                continue;
-            }
+            let body_vars = collect_body_infer_vars(self.tcx.interner(), &mut self.infer, &pred);
 
             let mut ecx = EvalCtxt::new(self.tcx.interner(), self.tcx);
             let goal = Goal::new(self.param_env, pred);
-            match ecx.evaluate_root_goal(goal) {
+            let canonical_goal = yelang_trait_solver::canonicalize::canonicalize(
+                goal,
+                self.tcx.interner(),
+                &mut self.infer,
+                ecx.max_universe(),
+            );
+
+            match ecx.evaluate_canonical_goal(canonical_goal) {
                 Ok(response) if response.value.certainty == Certainty::Yes => {
-                    // TODO: apply solver substitutions back to `self.infer` once
-                    // `CanonicalResponse` carries variable assignments.
+                    self.apply_response_to_body(&body_vars, &response);
                 }
-                _ => unproven.push(pred),
+                _ => unproven.push(goal.predicate),
             }
         }
 
         unproven
+    }
+
+    /// Apply the inferred values from a solver response back to the body
+    /// `InferCtxt`.
+    fn apply_response_to_body(
+        &mut self,
+        body_vars: &[BodyInferVar],
+        response: &CanonicalResponse,
+    ) {
+        let interner = self.tcx.interner();
+        for (body_var, value) in body_vars.iter().zip(response.value.var_values.iter()) {
+            match (body_var, value) {
+                (BodyInferVar::Ty(vid), CanonicalVarValue::Ty(ty)) => {
+                    let root = self.infer.find_ty_var(*vid);
+                    let _ = self.infer.eq(
+                        interner,
+                        interner.mk_ty(Ty::Infer(InferTy::TyVar(root))),
+                        *ty,
+                    );
+                }
+                (BodyInferVar::Int(vid), CanonicalVarValue::Int(it)) => {
+                    let root = self.infer.find_int_var(*vid);
+                    let _ = self.infer.set_int_var(root, *it);
+                }
+                (BodyInferVar::Float(vid), CanonicalVarValue::Float(ft)) => {
+                    let root = self.infer.find_float_var(*vid);
+                    let _ = self.infer.set_float_var(root, *ft);
+                }
+                (BodyInferVar::Const(vid), CanonicalVarValue::Const(ct)) => {
+                    let root = self.infer.find_const_var(*vid);
+                    let _ = self.infer.set_const_var(interner, root, *ct);
+                }
+                _ => {}
+            }
+        }
     }
 }
 

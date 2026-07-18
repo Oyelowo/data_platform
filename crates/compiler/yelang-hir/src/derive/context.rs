@@ -6,7 +6,7 @@ use yelang_lexer::Span;
 
 use crate::hir::core::{EnumDef, Generics, ItemKind, VariantData};
 use crate::hir::item::Item as HirItem;
-use crate::ids::TyId;
+use crate::ids::SyntaxTyId;
 use crate::lowering::LoweringContext;
 use crate::res::Res;
 
@@ -39,7 +39,7 @@ impl<'a> AdtInfo<'a> {
     ///
     /// For a generic ADT such as `struct Point<T>`, this produces `Point<T>`
     /// using the ADT's own type parameters as arguments.
-    pub fn self_ty(&self, ctx: &mut DeriveContext<'_, '_>) -> TyId {
+    pub fn self_ty(&self, ctx: &mut DeriveContext<'_, '_>) -> SyntaxTyId {
         let span = self.ident.span();
         let args = self
             .generics
@@ -92,7 +92,7 @@ pub struct DeriveContext<'a, 'b: 'a> {
 impl<'a, 'b: 'a> DeriveContext<'a, 'b> {
     /// Try to extract ADT information from the item being derived for.
     pub fn adt_info(&self) -> Result<AdtInfo<'a>, DeriveError> {
-        let (generics, shape) = match self.hir_item.kind(&self.ctx.crate_hir) {
+        let (generics, shape) = match &self.hir_item.kind {
             ItemKind::Struct { data, generics } => {
                 (generics.clone(), AdtShape::Struct(data.clone()))
             }

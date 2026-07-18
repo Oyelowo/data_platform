@@ -17,6 +17,7 @@ fn response_certainty() {
     let r = Response {
         certainty: Certainty::Yes,
         goals: List::empty(),
+        var_values: List::empty(),
     };
     assert_eq!(r.certainty, Certainty::Yes);
 }

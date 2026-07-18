@@ -124,7 +124,7 @@ pub fn lower_pat(ctx: &mut LoweringContext, pat: &AstPat) -> PatId {
     };
 
     let pat_id = ctx.crate_hir.alloc_pat(kind, span);
-    match ctx.crate_hir.pats.get(pat_id).expect("just allocated pattern") {
+    match ctx.crate_hir.pat(pat_id).expect("just allocated pattern") {
         Pat::Binding { name, .. } => {
             ctx.push_local(*name, pat_id);
         }

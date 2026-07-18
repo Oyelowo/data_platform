@@ -7,9 +7,8 @@
 use yelang_arena::{Arena, ArenaMap, IndexVec};
 use yelang_lexer::Span;
 
-use crate::hir::core::{ForeignItem, ForeignItemKind, Impl, ImplItemKind, Trait, TraitItemKind};
-use crate::hir::item::ItemKind;
-use crate::ids::{BodyId, DefId, ExprId, ForeignItemKindId, ImplItemKindId, ItemKindId, PatId, StmtId, TraitItemKindId, TyId};
+use crate::hir::core::{ForeignItem, Impl};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
 
 /// The root of the HIR for a single compilation unit.
 #[derive(Debug, Clone)]
@@ -24,31 +23,23 @@ pub struct Crate {
     /// Foreign items from `extern` blocks keyed by their `DefId`.
     pub foreign_items: IndexVec<DefId, Option<ForeignItem>>,
     /// All bodies keyed by `BodyId`.
-    pub bodies: Arena<BodyId, Body>,
+    pub bodies: Arena<BodyId, Option<Body>>,
     /// All expression nodes keyed by `ExprId`.
-    pub exprs: Arena<ExprId, Expr>,
+    pub exprs: Arena<ExprId, Option<Expr>>,
     /// All pattern nodes keyed by `PatId`.
-    pub pats: Arena<PatId, Pat>,
+    pub pats: Arena<PatId, Option<Pat>>,
     /// All statement nodes keyed by `StmtId`.
-    pub stmts: Arena<StmtId, Stmt>,
-    /// All type nodes keyed by `TyId`.
-    pub tys: Arena<TyId, Ty>,
-    /// All item-kind payloads keyed by `ItemKindId`.
-    pub item_kinds: Arena<ItemKindId, ItemKind>,
-    /// All trait-item-kind payloads keyed by `TraitItemKindId`.
-    pub trait_item_kinds: Arena<TraitItemKindId, TraitItemKind>,
-    /// All impl-item-kind payloads keyed by `ImplItemKindId`.
-    pub impl_item_kinds: Arena<ImplItemKindId, ImplItemKind>,
-    /// All foreign-item-kind payloads keyed by `ForeignItemKindId`.
-    pub foreign_item_kinds: Arena<ForeignItemKindId, ForeignItemKind>,
+    pub stmts: Arena<StmtId, Option<Stmt>>,
+    /// All type syntax nodes keyed by `SyntaxTyId`.
+    pub tys: Arena<SyntaxTyId, Option<Ty>>,
     /// Secondary map from `ExprId` to the source span of the expression.
     pub expr_spans: ArenaMap<ExprId, Span>,
     /// Secondary map from `PatId` to the source span of the pattern.
     pub pat_spans: ArenaMap<PatId, Span>,
     /// Secondary map from `StmtId` to the source span of the statement.
     pub stmt_spans: ArenaMap<StmtId, Span>,
-    /// Secondary map from `TyId` to the source span of the type.
-    pub ty_spans: ArenaMap<TyId, Span>,
+    /// Secondary map from `SyntaxTyId` to the source span of the type.
+    pub ty_spans: ArenaMap<SyntaxTyId, Span>,
     /// Secondary map from `BodyId` to the source span of the body.
     pub body_spans: ArenaMap<BodyId, Span>,
 }
@@ -66,10 +57,6 @@ impl Crate {
             pats: Arena::new(),
             stmts: Arena::new(),
             tys: Arena::new(),
-            item_kinds: Arena::new(),
-            trait_item_kinds: Arena::new(),
-            impl_item_kinds: Arena::new(),
-            foreign_item_kinds: Arena::new(),
             expr_spans: ArenaMap::new(),
             pat_spans: ArenaMap::new(),
             stmt_spans: ArenaMap::new(),
@@ -80,57 +67,87 @@ impl Crate {
 
     /// Allocate an expression node and its span, returning the `ExprId`.
     pub fn alloc_expr(&mut self, expr: Expr, span: Span) -> ExprId {
-        let id = self.exprs.insert(expr);
+        let id = self.exprs.insert(Some(expr));
         self.expr_spans.insert(id, span);
         id
     }
 
     /// Allocate a pattern node and its span, returning the `PatId`.
     pub fn alloc_pat(&mut self, pat: Pat, span: Span) -> PatId {
-        let id = self.pats.insert(pat);
+        let id = self.pats.insert(Some(pat));
         self.pat_spans.insert(id, span);
         id
     }
 
     /// Allocate a statement node and its span, returning the `StmtId`.
     pub fn alloc_stmt(&mut self, stmt: Stmt, span: Span) -> StmtId {
-        let id = self.stmts.insert(stmt);
+        let id = self.stmts.insert(Some(stmt));
         self.stmt_spans.insert(id, span);
         id
     }
 
-    /// Allocate a type node and its span, returning the `TyId`.
-    pub fn alloc_ty(&mut self, ty: Ty, span: Span) -> TyId {
-        let id = self.tys.insert(ty);
+    /// Allocate a type syntax node and its span, returning the `SyntaxTyId`.
+    pub fn alloc_ty(&mut self, ty: Ty, span: Span) -> SyntaxTyId {
+        let id = self.tys.insert(Some(ty));
         self.ty_spans.insert(id, span);
         id
     }
 
     /// Allocate a body node and its span, returning the `BodyId`.
     pub fn alloc_body(&mut self, body: Body, span: Span) -> BodyId {
-        let id = self.bodies.insert(body);
+        let id = self.bodies.insert(Some(body));
         self.body_spans.insert(id, span);
         id
     }
 
-    /// Allocate an item-kind payload, returning the `ItemKindId`.
-    pub fn alloc_item_kind(&mut self, kind: ItemKind) -> ItemKindId {
-        self.item_kinds.insert(kind)
+    /// Look up an expression node by `ExprId`.
+    pub fn expr(&self, id: ExprId) -> Option<&Expr> {
+        self.exprs.get(id).and_then(|o| o.as_ref())
     }
 
-    /// Allocate a trait-item-kind payload, returning the `TraitItemKindId`.
-    pub fn alloc_trait_item_kind(&mut self, kind: TraitItemKind) -> TraitItemKindId {
-        self.trait_item_kinds.insert(kind)
+    /// Look up a mutable expression node by `ExprId`.
+    pub fn expr_mut(&mut self, id: ExprId) -> Option<&mut Expr> {
+        self.exprs.get_mut(id).and_then(|o| o.as_mut())
     }
 
-    /// Allocate an impl-item-kind payload, returning the `ImplItemKindId`.
-    pub fn alloc_impl_item_kind(&mut self, kind: ImplItemKind) -> ImplItemKindId {
-        self.impl_item_kinds.insert(kind)
+    /// Look up a pattern node by `PatId`.
+    pub fn pat(&self, id: PatId) -> Option<&Pat> {
+        self.pats.get(id).and_then(|o| o.as_ref())
     }
 
-    /// Allocate a foreign-item-kind payload, returning the `ForeignItemKindId`.
-    pub fn alloc_foreign_item_kind(&mut self, kind: ForeignItemKind) -> ForeignItemKindId {
-        self.foreign_item_kinds.insert(kind)
+    /// Look up a mutable pattern node by `PatId`.
+    pub fn pat_mut(&mut self, id: PatId) -> Option<&mut Pat> {
+        self.pats.get_mut(id).and_then(|o| o.as_mut())
+    }
+
+    /// Look up a statement node by `StmtId`.
+    pub fn stmt(&self, id: StmtId) -> Option<&Stmt> {
+        self.stmts.get(id).and_then(|o| o.as_ref())
+    }
+
+    /// Look up a mutable statement node by `StmtId`.
+    pub fn stmt_mut(&mut self, id: StmtId) -> Option<&mut Stmt> {
+        self.stmts.get_mut(id).and_then(|o| o.as_mut())
+    }
+
+    /// Look up a type syntax node by `SyntaxTyId`.
+    pub fn ty(&self, id: SyntaxTyId) -> Option<&Ty> {
+        self.tys.get(id).and_then(|o| o.as_ref())
+    }
+
+    /// Look up a mutable type syntax node by `SyntaxTyId`.
+    pub fn ty_mut(&mut self, id: SyntaxTyId) -> Option<&mut Ty> {
+        self.tys.get_mut(id).and_then(|o| o.as_mut())
+    }
+
+    /// Look up a body node by `BodyId`.
+    pub fn body(&self, id: BodyId) -> Option<&Body> {
+        self.bodies.get(id).and_then(|o| o.as_ref())
+    }
+
+    /// Look up a mutable body node by `BodyId`.
+    pub fn body_mut(&mut self, id: BodyId) -> Option<&mut Body> {
+        self.bodies.get_mut(id).and_then(|o| o.as_mut())
     }
 
     /// Look up the source span of an expression.
@@ -158,11 +175,11 @@ impl Crate {
     }
 
     /// Look up the source span of a type.
-    pub fn ty_span(&self, id: TyId) -> Span {
+    pub fn ty_span(&self, id: SyntaxTyId) -> Span {
         *self
             .ty_spans
             .get(id)
-            .expect("TyId should have an associated span")
+            .expect("SyntaxTyId should have an associated span")
     }
 
     /// Look up the source span of a body.
@@ -174,11 +191,12 @@ impl Crate {
     }
 }
 
-// Re-export `Body` and `Item` so that `crate_hir.rs` can reference them in the
+// Re-export `Body` and `Item` so that `crate_data.rs` can reference them in the
 // `Crate` struct above without needing an extra import everywhere.
 pub use crate::hir::body::Body;
 pub use crate::hir::expr::Expr;
 pub use crate::hir::pat::Pat;
 pub use crate::hir::ty::Ty;
 pub use crate::hir::core::Stmt;
+pub use crate::hir::core::Trait;
 pub use crate::hir::item::Item;

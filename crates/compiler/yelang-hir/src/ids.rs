@@ -12,10 +12,9 @@ new_key_type! {
     pub struct ExprId;
     pub struct PatId;
     pub struct StmtId;
-    pub struct TyId;
+    pub struct SyntaxTyId;
     pub struct BodyId;
-    pub struct ItemKindId;
-    pub struct TraitItemKindId;
-    pub struct ImplItemKindId;
-    pub struct ForeignItemKindId;
 }
+
+/// Items are keyed by their `DefId` from name resolution.
+pub type ItemId = DefId;

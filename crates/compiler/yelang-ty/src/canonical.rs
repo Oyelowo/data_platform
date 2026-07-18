@@ -6,7 +6,8 @@
  */
 
 use crate::list::List;
-use crate::ty::{PlaceholderType, UniverseIndex};
+use crate::primitive::{FloatTy, IntTy};
+use crate::ty::{ConstId, PlaceholderType, TyId, UniverseIndex};
 
 /// A canonicalized value: all inference vars are bound.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -83,6 +84,23 @@ pub type CanonicalResponse = Canonical<Response>;
 pub struct Response {
     pub certainty: Certainty,
     pub goals: List<Canonical<crate::predicate::Predicate>>,
+    /// Inferred values for the canonical variables of the original goal.
+    pub var_values: List<CanonicalVarValue>,
+}
+
+/// The value of a canonical variable in a response.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum CanonicalVarValue {
+    /// The solver learned nothing about this variable.
+    Unknown,
+    /// The variable resolved to a concrete type.
+    Ty(TyId),
+    /// The variable resolved to a concrete const.
+    Const(ConstId),
+    /// The variable resolved to a concrete integer type.
+    Int(IntTy),
+    /// The variable resolved to a concrete float type.
+    Float(FloatTy),
 }
 
 #[cfg(test)]

@@ -3,32 +3,21 @@
 use yelang_ast::Ident;
 use yelang_lexer::Span;
 
-use crate::crate_data::Crate;
 use crate::hir::core::{
     EnumDef, FnSig, Generics, Mutability, UseKind, UsePath, VariantData,
     Visibility,
 };
-use crate::ids::{BodyId, DefId, ItemKindId, TyId};
+use crate::ids::{BodyId, DefId, SyntaxTyId};
 
 /// An item in the HIR.
 #[derive(Debug, Clone)]
 pub struct Item {
     pub def_id: DefId,
     pub ident: Ident,
-    pub kind: ItemKindId,
+    pub kind: ItemKind,
     pub vis: Visibility,
     pub attrs: Vec<crate::hir::core::Attribute>,
     pub span: Span,
-}
-
-impl Item {
-    /// Resolve the item's payload from the crate arena.
-    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a ItemKind {
-        krate
-            .item_kinds
-            .get(self.kind)
-            .expect("ItemKindId should be allocated")
-    }
 }
 
 /// Kinds of items.
@@ -57,17 +46,17 @@ pub enum ItemKind {
     Impl {
         items: Vec<crate::hir::core::ImplItem>,
         generics: Generics,
-        self_ty: TyId,
+        self_ty: SyntaxTyId,
         of_trait: Option<crate::hir::core::TraitRef>,
         polarity: crate::hir::core::ImplPolarity,
     },
     /// Type alias.
-    TyAlias { ty: TyId, generics: Generics },
+    TyAlias { ty: SyntaxTyId, generics: Generics },
     /// Constant item.
-    Const { ty: TyId, body: BodyId },
+    Const { ty: SyntaxTyId, body: BodyId },
     /// Static item.
     Static {
-        ty: TyId,
+        ty: SyntaxTyId,
         mutability: Mutability,
         body: BodyId,
     },

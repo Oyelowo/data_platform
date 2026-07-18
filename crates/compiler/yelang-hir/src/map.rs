@@ -5,7 +5,7 @@ use crate::hir::core::{Expr, Item, Stmt};
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::Ty;
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, TyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
 
 /// Provides O(1) lookup from HIR ids to HIR nodes.
 pub struct Map<'hir> {
@@ -24,26 +24,26 @@ impl<'hir> Map<'hir> {
 
     /// Lookup a body by `BodyId`.
     pub fn body(&self, body_id: BodyId) -> Option<&Body> {
-        self.crate_hir.bodies.get(body_id)
+        self.crate_hir.body(body_id)
     }
 
     /// Lookup an expression by `ExprId`.
     pub fn expr(&self, expr_id: ExprId) -> Option<&Expr> {
-        self.crate_hir.exprs.get(expr_id)
+        self.crate_hir.expr(expr_id)
     }
 
-    /// Lookup a type by `TyId`.
-    pub fn ty(&self, ty_id: TyId) -> Option<&Ty> {
-        self.crate_hir.tys.get(ty_id)
+    /// Lookup a type by `SyntaxTyId`.
+    pub fn ty(&self, ty_id: SyntaxTyId) -> Option<&Ty> {
+        self.crate_hir.ty(ty_id)
     }
 
     /// Lookup a pattern by `PatId`.
     pub fn pat(&self, pat_id: PatId) -> Option<&Pat> {
-        self.crate_hir.pats.get(pat_id)
+        self.crate_hir.pat(pat_id)
     }
 
     /// Lookup a statement by `StmtId`.
     pub fn stmt(&self, stmt_id: StmtId) -> Option<&Stmt> {
-        self.crate_hir.stmts.get(stmt_id)
+        self.crate_hir.stmt(stmt_id)
     }
 }

@@ -60,7 +60,7 @@ fn validate_catches_unallocated_expr_id() {
 
     // Replace the body value with a synthetic, unallocated ExprId.
     let body_id = crate_hir.bodies.iter().next().map(|(id, _)| id).unwrap();
-    crate_hir.bodies.get_mut(body_id).unwrap().value = crate::ids::ExprId::default();
+    crate_hir.body_mut(body_id).unwrap().value = crate::ids::ExprId::default();
 
     let errors = validate_hir(&crate_hir);
     assert!(!errors.is_empty(), "expected a validation error for unallocated ExprId");

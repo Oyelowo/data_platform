@@ -4,7 +4,7 @@ use yelang_ast::{AssignOpKind, Ident, Label};
 
 use crate::hir::core::{Arm, Block, CaptureClause, FieldExpr, Lit};
 use crate::hir::body::Param;
-use crate::ids::{BodyId, ExprId, PatId, TyId};
+use crate::ids::{BodyId, ExprId, PatId, SyntaxTyId};
 use crate::res::Res;
 
 /// Kind of generator expression.
@@ -88,7 +88,7 @@ pub enum Expr {
     /// Array literal.
     Array { exprs: Vec<ExprId> },
     /// Type cast.
-    Cast { expr: ExprId, ty: TyId },
+    Cast { expr: ExprId, ty: SyntaxTyId },
     /// Let expression (used inside `if let`).
     Let { pat: PatId, expr: ExprId },
     /// Compound assignment: `a += b`.
@@ -100,7 +100,7 @@ pub enum Expr {
     /// Object literal: `{ x: 1, y: 2 }`.
     Object { fields: Vec<FieldExpr> },
     /// `expr is Type` type test.
-    IsType { expr: ExprId, ty: TyId },
+    IsType { expr: ExprId, ty: SyntaxTyId },
     /// `expr?` — try operator (desugared, but kept as a node for clarity).
     Try { expr: ExprId },
     /// `expr.await`.
@@ -110,7 +110,7 @@ pub enum Expr {
     /// `gen { ... }` or `gen async { ... }`.
     Gen { kind: GeneratorKind, body: BodyId },
     /// Type ascription: `expr: Type`.
-    TypeAscription { expr: ExprId, ty: TyId },
+    TypeAscription { expr: ExprId, ty: SyntaxTyId },
     /// Document/JSON access: `doc.name` or `doc["name"]`.
     DocumentAccess { base: ExprId, projection: Vec<DocumentProjection> },
     /// List/set/dict comprehension.

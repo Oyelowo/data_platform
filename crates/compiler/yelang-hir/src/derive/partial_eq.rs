@@ -10,7 +10,7 @@ use crate::derive::helpers::{
     self_expr, self_param, struct_pat, tuple_struct_pat, wildcard_false_arm,
 };
 use crate::hir::core::{Arm, Expr, ImplItem, Item};
-use crate::ids::{ExprId, PatId, TyId};
+use crate::ids::{ExprId, PatId, SyntaxTyId};
 use crate::hir::adt::VariantData;
 
 /// Expand `#[derive(PartialEq)]` for a struct or enum.
@@ -53,7 +53,7 @@ fn eq_method(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
-    ref_self_ty: TyId,
+    ref_self_ty: SyntaxTyId,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let other_param = other_param(ctx, self_def_id);

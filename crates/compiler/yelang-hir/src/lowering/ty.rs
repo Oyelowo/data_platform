@@ -4,7 +4,7 @@ use yelang_ast::Type as AstType;
 
 use crate::hir::core::TraitBound;
 use crate::hir::ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};
-use crate::ids::TyId;
+use crate::ids::SyntaxTyId;
 use crate::lowering::LoweringContext;
 
 /// Extract and lower generic arguments from an AST path.
@@ -58,8 +58,8 @@ pub(crate) fn lower_const_expr(
 }
 
 /// Lower an AST type to a HIR type, allocate it in the crate arena, and return
-/// its `TyId`.
-pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> TyId {
+/// its `SyntaxTyId`.
+pub fn lower_ty(ctx: &mut LoweringContext, ty: &AstType) -> SyntaxTyId {
     let span = ty.span;
     let kind = match &ty.kind {
         yelang_ast::TypeKind::Named(path) => {
@@ -179,6 +179,7 @@ pub(crate) fn lower_trait_bound(
 ) -> TraitBound {
     TraitBound {
         path: crate::lowering::expr::resolve_ast_path(ctx, &bound.path),
+        args: lower_generic_args_from_path(ctx, &bound.path),
         span: bound.span,
     }
 }

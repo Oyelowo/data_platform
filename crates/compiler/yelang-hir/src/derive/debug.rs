@@ -20,7 +20,7 @@ use crate::derive::helpers::{
     self_expr, self_param, string_expr, struct_pat, tuple_field_expr, tuple_struct_pat,
 };
 use crate::hir::core::{Arm, Expr, ImplItem, Item};
-use crate::ids::{ExprId, PatId, TyId};
+use crate::ids::{ExprId, PatId, SyntaxTyId};
 use crate::hir::adt::VariantData;
 
 /// Expand `#[derive(Debug)]` for a struct or enum.
@@ -112,9 +112,9 @@ fn fmt_method(
     ctx: &mut DeriveContext<'_, '_>,
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
-    ref_self_ty: TyId,
-    ref_formatter_ty: TyId,
-    result_ty: TyId,
+    ref_self_ty: SyntaxTyId,
+    ref_formatter_ty: SyntaxTyId,
+    result_ty: SyntaxTyId,
     result_def_id: DefId,
     formatter_def_id: DefId,
 ) -> ImplItem {

@@ -13,7 +13,7 @@ use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
 use yelang_hir::hir::body::{Body, Param};
 use yelang_hir::hir::pat::{BindingMode, Pat};
 use yelang_hir::hir::ty::Ty as HirTy;
-use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, TyId as HirTyId};
+use yelang_hir::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId as HirTyId};
 use yelang_hir::res::Res;
 use yelang_interner::Symbol;
 use yelang_lexer::{Position, Span};
@@ -1575,27 +1575,26 @@ fn build_generic_identity_fn(hir: &mut HirCrate, fn_def_id: DefId, param_def_id:
         param_expr,
     );
 
-    let item_kind = hir.alloc_item_kind(yelang_hir::hir::item::ItemKind::Fn {
-        sig,
-        body: body_id,
-        generics: yelang_hir::hir::core::Generics {
-            params: vec![yelang_hir::hir::core::GenericParam::Type {
-                def_id: param_def_id,
-                name: yelang_ast::Ident::new(symbol(1), dummy_span()),
-                bounds: vec![],
-                default: None,
-                span: dummy_span(),
-            }],
-            where_clause: None,
-            span: dummy_span(),
-        },
-    });
     hir.items.insert(
         fn_def_id,
         Some(yelang_hir::hir::item::Item {
             def_id: fn_def_id,
             ident: yelang_ast::Ident::new(symbol(2), dummy_span()),
-            kind: item_kind,
+            kind: yelang_hir::hir::item::ItemKind::Fn {
+                sig,
+                body: body_id,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![yelang_hir::hir::core::GenericParam::Type {
+                        def_id: param_def_id,
+                        name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+                        bounds: vec![],
+                        default: None,
+                        span: dummy_span(),
+                    }],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
             vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
@@ -1663,6 +1662,7 @@ fn builtin_trait_obligation_is_proven() {
     );
     let clone_bound = yelang_hir::hir::core::TraitBound {
         path: Res::Def { def_id: trait_def_id },
+        args: vec![],
         span: dummy_span(),
     };
     let sig = yelang_hir::hir::core::FnSig {
@@ -1685,27 +1685,26 @@ fn builtin_trait_obligation_is_proven() {
         }],
         param_expr,
     );
-    let item_kind = hir.alloc_item_kind(yelang_hir::hir::item::ItemKind::Fn {
-        sig,
-        body: body_id,
-        generics: yelang_hir::hir::core::Generics {
-            params: vec![yelang_hir::hir::core::GenericParam::Type {
-                def_id: param_def_id,
-                name: yelang_ast::Ident::new(symbol(1), dummy_span()),
-                bounds: vec![clone_bound],
-                default: None,
-                span: dummy_span(),
-            }],
-            where_clause: None,
-            span: dummy_span(),
-        },
-    });
     hir.items.insert(
         fn_def_id,
         Some(yelang_hir::hir::item::Item {
             def_id: fn_def_id,
             ident: yelang_ast::Ident::new(symbol(2), dummy_span()),
-            kind: item_kind,
+            kind: yelang_hir::hir::item::ItemKind::Fn {
+                sig,
+                body: body_id,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![yelang_hir::hir::core::GenericParam::Type {
+                        def_id: param_def_id,
+                        name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+                        bounds: vec![clone_bound],
+                        default: None,
+                        span: dummy_span(),
+                    }],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
             vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
@@ -1713,21 +1712,20 @@ fn builtin_trait_obligation_is_proven() {
     );
 
     // Trait definition for Clone.
-    let trait_kind = hir.alloc_item_kind(yelang_hir::hir::item::ItemKind::Trait {
-        items: vec![],
-        generics: yelang_hir::hir::core::Generics {
-            params: vec![],
-            where_clause: None,
-            span: dummy_span(),
-        },
-        super_traits: vec![],
-    });
     hir.items.insert(
         trait_def_id,
         Some(yelang_hir::hir::item::Item {
             def_id: trait_def_id,
             ident: yelang_ast::Ident::new(symbol(5), dummy_span()),
-            kind: trait_kind,
+            kind: yelang_hir::hir::item::ItemKind::Trait {
+                items: vec![],
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+                super_traits: vec![],
+            },
             vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
@@ -1786,6 +1784,255 @@ fn builtin_trait_obligation_is_proven() {
 }
 
 #[test]
+fn where_clause_with_generic_args_is_proven_via_param_env() {
+    let mut hir = hir_crate();
+
+    let bar_trait = def_id(10);
+    let needs_bar_fn = def_id(20);
+    let foo_fn = def_id(30);
+    let t_param = def_id(40);
+    let u_param = def_id(41);
+    let v_param = def_id(50);
+    let w_param = def_id(51);
+
+    // `trait Bar<T>`
+    hir.items.insert(
+        bar_trait,
+        Some(yelang_hir::hir::item::Item {
+            def_id: bar_trait,
+            ident: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Trait {
+                items: vec![],
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![yelang_hir::hir::core::GenericParam::Type {
+                        def_id: t_param,
+                        name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+                        bounds: vec![],
+                        default: None,
+                        span: dummy_span(),
+                    }],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+                super_traits: vec![],
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+    hir.traits.insert(
+        bar_trait,
+        Some(yelang_hir::hir::core::Trait {
+            name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            generics: yelang_hir::hir::core::Generics {
+                params: vec![yelang_hir::hir::core::GenericParam::Type {
+                    def_id: t_param,
+                    name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+                    bounds: vec![],
+                    default: None,
+                    span: dummy_span(),
+                }],
+                where_clause: None,
+                span: dummy_span(),
+            },
+            super_traits: vec![],
+            items: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    let t_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: t_param },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let u_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: u_param },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let v_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: v_param },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+    let w_ty = hir.alloc_ty(
+        HirTy::Path {
+            res: Res::Def { def_id: w_param },
+            args: vec![],
+        },
+        dummy_span(),
+    );
+
+    let bar_bound_for_u = yelang_hir::hir::core::TraitBound {
+        path: Res::Def { def_id: bar_trait },
+        args: vec![yelang_hir::hir::ty::GenericArg::Type(u_ty)],
+        span: dummy_span(),
+    };
+    let bar_bound_for_w = yelang_hir::hir::core::TraitBound {
+        path: Res::Def { def_id: bar_trait },
+        args: vec![yelang_hir::hir::ty::GenericArg::Type(w_ty)],
+        span: dummy_span(),
+    };
+
+    // `fn needs_bar<V, W>(v: V) -> W where V: Bar<W>`
+    let needs_bar_sig = yelang_hir::hir::core::FnSig {
+        inputs: vec![v_ty],
+        output: w_ty,
+        is_async: false,
+        is_const: false,
+        is_variadic: false,
+        abi: None,
+        bound_vars: vec![],
+    };
+    let needs_bar_value = expr(&mut hir, Expr::Err);
+    let needs_bar_body = body(&mut hir, vec![], needs_bar_value);
+    hir.items.insert(
+        needs_bar_fn,
+        Some(yelang_hir::hir::item::Item {
+            def_id: needs_bar_fn,
+            ident: yelang_ast::Ident::new(symbol(2), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Fn {
+                sig: needs_bar_sig,
+                body: needs_bar_body,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: v_param,
+                            name: yelang_ast::Ident::new(symbol(3), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: w_param,
+                            name: yelang_ast::Ident::new(symbol(4), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                    ],
+                    where_clause: Some(yelang_hir::hir::core::WhereClause {
+                        predicates: vec![yelang_hir::hir::core::WherePredicate::TraitBound {
+                            ty: v_ty,
+                            bounds: vec![bar_bound_for_w],
+                        }],
+                        span: dummy_span(),
+                    }),
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    // `fn foo<T, U>(x: T) -> U where T: Bar<U> { needs_bar(x) }`
+    let x_pat = pat(
+        &mut hir,
+        Pat::Binding {
+            mode: BindingMode::ByValue,
+            name: symbol(5),
+            subpat: None,
+        },
+    );
+    let x_expr = expr(&mut hir, Expr::Path { res: local_res(x_pat) });
+    let needs_bar_path = expr(&mut hir, Expr::Path { res: def_res(20) });
+    let call_expr = expr(
+        &mut hir,
+        Expr::Call {
+            func: needs_bar_path,
+            args: vec![x_expr],
+        },
+    );
+    let foo_sig = yelang_hir::hir::core::FnSig {
+        inputs: vec![t_ty],
+        output: u_ty,
+        is_async: false,
+        is_const: false,
+        is_variadic: false,
+        abi: None,
+        bound_vars: vec![],
+    };
+    let foo_body = body(
+        &mut hir,
+        vec![yelang_hir::hir::body::Param {
+            pat: x_pat,
+            ty: t_ty,
+            span: dummy_span(),
+        }],
+        call_expr,
+    );
+    hir.items.insert(
+        foo_fn,
+        Some(yelang_hir::hir::item::Item {
+            def_id: foo_fn,
+            ident: yelang_ast::Ident::new(symbol(6), dummy_span()),
+            kind: yelang_hir::hir::item::ItemKind::Fn {
+                sig: foo_sig,
+                body: foo_body,
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: t_param,
+                            name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: u_param,
+                            name: yelang_ast::Ident::new(symbol(2), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                    ],
+                    where_clause: Some(yelang_hir::hir::core::WhereClause {
+                        predicates: vec![yelang_hir::hir::core::WherePredicate::TraitBound {
+                            ty: t_ty,
+                            bounds: vec![bar_bound_for_u],
+                        }],
+                        span: dummy_span(),
+                    }),
+                    span: dummy_span(),
+                },
+            },
+            vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
+            attrs: vec![],
+            span: dummy_span(),
+        }),
+    );
+
+    let mut tcx = TyCtxt::new(hir);
+    collect_crate_types(&mut tcx);
+    tcx.populate_solver_caches();
+
+    let interner = tcx.interner();
+    let return_ty = interner.mk_ty(Ty::Param(yelang_ty::ty::ParamTy {
+        index: 1,
+        name: symbol(2),
+    }));
+    let mut fcx = FnCtxt::new(&tcx, foo_fn, return_ty);
+    check_body(&mut fcx, foo_body);
+
+    let unproven = fcx.prove_obligations();
+    assert!(
+        unproven.is_empty(),
+        "expected where-clause obligation with generic args to be proven via param-env, got {:?}",
+        unproven
+    );
+}
+
+#[test]
 fn identity_args_uses_correct_param_indices() {
     let mut hir = hir_crate();
     let def_id_t = def_id(3);
@@ -1814,35 +2061,34 @@ fn identity_args_uses_correct_param_indices() {
         vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
         attrs: vec![],
     };
-    let item_kind = hir.alloc_item_kind(yelang_hir::hir::item::ItemKind::Struct {
-        data: yelang_hir::hir::adt::VariantData::Struct { fields: vec![field] },
-        generics: yelang_hir::hir::core::Generics {
-            params: vec![
-                yelang_hir::hir::core::GenericParam::Type {
-                    def_id: def_id_t,
-                    name: yelang_ast::Ident::new(symbol(1), dummy_span()),
-                    bounds: vec![],
-                    default: None,
-                    span: dummy_span(),
-                },
-                yelang_hir::hir::core::GenericParam::Type {
-                    def_id: def_id_u,
-                    name: yelang_ast::Ident::new(symbol(2), dummy_span()),
-                    bounds: vec![],
-                    default: None,
-                    span: dummy_span(),
-                },
-            ],
-            where_clause: None,
-            span: dummy_span(),
-        },
-    });
     hir.items.insert(
         struct_def_id,
         Some(yelang_hir::hir::item::Item {
             def_id: struct_def_id,
             ident: yelang_ast::Ident::new(symbol(3), dummy_span()),
-            kind: item_kind,
+            kind: yelang_hir::hir::item::ItemKind::Struct {
+                data: yelang_hir::hir::adt::VariantData::Struct { fields: vec![field] },
+                generics: yelang_hir::hir::core::Generics {
+                    params: vec![
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: def_id_t,
+                            name: yelang_ast::Ident::new(symbol(1), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                        yelang_hir::hir::core::GenericParam::Type {
+                            def_id: def_id_u,
+                            name: yelang_ast::Ident::new(symbol(2), dummy_span()),
+                            bounds: vec![],
+                            default: None,
+                            span: dummy_span(),
+                        },
+                    ],
+                    where_clause: None,
+                    span: dummy_span(),
+                },
+            },
             vis: yelang_hir::hir::core::Visibility::Public(dummy_span()),
             attrs: vec![],
             span: dummy_span(),
@@ -1867,4 +2113,56 @@ fn identity_args_uses_correct_param_indices() {
         }
         _ => panic!("expected adt"),
     }
+}
+
+#[test]
+fn trait_solver_writeback_resolves_infer_var() {
+    // Set up a trait `Foo` with a single impl `impl Foo for i32`. An obligation
+    // `?T: Foo` should resolve `?T` to `i32` via solver substitution writeback.
+    let hir = hir_crate();
+    let mut tcx = TyCtxt::new(hir);
+
+    let trait_def_id = def_id(10);
+    let _impl_def_id = def_id(11);
+    let impl_item_def_id = def_id(12);
+    let i32_ty = tcx.interner().mk_ty(Ty::Int(IntTy::I32));
+
+    // Trait definition.
+    tcx.trait_defs.insert(
+        trait_def_id,
+        crate::tcx::TraitDefData {
+            def_id: trait_def_id,
+            ident: yelang_ast::Ident::new(symbol(1), dummy_span()),
+            generics: crate::tcx::GenericsData::default(),
+            supertraits: Vec::new(),
+            items: Vec::new(),
+        },
+    );
+
+    // Impl block `impl Foo for i32`.
+    let impl_id = tcx.impl_defs.push(crate::tcx::ImplDefData {
+        id: yelang_arena::Id::new(1),
+        def_id: impl_item_def_id,
+        trait_ref: Some(yelang_ty::predicate::TraitRef {
+            def_id: trait_def_id,
+            args: tcx.interner().mk_generic_args(&[yelang_ty::generic::GenericArg::Type(i32_ty)]),
+        }),
+        self_ty: i32_ty,
+        generics: crate::tcx::GenericsData::default(),
+        items: Vec::new(),
+    });
+    tcx.trait_impl_index.insert(trait_def_id, vec![impl_id]);
+    tcx.populate_solver_caches();
+
+    // Create a body and an inference variable, then emit `?T: Foo`.
+    let mut fcx = mk_fcx(&tcx);
+    let ty_var = fcx.new_ty_var();
+    fcx.emit_trait_obligation(ty_var, trait_def_id);
+
+    let unproven = fcx.prove_obligations();
+    assert!(unproven.is_empty(), "expected obligation to be proven, got {:?}", unproven);
+
+    // The inference variable should now be resolved to `i32`.
+    let resolved = fcx.resolve_ty(ty_var);
+    assert_eq!(resolved, i32_ty);
 }

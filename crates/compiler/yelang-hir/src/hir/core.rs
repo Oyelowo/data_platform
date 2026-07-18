@@ -13,8 +13,7 @@ pub use crate::hir::pat::Pat;
 pub use crate::hir::adt::{FieldDef, StructField, VariantData};
 pub use crate::hir::ty::Ty;
 
-use crate::crate_data::Crate;
-use crate::ids::{BodyId, DefId, ExprId, ForeignItemKindId, ImplItemKindId, PatId, StmtId, TraitItemKindId, TyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
 use crate::res::Res;
 
 /// Re-export commonly-used AST types that contain no unresolved names.
@@ -42,7 +41,7 @@ pub enum Stmt {
     /// `let` binding.
     Let {
         pat: PatId,
-        ty: Option<TyId>,
+        ty: Option<SyntaxTyId>,
         init: Option<ExprId>,
     },
     /// Nested item declaration.
@@ -84,8 +83,8 @@ pub enum CaptureClause {
 /// Function signature (shared by `fn` items and `fn` pointer types).
 #[derive(Debug, Clone)]
 pub struct FnSig {
-    pub inputs: Vec<TyId>,
-    pub output: TyId,
+    pub inputs: Vec<SyntaxTyId>,
+    pub output: SyntaxTyId,
     pub is_async: bool,
     pub is_const: bool,
     pub is_variadic: bool,
@@ -115,13 +114,13 @@ pub enum GenericParam {
         def_id: yelang_arena::DefId,
         name: Ident,
         bounds: Vec<TraitBound>,
-        default: Option<TyId>,
+        default: Option<SyntaxTyId>,
         span: Span,
     },
     Const {
         def_id: yelang_arena::DefId,
         name: Ident,
-        ty: TyId,
+        ty: SyntaxTyId,
         default: Option<ExprId>,
         span: Span,
     },
@@ -139,7 +138,7 @@ pub enum BinderParam {
     },
     Const {
         name: Ident,
-        ty: TyId,
+        ty: SyntaxTyId,
         span: Span,
     },
 }
@@ -148,6 +147,8 @@ pub enum BinderParam {
 #[derive(Debug, Clone)]
 pub struct TraitBound {
     pub path: Res,
+    /// Generic arguments on the trait path, e.g. `U` in `T: Foo<U>`.
+    pub args: Vec<crate::hir::ty::GenericArg>,
     pub span: Span,
 }
 
@@ -161,8 +162,8 @@ pub struct WhereClause {
 /// A single predicate in a `where` clause.
 #[derive(Debug, Clone)]
 pub enum WherePredicate {
-    TraitBound { ty: TyId, bounds: Vec<TraitBound> },
-    TypeEq { lhs: TyId, rhs: TyId },
+    TraitBound { ty: SyntaxTyId, bounds: Vec<TraitBound> },
+    TypeEq { lhs: SyntaxTyId, rhs: SyntaxTyId },
 }
 
 // ---------------------------------------------------------------------------
@@ -202,19 +203,9 @@ pub struct Trait {
 pub struct TraitItem {
     pub def_id: DefId,
     pub ident: Ident,
-    pub kind: TraitItemKindId,
+    pub kind: TraitItemKind,
     pub attrs: Vec<Attribute>,
     pub span: Span,
-}
-
-impl TraitItem {
-    /// Resolve the trait item's payload from the crate arena.
-    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a TraitItemKind {
-        krate
-            .trait_item_kinds
-            .get(self.kind)
-            .expect("TraitItemKindId should be allocated")
-    }
 }
 
 /// Kinds of trait items.
@@ -225,12 +216,12 @@ pub enum TraitItemKind {
         default: Option<BodyId>,
     },
     Const {
-        ty: TyId,
+        ty: SyntaxTyId,
         body: Option<BodyId>,
     },
     Type {
         bounds: Vec<TraitBound>,
-        default: Option<TyId>,
+        default: Option<SyntaxTyId>,
     },
 }
 
@@ -239,7 +230,7 @@ pub enum TraitItemKind {
 pub struct Impl {
     pub def_id: DefId,
     pub generics: Generics,
-    pub self_ty: TyId,
+    pub self_ty: SyntaxTyId,
     pub of_trait: Option<TraitRef>,
     pub items: Vec<ImplItem>,
     pub polarity: ImplPolarity,
@@ -260,28 +251,18 @@ pub enum ImplPolarity {
 pub struct ImplItem {
     pub def_id: DefId,
     pub ident: Ident,
-    pub kind: ImplItemKindId,
+    pub kind: ImplItemKind,
     pub attrs: Vec<Attribute>,
     pub span: Span,
     pub defaultness: Defaultness,
-}
-
-impl ImplItem {
-    /// Resolve the impl item's payload from the crate arena.
-    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a ImplItemKind {
-        krate
-            .impl_item_kinds
-            .get(self.kind)
-            .expect("ImplItemKindId should be allocated")
-    }
 }
 
 /// Kinds of impl items.
 #[derive(Debug, Clone)]
 pub enum ImplItemKind {
     Fn { sig: FnSig, body: BodyId },
-    Const { ty: TyId, body: BodyId },
-    Type { ty: TyId },
+    Const { ty: SyntaxTyId, body: BodyId },
+    Type { ty: SyntaxTyId },
 }
 
 /// Reference to a trait in an `impl Trait for Type`.
@@ -312,25 +293,15 @@ pub enum UseKind {
 #[derive(Debug, Clone)]
 pub struct ForeignItem {
     pub ident: Ident,
-    pub kind: ForeignItemKindId,
+    pub kind: ForeignItemKind,
     pub span: Span,
-}
-
-impl ForeignItem {
-    /// Resolve the foreign item's payload from the crate arena.
-    pub fn kind<'a>(&self, krate: &'a Crate) -> &'a ForeignItemKind {
-        krate
-            .foreign_item_kinds
-            .get(self.kind)
-            .expect("ForeignItemKindId should be allocated")
-    }
 }
 
 /// Kinds of foreign items.
 #[derive(Debug, Clone)]
 pub enum ForeignItemKind {
     Fn { sig: FnSig },
-    Static { ty: TyId, mutability: Mutability },
+    Static { ty: SyntaxTyId, mutability: Mutability },
     Type,
 }
 

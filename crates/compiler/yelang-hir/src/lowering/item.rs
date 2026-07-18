@@ -9,7 +9,7 @@ use crate::hir::core::{
     EnumDef, FieldDef, FnSig, GenericParam, Generics, ImplPolarity, Item, ItemKind, StructField,
     UseKind, UsePath, VariantData, VariantDef, Visibility, WhereClause, WherePredicate,
 };
-use crate::ids::{DefId, TyId};
+use crate::ids::{DefId, SyntaxTyId};
 use crate::lowering::LoweringContext;
 
 /// Lower a single AST item into HIR.
@@ -34,7 +34,6 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
         AstItemKind::Module(m) => lower_module_item(ctx, m, def_id),
         AstItemKind::Use(u) => lower_use_item(ctx, u, def_id),
     };
-    let kind_id = ctx.crate_hir.alloc_item_kind(kind);
 
     let hir_item = Item {
         def_id,
@@ -52,7 +51,7 @@ pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
                 yelang_ast::Ident::new(ctx.interner.get_or_intern("<item>"), item.span)
             }
         },
-        kind: kind_id,
+        kind,
         vis: item.visibility.clone(),
         attrs: item.attributes.clone(),
         span: item.span,
@@ -80,7 +79,7 @@ fn lower_fn_item(ctx: &mut LoweringContext, f: &AstFnDef, _def_id: DefId) -> Ite
 }
 
 fn lower_fn_sig(ctx: &mut LoweringContext, sig: &yelang_ast::FnSig, is_const: bool) -> FnSig {
-    let inputs: Vec<TyId> = sig
+    let inputs: Vec<SyntaxTyId> = sig
         .params
         .iter()
         .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
@@ -286,7 +285,7 @@ fn lower_trait_item(
             crate::hir::core::TraitItem {
                 def_id,
                 ident,
-                kind: ctx.crate_hir.alloc_trait_item_kind(kind),
+                kind,
                 attrs: item.attributes.clone(),
                 span: item.span,
             }
@@ -332,8 +331,7 @@ fn lower_impl_item(
     let self_ty = crate::lowering::ty::lower_ty(ctx, &i.self_ty);
     let self_ty_def_id = ctx
         .crate_hir
-        .tys
-        .get(self_ty)
+        .ty(self_ty)
         .and_then(|ty| match ty {
             crate::hir::ty::Ty::Path {
                 res: crate::res::Res::Def { def_id },
@@ -389,7 +387,7 @@ fn lower_impl_item(
             crate::hir::core::ImplItem {
                 def_id,
                 ident,
-                kind: ctx.crate_hir.alloc_impl_item_kind(kind),
+                kind,
                 attrs: item.attributes.clone(),
                 span: item.span,
                 defaultness: match item.defaultness {

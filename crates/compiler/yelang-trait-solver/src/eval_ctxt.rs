@@ -14,14 +14,16 @@
  * - Candidates are evaluated in isolated `InferCtxt::probe` snapshots.
  */
 
-use yelang_infer::{InferCtxt, TypeVarValue};
-use yelang_ty::canonical::{Canonical, Certainty, NoSolution, Response};
+use yelang_infer::{ConstVarValue, FloatVarValue, InferCtxt, IntVarValue, TypeVarValue};
+use yelang_ty::canonical::{Canonical, CanonicalVarKinds, CanonicalVarValue, Certainty, NoSolution, Response};
 use yelang_ty::generic::{GenericArg, Substitution};
 use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
 use yelang_ty::predicate::{ParamEnv, Predicate, TraitPredicate, TraitRef};
 use yelang_ty::subst::substitute;
 use yelang_ty::ty::{InferTy, ProjectionTy, Ty, TyId, UniverseIndex};
+
+use crate::instantiate::CanonicalVarMapping;
 
 use crate::builtin::{is_clone, is_copy, is_sized};
 use crate::candidate::{Candidate, CandidateSource};
@@ -52,6 +54,11 @@ pub struct EvalCtxt<'a, C: SolverCtxt> {
     available_depth: usize,
     /// Whether the result is tainted.
     tainted: Result<(), NoSolution>,
+    /// Canonical variables of the current goal.
+    canonical_variables: CanonicalVarKinds,
+    /// Mapping from canonical variable index to the solver inference variable
+    /// created for it.
+    canonical_var_map: Vec<CanonicalVarMapping>,
 }
 
 impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
@@ -69,6 +76,8 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
             max_universe: UniverseIndex(0),
             available_depth: max_depth,
             tainted: Ok(()),
+            canonical_variables: List::empty(),
+            canonical_var_map: Vec::new(),
         }
     }
 
@@ -91,33 +100,53 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         &mut self.infcx
     }
 
+    /// The maximum universe index visible to the solver.
+    pub fn max_universe(&self) -> UniverseIndex {
+        self.max_universe
+    }
+
     // -----------------------------------------------------------------------
     // Core recursive loop
     // -----------------------------------------------------------------------
 
     /// Evaluate a canonical goal.
-    fn evaluate_canonical_goal(
+    pub fn evaluate_canonical_goal(
         &mut self,
         canonical_goal: CanonicalGoal,
     ) -> SolverResult {
+        // Set up this goal's canonical-variable context. This must happen before
+        // cycle handling so that `make_response` can populate `var_values` for
+        // the current goal.
+        let prev_variables = self.canonical_variables;
+        let prev_var_map = std::mem::take(&mut self.canonical_var_map);
+        let (instantiated_goal, var_map) =
+            crate::instantiate::instantiate_with_mapping(canonical_goal, self.interner, &mut self.infcx);
+        self.canonical_variables = canonical_goal.variables;
+        self.canonical_var_map = var_map;
+
         // 1. Check the cache, respecting the remaining depth budget.
         if let Some(entry) = self
             .search_graph
             .lookup_cache(&canonical_goal, self.available_depth)
         {
+            self.canonical_variables = prev_variables;
+            self.canonical_var_map = prev_var_map;
             return Ok(entry.result.clone());
         }
 
         // 2. Check for cycles.
         if let Some(stack_index) = self.search_graph.is_in_stack(&canonical_goal) {
-            return self.handle_cycle(stack_index, canonical_goal);
+            let result = self.handle_cycle(stack_index, canonical_goal);
+            self.canonical_variables = prev_variables;
+            self.canonical_var_map = prev_var_map;
+            return result;
         }
 
         // 3. Push onto stack and evaluate.
         self.search_graph.push(canonical_goal, self.available_depth);
 
         let snapshot = self.infcx.snapshot();
-        let mut result = self.compute_goal(canonical_goal);
+        let mut result = self.compute_goal(instantiated_goal);
 
         // 4. Coinductive fixpoint iteration.
         let depth = self.search_graph.depth();
@@ -136,9 +165,9 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                 && iterations < MAX_FIXPOINT_ITERATIONS
             {
                 self.infcx.rollback_to(snapshot);
-                self.search_graph
-                    .set_provisional(depth - 1, self.make_response(Certainty::Yes));
-                result = self.compute_goal(canonical_goal);
+                let provisional = self.make_response(Certainty::Yes);
+                self.search_graph.set_provisional(depth - 1, provisional);
+                result = self.compute_goal(instantiated_goal);
                 iterations += 1;
             }
         }
@@ -157,6 +186,10 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                 self.available_depth,
             );
         }
+
+        // Restore the caller's canonical-variable context.
+        self.canonical_variables = prev_variables;
+        self.canonical_var_map = prev_var_map;
 
         result
     }
@@ -179,9 +212,9 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                     return Ok(provisional.clone());
                 }
             }
-            self.search_graph
-                .set_provisional(stack_index, self.make_response(Certainty::Yes));
-            Ok(self.make_response(Certainty::Yes))
+            let provisional = self.make_response(Certainty::Yes);
+            self.search_graph.set_provisional(stack_index, provisional.clone());
+            Ok(provisional)
         } else {
             Ok(self.make_response(Certainty::Maybe))
         }
@@ -205,16 +238,14 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     }
 
     /// The main solver logic: dispatch on predicate kind.
-    fn compute_goal(&mut self, goal: CanonicalGoal) -> SolverResult {
-        let instantiated = self.instantiate_canonical_goal(goal);
-
-        match instantiated.predicate {
-            Predicate::Trait(trait_pred) => self.compute_trait_goal(instantiated, trait_pred),
+    fn compute_goal(&mut self, goal: Goal) -> SolverResult {
+        match goal.predicate {
+            Predicate::Trait(trait_pred) => self.compute_trait_goal(goal, trait_pred),
             Predicate::Projection(proj_pred) => {
-                self.compute_projection_like_goal(instantiated.param_env, proj_pred.projection_ty, Some(proj_pred.term))
+                self.compute_projection_like_goal(goal.param_env, proj_pred.projection_ty, Some(proj_pred.term))
             }
             Predicate::NormalizesTo(norm_pred) => {
-                self.compute_projection_like_goal(instantiated.param_env, norm_pred.projection_ty, Some(norm_pred.term))
+                self.compute_projection_like_goal(goal.param_env, norm_pred.projection_ty, Some(norm_pred.term))
             }
             Predicate::WellFormed(wf_pred) => {
                 // TODO(Phase 5): structural well-formedness.
@@ -233,12 +264,6 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                 Ok(self.make_response(Certainty::Yes))
             }
         }
-    }
-
-    /// Instantiate a canonical goal, replacing bound variables with fresh
-    /// inference variables.
-    fn instantiate_canonical_goal(&mut self, goal: CanonicalGoal) -> Goal {
-        crate::instantiate::instantiate(goal, self.interner, &mut self.infcx)
     }
 
     // -----------------------------------------------------------------------
@@ -942,14 +967,55 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
     // -----------------------------------------------------------------------
 
     /// Create a response with the given certainty.
-    fn make_response(&self, certainty: Certainty) -> CanonicalResponse {
+    fn make_response(&mut self, certainty: Certainty) -> CanonicalResponse {
+        let var_values: Vec<CanonicalVarValue> = self
+            .canonical_variables
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let mapping = self.canonical_var_map.get(index).copied();
+                match mapping {
+                    Some(CanonicalVarMapping::Ty(vid)) => {
+                        let root = self.infcx.find_ty_var(vid);
+                        match self.infcx.probe_ty_var(root) {
+                            TypeVarValue::Known(ty) => CanonicalVarValue::Ty(*ty),
+                            TypeVarValue::Unknown => CanonicalVarValue::Unknown,
+                        }
+                    }
+                    Some(CanonicalVarMapping::Int(vid)) => {
+                        let root = self.infcx.find_int_var(vid);
+                        match self.infcx.probe_int_var(root) {
+                            IntVarValue::Known(it) => CanonicalVarValue::Int(*it),
+                            IntVarValue::Unknown => CanonicalVarValue::Unknown,
+                        }
+                    }
+                    Some(CanonicalVarMapping::Float(vid)) => {
+                        let root = self.infcx.find_float_var(vid);
+                        match self.infcx.probe_float_var(root) {
+                            FloatVarValue::Known(ft) => CanonicalVarValue::Float(*ft),
+                            FloatVarValue::Unknown => CanonicalVarValue::Unknown,
+                        }
+                    }
+                    Some(CanonicalVarMapping::Const(vid)) => {
+                        let root = self.infcx.find_const_var(vid);
+                        match self.infcx.probe_const_var(root) {
+                            ConstVarValue::Known(ct) => CanonicalVarValue::Const(*ct),
+                            ConstVarValue::Unknown => CanonicalVarValue::Unknown,
+                        }
+                    }
+                    Some(CanonicalVarMapping::Placeholder(_)) | None => CanonicalVarValue::Unknown,
+                }
+            })
+            .collect();
+
         Canonical::new(
             Response {
                 certainty,
                 goals: List::empty(),
+                var_values: self.interner.mk_canonical_var_values(&var_values),
             },
             self.max_universe,
-            List::empty(),
+            self.canonical_variables,
         )
     }
 }

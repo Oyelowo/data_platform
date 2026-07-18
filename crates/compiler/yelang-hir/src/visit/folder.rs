@@ -18,7 +18,7 @@ use crate::hir::core::{
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, TyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
 use crate::res::Res;
 
 /// Functional HIR -> HIR rewrite.
@@ -166,9 +166,10 @@ pub fn fold_trait_id(f: &mut impl Folder, crate_hir: &mut Crate, def_id: DefId) 
 /// `PartialEq`.
 pub fn fold_expr_id(f: &mut impl Folder, crate_hir: &mut Crate, expr_id: ExprId) -> ExprId {
     let expr = match crate_hir.exprs.get(expr_id) {
-        Some(expr) => expr.clone(),
+        Some(slot) => slot.clone(),
         None => return expr_id,
     };
+    let Some(expr) = expr else { return expr_id };
     let walked = walk_expr(f, crate_hir, expr);
     let folded = f.fold_expr(walked);
     let span = crate_hir.expr_span(expr_id);
@@ -178,9 +179,10 @@ pub fn fold_expr_id(f: &mut impl Folder, crate_hir: &mut Crate, expr_id: ExprId)
 /// Fold the statement at `stmt_id`, allocating the result in the arena.
 pub fn fold_stmt_id(f: &mut impl Folder, crate_hir: &mut Crate, stmt_id: StmtId) -> StmtId {
     let stmt = match crate_hir.stmts.get(stmt_id) {
-        Some(stmt) => stmt.clone(),
+        Some(slot) => slot.clone(),
         None => return stmt_id,
     };
+    let Some(stmt) = stmt else { return stmt_id };
     let walked = walk_stmt(f, crate_hir, stmt);
     let folded = f.fold_stmt(walked);
     let span = crate_hir.stmt_span(stmt_id);
@@ -188,11 +190,12 @@ pub fn fold_stmt_id(f: &mut impl Folder, crate_hir: &mut Crate, stmt_id: StmtId)
 }
 
 /// Fold the type at `ty_id`, allocating the result in the arena.
-pub fn fold_ty_id(f: &mut impl Folder, crate_hir: &mut Crate, ty_id: TyId) -> TyId {
+pub fn fold_ty_id(f: &mut impl Folder, crate_hir: &mut Crate, ty_id: SyntaxTyId) -> SyntaxTyId {
     let ty = match crate_hir.tys.get(ty_id) {
-        Some(ty) => ty.clone(),
+        Some(slot) => slot.clone(),
         None => return ty_id,
     };
+    let Some(ty) = ty else { return ty_id };
     let walked = walk_ty(f, crate_hir, ty);
     let folded = f.fold_ty(walked);
     let span = crate_hir.ty_span(ty_id);
@@ -202,9 +205,10 @@ pub fn fold_ty_id(f: &mut impl Folder, crate_hir: &mut Crate, ty_id: TyId) -> Ty
 /// Fold the pattern at `pat_id`, allocating the result in the arena.
 pub fn fold_pat_id(f: &mut impl Folder, crate_hir: &mut Crate, pat_id: PatId) -> PatId {
     let pat = match crate_hir.pats.get(pat_id) {
-        Some(pat) => pat.clone(),
+        Some(slot) => slot.clone(),
         None => return pat_id,
     };
+    let Some(pat) = pat else { return pat_id };
     let walked = walk_pat(f, crate_hir, pat);
     let folded = f.fold_pat(walked);
     let span = crate_hir.pat_span(pat_id);
@@ -214,9 +218,10 @@ pub fn fold_pat_id(f: &mut impl Folder, crate_hir: &mut Crate, pat_id: PatId) ->
 /// Fold the body at `body_id`, allocating the result in the arena.
 pub fn fold_body_id(f: &mut impl Folder, crate_hir: &mut Crate, body_id: BodyId) -> BodyId {
     let body = match crate_hir.bodies.get(body_id) {
-        Some(body) => body.clone(),
+        Some(slot) => slot.clone(),
         None => return body_id,
     };
+    let Some(body) = body else { return body_id };
     let walked = walk_body(f, crate_hir, body);
     let folded = f.fold_body(walked);
     let span = crate_hir.body_span(body_id);
@@ -224,12 +229,7 @@ pub fn fold_body_id(f: &mut impl Folder, crate_hir: &mut Crate, body_id: BodyId)
 }
 
 pub fn walk_item(f: &mut impl Folder, crate_hir: &mut Crate, item: Item) -> Item {
-    let kind = crate_hir
-        .item_kinds
-        .get(item.kind)
-        .cloned()
-        .unwrap_or(ItemKind::Mod { items: vec![] });
-    let new_kind = match kind {
+    let new_kind = match item.kind {
         ItemKind::Fn { sig, body, generics } => ItemKind::Fn {
             sig: walk_fn_sig(f, crate_hir, sig),
             body: fold_body_id(f, crate_hir, body),
@@ -309,11 +309,10 @@ pub fn walk_item(f: &mut impl Folder, crate_hir: &mut Crate, item: Item) -> Item
             kind,
         },
     };
-    let kind = crate_hir.alloc_item_kind(new_kind);
     Item {
         def_id: item.def_id,
         ident: item.ident,
-        kind,
+        kind: new_kind,
         vis: item.vis,
         attrs: item.attrs,
         span: item.span,
@@ -887,8 +886,12 @@ pub fn walk_where_predicate(
     }
 }
 
-pub fn walk_trait_bound(f: &mut impl Folder, crate_hir: &mut Crate, bound: TraitBound) -> TraitBound {
-    let _ = crate_hir;
+pub fn walk_trait_bound(f: &mut impl Folder, crate_hir: &mut Crate, mut bound: TraitBound) -> TraitBound {
+    bound.args = bound
+        .args
+        .into_iter()
+        .map(|arg| walk_generic_arg(f, crate_hir, arg))
+        .collect();
     f.fold_trait_bound(bound)
 }
 
@@ -994,14 +997,7 @@ pub fn walk_impl(f: &mut impl Folder, crate_hir: &mut Crate, impl_: Impl) -> Imp
 }
 
 pub fn walk_impl_item(f: &mut impl Folder, crate_hir: &mut Crate, item: ImplItem) -> ImplItem {
-    let kind = crate_hir
-        .impl_item_kinds
-        .get(item.kind)
-        .cloned()
-        .unwrap_or(crate::hir::core::ImplItemKind::Type {
-            ty: TyId::default(),
-        });
-    let new_kind = match kind {
+    let new_kind = match item.kind {
         crate::hir::core::ImplItemKind::Fn { sig, body } => {
             crate::hir::core::ImplItemKind::Fn {
                 sig: walk_fn_sig(f, crate_hir, sig),
@@ -1020,11 +1016,10 @@ pub fn walk_impl_item(f: &mut impl Folder, crate_hir: &mut Crate, item: ImplItem
             }
         }
     };
-    let kind = crate_hir.alloc_impl_item_kind(new_kind);
     ImplItem {
         def_id: item.def_id,
         ident: item.ident,
-        kind,
+        kind: new_kind,
         attrs: item.attrs,
         span: item.span,
         defaultness: item.defaultness,
@@ -1050,15 +1045,7 @@ pub fn walk_trait(f: &mut impl Folder, crate_hir: &mut Crate, trait_: Trait) -> 
 }
 
 pub fn walk_trait_item(f: &mut impl Folder, crate_hir: &mut Crate, item: TraitItem) -> TraitItem {
-    let kind = crate_hir
-        .trait_item_kinds
-        .get(item.kind)
-        .cloned()
-        .unwrap_or(crate::hir::core::TraitItemKind::Type {
-            bounds: vec![],
-            default: None,
-        });
-    let new_kind = match kind {
+    let new_kind = match item.kind {
         crate::hir::core::TraitItemKind::Fn { sig, default } => {
             crate::hir::core::TraitItemKind::Fn {
                 sig: walk_fn_sig(f, crate_hir, sig),
@@ -1081,11 +1068,10 @@ pub fn walk_trait_item(f: &mut impl Folder, crate_hir: &mut Crate, item: TraitIt
             }
         }
     };
-    let kind = crate_hir.alloc_trait_item_kind(new_kind);
     TraitItem {
         def_id: item.def_id,
         ident: item.ident,
-        kind,
+        kind: new_kind,
         attrs: item.attrs,
         span: item.span,
     }

@@ -415,10 +415,10 @@ pub(crate) fn lower_block(ctx: &mut LoweringContext, block: &BlockExpr) -> Block
     // Simplification: treat the last expression-ish statement as the
     // block's trailing expression if it is not a `TermExpr`.
     let (stmts, expr) = if let Some(last) = stmts.last() {
-        match ctx.crate_hir.stmts.get(*last).expect("last statement") {
+        match ctx.crate_hir.stmt(*last).expect("last statement") {
             Stmt::Expr { .. } => {
                 let last = stmts.pop().expect("checked last");
-                let expr = match ctx.crate_hir.stmts.get(last).expect("last statement") {
+                let expr = match ctx.crate_hir.stmt(last).expect("last statement") {
                     Stmt::Expr { expr } => Some(*expr),
                     _ => unreachable!(),
                 };
@@ -470,21 +470,16 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
                     .items
                     .get(def_id)
                     .and_then(|opt| opt.clone())
-                    .unwrap_or_else(|| {
-                        let kind_id = ctx
-                            .crate_hir
-                            .alloc_item_kind(crate::hir::core::ItemKind::Mod { items: vec![] });
-                        Item {
-                            def_id,
-                            ident: yelang_ast::Ident::new(
-                                yelang_interner::Symbol::from(0u32),
-                                span,
-                            ),
-                            attrs: vec![],
-                            kind: kind_id,
-                            vis: yelang_ast::Visibility::Private,
+                    .unwrap_or_else(|| Item {
+                        def_id,
+                        ident: yelang_ast::Ident::new(
+                            yelang_interner::Symbol::from(0u32),
                             span,
-                        }
+                        ),
+                        attrs: vec![],
+                        kind: crate::hir::core::ItemKind::Mod { items: vec![] },
+                        vis: yelang_ast::Visibility::Private,
+                        span,
                     }),
             }
         }

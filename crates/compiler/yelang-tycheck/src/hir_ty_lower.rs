@@ -8,7 +8,7 @@
  */
 
 use yelang_hir::hir::ty::{GenericArg as HirGenericArg, Ty as HirTy, UtilityKind as HirUtilityKind};
-use yelang_hir::ids::TyId as HirTyId;
+use yelang_hir::ids::SyntaxTyId as HirTyId;
 use yelang_hir::res::{FloatTy as HirFloatTy, IntTy as HirIntTy, PrimTy, Res};
 use yelang_ty::generic::GenericArg;
 
@@ -28,9 +28,8 @@ pub fn lower_hir_ty<Cx: TyLowerCtxt>(hir_ty: &HirTy, cx: &mut Cx) -> TyId {
 pub fn lower_hir_ty_id<Cx: TyLowerCtxt>(ty_id: HirTyId, cx: &mut Cx) -> TyId {
     let hir_ty = cx
         .crate_hir()
-        .tys
-        .get(ty_id)
-        .expect("TyId should be valid")
+        .ty(ty_id)
+        .expect("SyntaxTyId should be valid")
         .clone();
     lower_hir_ty(&hir_ty, cx)
 }

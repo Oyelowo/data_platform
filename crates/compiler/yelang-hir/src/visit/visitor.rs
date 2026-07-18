@@ -9,7 +9,7 @@ use crate::hir::core::{
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, ExprId, PatId, StmtId, TyId};
+use crate::ids::{BodyId, ExprId, PatId, StmtId, SyntaxTyId};
 use crate::res::Res;
 
 /// Visitor over the HIR.
@@ -130,7 +130,7 @@ pub trait Visitor<'hir>: Sized {
     /// the node in [`crate_hir`](Visitor::crate_hir) and calls [`visit_expr`].
     fn visit_expr_by_id(&mut self, id: ExprId) {
         if let Some(crate_hir) = self.crate_hir() {
-            if let Some(expr) = crate_hir.exprs.get(id) {
+            if let Some(expr) = crate_hir.exprs.get(id).and_then(|o| o.as_ref()) {
                 self.visit_expr(expr);
             }
         }
@@ -139,7 +139,7 @@ pub trait Visitor<'hir>: Sized {
     /// Visit a pattern by its arena ID.
     fn visit_pat_by_id(&mut self, id: PatId) {
         if let Some(crate_hir) = self.crate_hir() {
-            if let Some(pat) = crate_hir.pats.get(id) {
+            if let Some(pat) = crate_hir.pats.get(id).and_then(|o| o.as_ref()) {
                 self.visit_pat(pat);
             }
         }
@@ -148,16 +148,16 @@ pub trait Visitor<'hir>: Sized {
     /// Visit a statement by its arena ID.
     fn visit_stmt_by_id(&mut self, id: StmtId) {
         if let Some(crate_hir) = self.crate_hir() {
-            if let Some(stmt) = crate_hir.stmts.get(id) {
+            if let Some(stmt) = crate_hir.stmts.get(id).and_then(|o| o.as_ref()) {
                 self.visit_stmt(stmt);
             }
         }
     }
 
     /// Visit a type by its arena ID.
-    fn visit_ty_by_id(&mut self, id: TyId) {
+    fn visit_ty_by_id(&mut self, id: SyntaxTyId) {
         if let Some(crate_hir) = self.crate_hir() {
-            if let Some(ty) = crate_hir.tys.get(id) {
+            if let Some(ty) = crate_hir.tys.get(id).and_then(|o| o.as_ref()) {
                 self.visit_ty(ty);
             }
         }
@@ -166,7 +166,7 @@ pub trait Visitor<'hir>: Sized {
     /// Visit a body by its arena ID.
     fn visit_body_by_id(&mut self, id: BodyId) {
         if let Some(crate_hir) = self.crate_hir() {
-            if let Some(body) = crate_hir.bodies.get(id) {
+            if let Some(body) = crate_hir.bodies.get(id).and_then(|o| o.as_ref()) {
                 self.visit_body(body);
             }
         }
@@ -194,7 +194,7 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
         Some(c) => c,
         None => return,
     };
-    match item.kind(crate_hir) {
+    match &item.kind {
         ItemKind::Fn { sig, body, generics } => {
             visitor.visit_generics(generics);
             walk_fn_sig(visitor, sig);
@@ -220,7 +220,7 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
                 visitor.visit_trait_ref(super_trait);
             }
             for trait_item in items {
-                match trait_item.kind(crate_hir) {
+                match &trait_item.kind {
                     crate::hir::core::TraitItemKind::Fn { sig, default } => {
                         walk_fn_sig(visitor, sig);
                         if let Some(body) = *default {
@@ -257,7 +257,7 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
                 visitor.visit_trait_ref(trait_ref);
             }
             for impl_item in items {
-                match impl_item.kind(crate_hir) {
+                match &impl_item.kind {
                     crate::hir::core::ImplItemKind::Fn { sig, body } => {
                         walk_fn_sig(visitor, sig);
                         visitor.visit_body_by_id(*body);
@@ -694,8 +694,10 @@ pub fn walk_where_predicate<'hir, V: Visitor<'hir>>(
     }
 }
 
-pub fn walk_trait_bound<'hir, V: Visitor<'hir>>(_visitor: &mut V, _bound: &'hir TraitBound) {
-    // Trait bounds contain only a resolved path; no nested HIR nodes to walk.
+pub fn walk_trait_bound<'hir, V: Visitor<'hir>>(visitor: &mut V, bound: &'hir TraitBound) {
+    for arg in &bound.args {
+        walk_generic_arg(visitor, arg);
+    }
 }
 
 pub fn walk_trait_ref<'hir, V: Visitor<'hir>>(_visitor: &mut V, _trait_ref: &'hir TraitRef) {
@@ -764,11 +766,7 @@ pub fn walk_impl<'hir, V: Visitor<'hir>>(visitor: &mut V, impl_: &'hir Impl) {
 }
 
 pub fn walk_impl_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir ImplItem) {
-    let crate_hir = match visitor.crate_hir() {
-        Some(c) => c,
-        None => return,
-    };
-    match item.kind(crate_hir) {
+    match &item.kind {
         crate::hir::core::ImplItemKind::Fn { sig, body } => {
             walk_fn_sig(visitor, sig);
             visitor.visit_body_by_id(*body);
@@ -794,11 +792,7 @@ pub fn walk_trait<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_: &'hir Trait) 
 }
 
 pub fn walk_trait_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir TraitItem) {
-    let crate_hir = match visitor.crate_hir() {
-        Some(c) => c,
-        None => return,
-    };
-    match item.kind(crate_hir) {
+    match &item.kind {
         crate::hir::core::TraitItemKind::Fn { sig, default } => {
             walk_fn_sig(visitor, sig);
             if let Some(body) = *default {
@@ -821,5 +815,3 @@ pub fn walk_trait_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Trai
         }
     }
 }
-
-

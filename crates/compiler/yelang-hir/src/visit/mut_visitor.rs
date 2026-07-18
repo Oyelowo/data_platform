@@ -14,9 +14,8 @@ use crate::hir::core::{
 use crate::hir::body::Body;
 use crate::hir::pat::Pat;
 use crate::hir::ty::{Const, ConstKind, GenericArg};
-use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, TyId};
+use crate::ids::{BodyId, DefId, ExprId, PatId, StmtId, SyntaxTyId};
 use crate::res::Res;
-use yelang_lexer::Span;
 
 /// In-place mutating visitor over the HIR.
 ///
@@ -115,88 +114,73 @@ pub fn visit_trait_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, def_id
 
 /// Visit the expression at `expr_id` in place.
 pub fn visit_expr_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr_id: ExprId) {
-    let mut expr = match crate_hir.exprs.get_mut(expr_id) {
-        Some(slot) => std::mem::replace(slot, Expr::Err),
-        None => return,
+    let Some(mut expr) = crate_hir.exprs.get_mut(expr_id).and_then(|slot| std::mem::take(slot))
+    else {
+        return;
     };
     v.visit_expr(&mut expr);
     walk_expr_mut(v, crate_hir, &mut expr);
     if let Some(slot) = crate_hir.exprs.get_mut(expr_id) {
-        *slot = expr;
+        *slot = Some(expr);
     }
 }
 
 /// Visit the statement at `stmt_id` in place.
 pub fn visit_stmt_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, stmt_id: StmtId) {
-    let mut stmt = match crate_hir.stmts.get_mut(stmt_id) {
-        Some(slot) => std::mem::replace(
-            slot,
-            Stmt::Expr {
-                expr: ExprId::default(),
-            },
-        ),
-        None => return,
+    let Some(mut stmt) = crate_hir.stmts.get_mut(stmt_id).and_then(|slot| std::mem::take(slot))
+    else {
+        return;
     };
     v.visit_stmt(&mut stmt);
     walk_stmt_mut(v, crate_hir, &mut stmt);
     if let Some(slot) = crate_hir.stmts.get_mut(stmt_id) {
-        *slot = stmt;
+        *slot = Some(stmt);
     }
 }
 
 /// Visit the type at `ty_id` in place.
-pub fn visit_ty_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty_id: TyId) {
-    let mut ty = match crate_hir.tys.get_mut(ty_id) {
-        Some(slot) => std::mem::replace(slot, Ty::Err),
-        None => return,
+pub fn visit_ty_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, ty_id: SyntaxTyId) {
+    let Some(mut ty) = crate_hir.tys.get_mut(ty_id).and_then(|slot| std::mem::take(slot)) else {
+        return;
     };
     v.visit_ty(&mut ty);
     walk_ty_mut(v, crate_hir, &mut ty);
     if let Some(slot) = crate_hir.tys.get_mut(ty_id) {
-        *slot = ty;
+        *slot = Some(ty);
     }
 }
 
 /// Visit the pattern at `pat_id` in place.
 pub fn visit_pat_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, pat_id: PatId) {
-    let mut pat = match crate_hir.pats.get_mut(pat_id) {
-        Some(slot) => std::mem::replace(slot, Pat::Err),
-        None => return,
+    let Some(mut pat) = crate_hir.pats.get_mut(pat_id).and_then(|slot| std::mem::take(slot))
+    else {
+        return;
     };
     v.visit_pat(&mut pat);
     walk_pat_mut(v, crate_hir, &mut pat);
     if let Some(slot) = crate_hir.pats.get_mut(pat_id) {
-        *slot = pat;
+        *slot = Some(pat);
     }
 }
 
 /// Visit the body at `body_id` in place.
 pub fn visit_body_id_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, body_id: BodyId) {
-    let mut body = match crate_hir.bodies.get_mut(body_id) {
-        Some(slot) => std::mem::replace(
-            slot,
-            Body {
-                params: vec![],
-                value: ExprId::default(),
-                span: Span::default(),
-            },
-        ),
-        None => return,
+    let Some(mut body) = crate_hir
+        .bodies
+        .get_mut(body_id)
+        .and_then(|slot| std::mem::take(slot))
+    else {
+        return;
     };
     v.visit_body(&mut body);
     walk_body_mut(v, crate_hir, &mut body);
     if let Some(slot) = crate_hir.bodies.get_mut(body_id) {
-        *slot = body;
+        *slot = Some(body);
     }
 }
 
 pub fn walk_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut Item) {
-    let kind_id = item.kind;
-    let mut kind = match crate_hir.item_kinds.get_mut(kind_id) {
-        Some(slot) => std::mem::replace(slot, ItemKind::Mod { items: vec![] }),
-        None => return,
-    };
-    match &mut kind {
+    match &mut item.kind {
         ItemKind::Fn { sig, body, generics } => {
             walk_generics_mut(v, crate_hir, generics);
             walk_fn_sig_mut(v, crate_hir, sig);
@@ -261,9 +245,6 @@ pub fn walk_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut 
         ItemKind::Use { path, .. } => {
             walk_use_path_mut(v, crate_hir, path);
         }
-    }
-    if let Some(slot) = crate_hir.item_kinds.get_mut(kind_id) {
-        *slot = kind;
     }
 }
 
@@ -689,11 +670,13 @@ pub fn walk_where_predicate_mut(
 }
 
 pub fn walk_trait_bound_mut(
-    _v: &mut impl MutVisitor,
-    _crate_hir: &mut Crate,
-    _bound: &mut TraitBound,
+    v: &mut impl MutVisitor,
+    crate_hir: &mut Crate,
+    bound: &mut TraitBound,
 ) {
-    // Trait bounds contain only a resolved path; no nested HIR nodes to walk.
+    for arg in &mut bound.args {
+        walk_generic_arg_mut(v, crate_hir, arg);
+    }
 }
 
 pub fn walk_trait_ref_mut(
@@ -777,17 +760,7 @@ pub fn walk_impl_item_mut(
     item: &mut ImplItem,
 ) {
     v.visit_impl_item(item);
-    let kind_id = item.kind;
-    let mut kind = match crate_hir.impl_item_kinds.get_mut(kind_id) {
-        Some(slot) => std::mem::replace(
-            slot,
-            crate::hir::core::ImplItemKind::Type {
-                ty: TyId::default(),
-            },
-        ),
-        None => return,
-    };
-    match &mut kind {
+    match &mut item.kind {
         crate::hir::core::ImplItemKind::Fn { sig, body } => {
             walk_fn_sig_mut(v, crate_hir, sig);
             visit_body_id_mut(v, crate_hir, *body);
@@ -799,9 +772,6 @@ pub fn walk_impl_item_mut(
         crate::hir::core::ImplItemKind::Type { ty } => {
             visit_ty_id_mut(v, crate_hir, *ty);
         }
-    }
-    if let Some(slot) = crate_hir.impl_item_kinds.get_mut(kind_id) {
-        *slot = kind;
     }
 }
 
@@ -821,18 +791,7 @@ pub fn walk_trait_item_mut(
     item: &mut TraitItem,
 ) {
     v.visit_trait_item(item);
-    let kind_id = item.kind;
-    let mut kind = match crate_hir.trait_item_kinds.get_mut(kind_id) {
-        Some(slot) => std::mem::replace(
-            slot,
-            crate::hir::core::TraitItemKind::Type {
-                bounds: vec![],
-                default: None,
-            },
-        ),
-        None => return,
-    };
-    match &mut kind {
+    match &mut item.kind {
         crate::hir::core::TraitItemKind::Fn { sig, default } => {
             walk_fn_sig_mut(v, crate_hir, sig);
             if let Some(body) = default {
@@ -853,8 +812,5 @@ pub fn walk_trait_item_mut(
                 visit_ty_id_mut(v, crate_hir, *ty);
             }
         }
-    }
-    if let Some(slot) = crate_hir.trait_item_kinds.get_mut(kind_id) {
-        *slot = kind;
     }
 }

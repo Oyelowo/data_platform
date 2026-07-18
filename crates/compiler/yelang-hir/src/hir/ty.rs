@@ -5,7 +5,7 @@ use yelang_lexer::Span;
 
 use crate::hir::core::FnSig;
 use crate::hir::core::Lit;
-use crate::ids::{BodyId, ExprId, TyId};
+use crate::ids::{BodyId, ExprId, SyntaxTyId};
 use crate::res::Res;
 use yelang_ast::Ident;
 
@@ -19,11 +19,11 @@ pub enum Ty {
     /// - `Vec<T>` -> `Path { res: Def(Vec), args: [Type(T)] }`
     Path { res: Res, args: Vec<GenericArg> },
     /// Tuple type: `(i32, bool)`
-    Tuple { tys: Vec<TyId> },
+    Tuple { tys: Vec<SyntaxTyId> },
     /// Array type: `[T; N]`
-    Array { ty: TyId, len: Const },
+    Array { ty: SyntaxTyId, len: Const },
     /// Slice type: `[T]`
-    Slice { ty: TyId },
+    Slice { ty: SyntaxTyId },
     /// Function pointer type.
     FnPtr { sig: Box<FnSig> },
     /// Anonymous struct type: `{ x: i32, y: i32 }`
@@ -31,26 +31,26 @@ pub enum Ty {
     /// Type literal: `"pending" | "active"`
     TypeLit { variants: Vec<Lit> },
     /// Utility type: `Omit<T, K>`
-    Utility { kind: UtilityKind, args: Vec<TyId> },
+    Utility { kind: UtilityKind, args: Vec<SyntaxTyId> },
     /// `typeof expr` type.
     TypeOf { expr: ExprId },
     /// Reference: `&T` or `&mut T`
     Ref {
         mutability: yelang_ast::Mutability,
-        ty: TyId,
+        ty: SyntaxTyId,
     },
     /// Raw pointer: `*mut T` or `*const T`
     RawPtr {
         mutability: yelang_ast::Mutability,
-        ty: TyId,
+        ty: SyntaxTyId,
     },
     /// Higher-ranked type: `for<T> fn(T) -> T`
     ForAll {
         params: Vec<crate::hir::core::BinderParam>,
-        ty: TyId,
+        ty: SyntaxTyId,
     },
     /// Union type: `i32 | string | bool`
-    Union { tys: Vec<TyId> },
+    Union { tys: Vec<SyntaxTyId> },
     /// `impl Trait` opaque type.
     ImplTrait { path: Res },
     /// `dyn Trait` trait object type.
@@ -69,18 +69,18 @@ pub enum Ty {
 #[derive(Debug, Clone)]
 pub enum GenericArg {
     /// Type argument: `T` in `Vec<T>`.
-    Type(TyId),
+    Type(SyntaxTyId),
     /// Const argument: `N` in `[T; N]` or `Foo<N>`.
     Const(Const),
     /// Associated type binding: `Item = i32`.
-    AssocBinding { name: Ident, ty: TyId },
+    AssocBinding { name: Ident, ty: SyntaxTyId },
 }
 
 /// A field in an anonymous struct type.
 #[derive(Debug, Clone)]
 pub struct AnonField {
     pub name: Symbol,
-    pub ty: TyId,
+    pub ty: SyntaxTyId,
 }
 
 /// Utility type kinds.

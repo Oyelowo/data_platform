@@ -14,8 +14,7 @@ use crate::fn_ctxt::FnCtxt;
 pub fn check_pat(fcx: &mut FnCtxt<'_>, pat_id: PatId, expected_ty: TyId) {
     let pat = fcx
         .tcx.crate_hir()
-        .pats
-        .get(pat_id)
+        .pat(pat_id)
         .expect("PatId should be valid")
         .clone();
     match &pat {

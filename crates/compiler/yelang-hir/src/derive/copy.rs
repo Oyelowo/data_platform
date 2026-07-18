@@ -88,8 +88,8 @@ fn find_non_copy_in_fields(
 ///
 /// This list is conservative: if a type is not in this list, the derive emits
 /// the impl and lets type checking verify the bound.
-fn is_known_non_copy(ty_id: crate::ids::TyId, ctx: &DeriveContext<'_, '_>) -> bool {
-    let ty = ctx.ctx.crate_hir.tys.get(ty_id).expect("field type");
+fn is_known_non_copy(ty_id: crate::ids::SyntaxTyId, ctx: &DeriveContext<'_, '_>) -> bool {
+    let ty = ctx.ctx.crate_hir.ty(ty_id).expect("field type");
     matches!(
         ty,
         Ty::Path {
