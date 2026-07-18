@@ -4,8 +4,12 @@
 //! prevents `BPlusTree::compact` from reclaiming pages reachable from that
 //! snapshot, so the cursor can safely walk leaf sibling chains even while
 //! concurrent structure modifications occur.  Individual leaf pages are read
-//! with optimistic lock coupling and the read is retried if the page changes
+//! with optimistic lock coupling and the read is retried if a page changes
 //! mid-read.
+//!
+//! When the cursor is created inside a write transaction it is passed the
+//! transaction's write set so that range scans see the same uncommitted data as
+//! point reads (read-your-writes).
 
 use std::sync::Arc;
 
@@ -15,8 +19,18 @@ use crate::buffer::PageGuard;
 use crate::error::{Error, Result};
 use crate::page::{NULL_PAGE_ID, PageId};
 use crate::slot::OwnedCell;
+use crate::transaction::{WriteSet, WriteSetEntry};
 use crate::tree::{BPlusTree, child_for_key};
 use crate::txn::{Timestamp, Transaction, TxnId};
+
+/// A merged entry ready to be emitted by the cursor.
+#[derive(Debug)]
+enum CursorEntry {
+    /// A cell read from a leaf page.
+    Leaf(OwnedCell),
+    /// A put made by the current transaction but not yet committed.
+    Put(Vec<u8>, Vec<u8>),
+}
 
 /// Cursor over a key range in the B+ tree.
 pub struct BPlusTreeCursor {
@@ -28,23 +42,29 @@ pub struct BPlusTreeCursor {
     end: Option<Bytes>,
     /// Guard pinning the current leaf frame.
     current: Option<PageGuard>,
-    /// Live cells read from `current` the last time it was loaded.
-    entries: Vec<OwnedCell>,
+    /// Merged entries read from `current` the last time it was loaded.
+    entries: Vec<CursorEntry>,
     /// Position within `entries`.
     pos: usize,
     done: bool,
     /// Last key that was actually emitted. Used to avoid duplicates after a
     /// conflict retry.
     last_returned_key: Option<Vec<u8>>,
+    /// Optional transaction write set for read-your-writes.
+    write_set: Option<WriteSet>,
 }
 
 impl BPlusTreeCursor {
     /// Create a cursor over `[start, end)` in `txn`'s snapshot.
+    ///
+    /// `write_set` is the uncommitted writes made by the same transaction.  When
+    /// present, the cursor merges those writes into the scan results.
     pub fn new(
         tree: Arc<BPlusTree>,
         txn: &Transaction,
         start: Option<&[u8]>,
         end: Option<&[u8]>,
+        write_set: Option<WriteSet>,
     ) -> Result<Self> {
         let root = tree.root_page_id();
         tree.pin_root(root);
@@ -59,6 +79,7 @@ impl BPlusTreeCursor {
             pos: 0,
             done: false,
             last_returned_key: None,
+            write_set,
         };
         match start {
             Some(key) => cursor.seek(key)?,
@@ -110,7 +131,7 @@ impl BPlusTreeCursor {
 
     /// Descend from the pinned root to the leaf that should contain `key`.
     /// Returns `None` when a page version changes during the descent.
-    fn descend(&self, key: Option<&[u8]>) -> Result<Option<(PageGuard, Vec<OwnedCell>, usize)>> {
+    fn descend(&self, key: Option<&[u8]>) -> Result<Option<(PageGuard, Vec<CursorEntry>, usize)>> {
         let mut current_id = self.root;
         loop {
             let guard = self.tree.pool().fetch_or_read(current_id)?;
@@ -121,10 +142,10 @@ impl BPlusTreeCursor {
             };
 
             if page.is_leaf() {
-                let entries = read_leaf_entries(page)?;
+                let entries = read_leaf_entries(page, key, self.end.as_deref(), &self.write_set)?;
                 let pos = match key {
                     None => 0,
-                    Some(k) => entries.partition_point(|cell| cell.key.as_slice() < k),
+                    Some(k) => entries.partition_point(|e| cursor_entry_key(e).as_slice() < k),
                 };
                 if page.latch_word() != version {
                     return Ok(None);
@@ -137,6 +158,11 @@ impl BPlusTreeCursor {
                 Some(k) => child_for_key(page, k)?,
             };
             if page.latch_word() != version {
+                return Ok(None);
+            }
+            // A poisoned old root may present a null child pointer; retry rather
+            // than fetch a null page id.
+            if child_id == NULL_PAGE_ID {
                 return Ok(None);
             }
             current_id = child_id;
@@ -184,7 +210,7 @@ impl BPlusTreeCursor {
                 return self.retry_from_last_key();
             }
         };
-        let entries = read_leaf_entries(next_page)?;
+        let entries = read_leaf_entries(next_page, None, self.end.as_deref(), &self.write_set)?;
         if next_page.latch_word() != next_version {
             drop(next_guard);
             return self.retry_from_last_key();
@@ -209,7 +235,9 @@ impl BPlusTreeCursor {
                 // twice.
                 let last_key = last_key.clone();
                 self.seek(&last_key)?;
-                while self.pos < self.entries.len() && self.entries[self.pos].key == last_key {
+                while self.pos < self.entries.len()
+                    && cursor_entry_key(&self.entries[self.pos]).as_slice() == last_key
+                {
                     self.pos += 1;
                 }
             }
@@ -239,27 +267,39 @@ impl Iterator for BPlusTreeCursor {
                 }
             }
 
-            let cell = &self.entries[self.pos];
+            let entry = &self.entries[self.pos];
             self.pos += 1;
 
-            if let Some(ref end) = self.end
-                && cell.key.as_slice() >= end.as_ref()
-            {
-                self.done = true;
-                return None;
-            }
-
-            match self.resolve_value(cell) {
-                Ok(Some(value)) => {
-                    self.last_returned_key = Some(cell.key.clone());
-                    return Some(Ok((
-                        Bytes::copy_from_slice(&cell.key),
-                        Bytes::copy_from_slice(&value),
-                    )));
+            let (key, value) = match entry {
+                CursorEntry::Leaf(cell) => {
+                    if let Some(ref end) = self.end
+                        && cell.key.as_slice() >= end.as_ref()
+                    {
+                        self.done = true;
+                        return None;
+                    }
+                    match self.resolve_value(cell) {
+                        Ok(Some(value)) => (cell.key.clone(), value),
+                        Ok(None) => continue,
+                        Err(e) => return Some(Err(e)),
+                    }
                 }
-                Ok(None) => continue,
-                Err(e) => return Some(Err(e)),
-            }
+                CursorEntry::Put(key, value) => {
+                    if let Some(ref end) = self.end
+                        && key.as_slice() >= end.as_ref()
+                    {
+                        self.done = true;
+                        return None;
+                    }
+                    (key.clone(), value.clone())
+                }
+            };
+
+            self.last_returned_key = Some(key.clone());
+            return Some(Ok((
+                Bytes::copy_from_slice(&key),
+                Bytes::copy_from_slice(&value),
+            )));
         }
     }
 }
@@ -278,16 +318,96 @@ impl Drop for BPlusTreeCursor {
     }
 }
 
-/// Read all live cells from a leaf page.
-fn read_leaf_entries(page: &crate::page::Page) -> Result<Vec<OwnedCell>> {
+fn cursor_entry_key(entry: &CursorEntry) -> Vec<u8> {
+    match entry {
+        CursorEntry::Leaf(cell) => cell.key.clone(),
+        CursorEntry::Put(key, _) => key.clone(),
+    }
+}
+
+/// Read all live cells from a leaf page and merge in any uncommitted writes
+/// from `write_set` that fall within the leaf's key range.
+///
+/// `leaf_start` is an optional lower bound for the leaf (the key the cursor
+/// used to descend, or `None` when advancing through the sibling chain).  It
+/// is used to filter write-set entries that belong to earlier leaves.
+fn read_leaf_entries(
+    page: &crate::page::Page,
+    leaf_start: Option<&[u8]>,
+    end: Option<&[u8]>,
+    write_set: &Option<WriteSet>,
+) -> Result<Vec<CursorEntry>> {
+    let leaf_first: Option<Vec<u8>> = leaf_start
+        .map(|k| k.to_vec())
+        .or_else(|| page.first_key().ok().flatten());
+    let leaf_last = page.last_key().ok().flatten();
+
+    let mut entries: Vec<CursorEntry> = Vec::with_capacity(page.slot_count()?);
     let count = page.slot_count()?;
-    let mut entries = Vec::with_capacity(count);
     for idx in 0..count {
         if page.read_slot(idx)?.is_deleted() {
             continue;
         }
-        entries.push(page.get_by_slot(idx)?);
+        let cell = page.get_by_slot(idx)?;
+        // If the cell is before the leaf start, skip it.  This can happen when
+        // seeking to a key and the leaf contains earlier keys.
+        if let Some(start) = leaf_start
+            && cell.key.as_slice() < start
+        {
+            continue;
+        }
+        // If the cell is at or past the scan end, stop reading this leaf.
+        if let Some(e) = end
+            && cell.key.as_slice() >= e
+        {
+            break;
+        }
+        entries.push(CursorEntry::Leaf(cell));
     }
+
+    if let Some(ws) = write_set {
+        let ws = ws.read();
+        let start_key = leaf_first.unwrap_or_default();
+        let ws_entries: Vec<(Vec<u8>, WriteSetEntry)> = ws
+            .range(start_key..)
+            .take_while(|(k, _)| {
+                if let Some(e) = end
+                    && k.as_slice() >= e
+                {
+                    return false;
+                }
+                if let Some(ref l) = leaf_last
+                    && k.as_slice() > l.as_slice()
+                {
+                    return false;
+                }
+                true
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        for (key, entry) in ws_entries {
+            match entry {
+                WriteSetEntry::Put(value) => {
+                    // Overwrite an existing leaf cell or insert a new one.
+                    if let Some(pos) = entries
+                        .iter()
+                        .position(|e| cursor_entry_key(e).as_slice() == key.as_slice())
+                    {
+                        entries[pos] = CursorEntry::Put(key, value);
+                    } else {
+                        entries.push(CursorEntry::Put(key, value));
+                    }
+                }
+                WriteSetEntry::Delete => {
+                    // Hide the leaf cell if present.
+                    entries.retain(|e| cursor_entry_key(e).as_slice() != key.as_slice());
+                }
+            }
+        }
+    }
+
+    entries.sort_by_key(cursor_entry_key);
     Ok(entries)
 }
 
@@ -317,7 +437,7 @@ mod tests {
         }
 
         let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
-        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None).unwrap();
+        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None, None).unwrap();
         let keys: Vec<String> = cursor
             .map(|r| {
                 let (k, _v) = r.unwrap();
@@ -339,7 +459,8 @@ mod tests {
         }
 
         let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
-        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, Some(b"03"), Some(b"07")).unwrap();
+        let cursor =
+            BPlusTreeCursor::new(tree.clone(), &txn, Some(b"03"), Some(b"07"), None).unwrap();
         let keys: Vec<String> = cursor
             .map(|r| String::from_utf8(r.unwrap().0.to_vec()).unwrap())
             .collect();
@@ -355,7 +476,7 @@ mod tests {
         }
 
         let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
-        let mut cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None).unwrap();
+        let mut cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None, None).unwrap();
         cursor.seek(b"05").unwrap();
         let keys: Vec<String> = cursor
             .map(|r| String::from_utf8(r.unwrap().0.to_vec()).unwrap())
@@ -372,7 +493,7 @@ mod tests {
         }
 
         let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
-        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None).unwrap();
+        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None, None).unwrap();
 
         // Concurrent commit after cursor creation.
         let t2 = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
@@ -397,7 +518,7 @@ mod tests {
         tree.delete(b"04").unwrap();
 
         let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
-        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None).unwrap();
+        let cursor = BPlusTreeCursor::new(tree.clone(), &txn, None, None, None).unwrap();
         let keys: Vec<String> = cursor
             .map(|r| String::from_utf8(r.unwrap().0.to_vec()).unwrap())
             .collect();

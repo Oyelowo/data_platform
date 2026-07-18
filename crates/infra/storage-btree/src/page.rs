@@ -749,6 +749,30 @@ impl Page {
         })
     }
 
+    /// Return the first live key in the page, or `None` if the page is empty.
+    pub fn first_key(&self) -> Result<Option<Vec<u8>>> {
+        let count = self.slot_count()?;
+        for idx in 0..count {
+            if self.read_slot(idx)?.is_deleted() {
+                continue;
+            }
+            return Ok(Some(self.get_by_slot(idx)?.key));
+        }
+        Ok(None)
+    }
+
+    /// Return the last live key in the page, or `None` if the page is empty.
+    pub fn last_key(&self) -> Result<Option<Vec<u8>>> {
+        let count = self.slot_count()?;
+        for idx in (0..count).rev() {
+            if self.read_slot(idx)?.is_deleted() {
+                continue;
+            }
+            return Ok(Some(self.get_by_slot(idx)?.key));
+        }
+        Ok(None)
+    }
+
     /// Binary-search for `key`.
     pub fn locate(&self, key: &[u8]) -> Result<LocateResult> {
         let header = self.header()?;

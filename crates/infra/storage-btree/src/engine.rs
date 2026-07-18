@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
+use crate::backup;
 use crate::buffer::BufferPool;
 use crate::checkpoint::{Checkpoint, CheckpointOptions, CheckpointThread, Meta};
 use crate::cleaner::PageCleaner;
@@ -13,9 +14,11 @@ use crate::cursor::BPlusTreeCursor;
 use crate::disk::PagedFile;
 use crate::error::{Error, Result};
 use crate::io::{FaultyBackend, RealBackend, StorageBackend};
+use crate::metrics::{BtreeMetrics, Metrics};
 use crate::options::BtreeOptions;
 use crate::page::PageId;
 use crate::recovery::Recovery;
+use crate::shrink;
 use crate::space::PageAllocator;
 use crate::sync::Mutex as SyncMutex;
 use crate::transaction::BtreeTransaction;
@@ -61,11 +64,13 @@ impl BtreeEngine {
             PageAllocator::new(PageId::new(1))
         }));
 
-        let pool = Arc::new(BufferPool::new(
+        let metrics = Arc::new(Metrics::new());
+        let pool = Arc::new(BufferPool::with_metrics(
             options.cache_frames(),
             options.page_size,
             disk,
             Arc::clone(&allocator),
+            Arc::clone(&metrics),
         )?);
 
         let wal = Arc::new(WalLog::open_with_fault_config(
@@ -73,6 +78,7 @@ impl BtreeEngine {
             options.wal_options(),
             options.wal_fault_config.clone(),
         )?);
+        wal.set_metrics(Arc::clone(&metrics));
         // Use buffered value-log appends: the engine calls sync at operation
         // boundaries, so we pay one fsync per commit instead of one per value.
         let value_log = Arc::new(ValueLog::open_with_backend(
@@ -80,6 +86,7 @@ impl BtreeEngine {
             Durability::Buffered,
             backend.clone(),
         )?);
+        value_log.set_metrics(Arc::clone(&metrics));
 
         let (recovery_root, checkpoint_lsn) = match meta {
             Some(m) => (m.root_page_id, m.checkpoint_lsn),
@@ -131,6 +138,7 @@ impl BtreeEngine {
             bg_handle,
             cleaner_handle,
             backend,
+            metrics,
         });
 
         inner.start_background_cleaner()?;
@@ -190,6 +198,38 @@ impl BtreeEngine {
         let _ = self.inner.wal.crash();
         self.inner.backend.crash();
     }
+
+    /// Create a crash-consistent point-in-time backup at `dst`.
+    ///
+    /// Background checkpoint and cleaner threads are paused while the backup
+    /// runs.  The backup directory can be opened with `BtreeEngine::open`.
+    pub fn backup(&self, dst: impl AsRef<Path>) -> Result<()> {
+        self.inner.stop_background_cleaner()?;
+        self.inner.stop_background_checkpoint()?;
+        let result = self.inner.backup_locked(dst.as_ref());
+        self.inner.start_background_cleaner()?;
+        self.inner.start_background_checkpoint()?;
+        result
+    }
+
+    /// Return a snapshot of engine metrics.
+    pub fn metrics(&self) -> BtreeMetrics {
+        self.inner.metrics.snapshot()
+    }
+
+    /// Truncate `pages.dat` to remove trailing free space.
+    ///
+    /// This runs a checkpoint, compacts unreachable pages, and truncates the
+    /// file to the highest still-allocated page id.  Holes in the middle of the
+    /// file are not moved.
+    pub fn shrink_pages_file(&self) -> Result<u64> {
+        self.inner.stop_background_cleaner()?;
+        self.inner.stop_background_checkpoint()?;
+        let result = self.inner.shrink_locked();
+        self.inner.start_background_cleaner()?;
+        self.inner.start_background_checkpoint()?;
+        result
+    }
 }
 
 impl storage_traits::Engine for BtreeEngine {
@@ -242,7 +282,7 @@ impl storage_traits::Engine for BtreeEngine {
             read_ts,
             crate::txn::IsolationLevel::ReadCommitted,
         );
-        BPlusTreeCursor::new(Arc::clone(&self.inner.tree), &txn, start, end)
+        BPlusTreeCursor::new(Arc::clone(&self.inner.tree), &txn, start, end, None)
     }
 
     fn stats(&self) -> Result<storage_traits::EngineStats> {
@@ -265,6 +305,54 @@ impl storage_traits::Engine for BtreeEngine {
             self.inner.options.cache_frames() as u64 * self.inner.options.page_size as u64;
 
         let mut metrics = HashMap::new();
+        let counters = self.inner.metrics.snapshot();
+        metrics.insert("storage_btree.gets".to_string(), counters.gets);
+        metrics.insert("storage_btree.puts".to_string(), counters.puts);
+        metrics.insert("storage_btree.deletes".to_string(), counters.deletes);
+        metrics.insert(
+            "storage_btree.scans_started".to_string(),
+            counters.scans_started,
+        );
+        metrics.insert("storage_btree.txns_begun".to_string(), counters.txns_begun);
+        metrics.insert(
+            "storage_btree.txns_committed".to_string(),
+            counters.txns_committed,
+        );
+        metrics.insert(
+            "storage_btree.txns_rolled_back".to_string(),
+            counters.txns_rolled_back,
+        );
+        metrics.insert("storage_btree.cache_hits".to_string(), counters.cache_hits);
+        metrics.insert(
+            "storage_btree.cache_misses".to_string(),
+            counters.cache_misses,
+        );
+        metrics.insert("storage_btree.evictions".to_string(), counters.evictions);
+        metrics.insert(
+            "storage_btree.page_flushes".to_string(),
+            counters.page_flushes,
+        );
+        metrics.insert(
+            "storage_btree.wal_bytes_written".to_string(),
+            counters.wal_bytes_written,
+        );
+        metrics.insert("storage_btree.wal_syncs".to_string(), counters.wal_syncs);
+        metrics.insert(
+            "storage_btree.wal_sync_latency_ns".to_string(),
+            counters.wal_sync_latency_ns,
+        );
+        metrics.insert(
+            "storage_btree.value_log_bytes_written".to_string(),
+            counters.value_log_bytes_written,
+        );
+        metrics.insert(
+            "storage_btree.value_log_syncs".to_string(),
+            counters.value_log_syncs,
+        );
+        metrics.insert(
+            "storage_btree.checkpoints".to_string(),
+            counters.checkpoints,
+        );
         metrics.insert(
             "storage_btree.retired_pages".to_string(),
             self.inner.tree.retired_count() as u64,
@@ -315,6 +403,7 @@ pub(crate) struct BtreeEngineInner {
     pub bg_handle: SyncMutex<Option<CheckpointThread>>,
     pub cleaner_handle: SyncMutex<Option<PageCleaner>>,
     pub backend: Arc<dyn StorageBackend>,
+    pub metrics: Arc<Metrics>,
 }
 
 impl BtreeEngineInner {
@@ -322,7 +411,29 @@ impl BtreeEngineInner {
     fn checkpoint(&self) -> Result<Meta> {
         // Make all large values durable before recording the checkpoint LSN.
         self.value_log.sync()?;
-        self.checkpoint.run()
+        let meta = self.checkpoint.run()?;
+        self.metrics.inc_checkpoints();
+        Ok(meta)
+    }
+
+    /// Implementation of `BtreeEngine::backup` while background threads are
+    /// stopped.
+    fn backup_locked(&self, dst: &Path) -> Result<()> {
+        // Flush all durable state (equivalent to Engine::sync without the
+        // background-thread dance).
+        self.value_log.sync()?;
+        self.checkpoint()?;
+        self.tree.compact()?;
+        backup::validate_backup(&self.path)?;
+        backup::copy_database_files(&self.path, dst)
+    }
+
+    /// Implementation of `BtreeEngine::shrink_pages_file` while background
+    /// threads are stopped.
+    fn shrink_locked(&self) -> Result<u64> {
+        self.checkpoint()?;
+        self.tree.compact()?;
+        shrink::shrink_pages_file(self.pool.disk(), &self.pool, &self.allocator, &self.tree)
     }
 
     fn start_background_checkpoint(&self) -> Result<()> {

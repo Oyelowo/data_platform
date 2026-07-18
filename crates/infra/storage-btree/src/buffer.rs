@@ -1,19 +1,22 @@
 //! Frame-based buffer pool.
 //!
 //! The buffer pool caches on-disk pages in memory, tracks dirty pages, and
-//! evicts cold pages using a CLOCK policy.  Each frame holds an `Arc<Page>`,
-//! so threads can release the frame metadata lock while retaining a logical
-//! pin on the page.  The per-page Optimistic Lock Coupling (OLC) latch in
-//! `Page::latch_word` serialises concurrent access to the page contents.
+//! evicts cold pages using an adaptive CLOCK-Pro policy by default.  Each
+//! frame holds an `Arc<Page>`, so threads can release the frame metadata lock
+//! while retaining a logical pin on the page.  The per-page Optimistic Lock
+//! Coupling (OLC) latch in `Page::latch_word` serialises concurrent access to
+//! the page contents.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 
 use crate::disk::PagedFile;
 use crate::error::{Error, Result};
+use crate::eviction::{ClockPro, EvictionPolicy};
+use crate::metrics::Metrics;
 use crate::page::{NULL_PAGE_ID, Page, PageId};
 use crate::space::PageAllocator;
 use crate::sync::Mutex as SyncMutex;
@@ -35,6 +38,12 @@ pub struct Frame {
     pub dirty: AtomicBool,
     /// CLOCK reference bit.
     pub ref_bit: AtomicBool,
+    /// CLOCK-Pro hot-page flag.
+    hot: AtomicBool,
+    /// CLOCK-Pro cold-page test-period flag.
+    cold_test: AtomicBool,
+    /// Approximate access frequency; bumped on every hit.
+    usage_count: AtomicU32,
 }
 
 impl Frame {
@@ -45,7 +54,35 @@ impl Frame {
             pin_count: AtomicU32::new(0),
             dirty: AtomicBool::new(false),
             ref_bit: AtomicBool::new(false),
+            hot: AtomicBool::new(false),
+            cold_test: AtomicBool::new(false),
+            usage_count: AtomicU32::new(0),
         })
+    }
+
+    /// True if this frame is classified as hot by CLOCK-Pro.
+    pub fn is_hot(&self) -> bool {
+        self.hot.load(Ordering::Relaxed)
+    }
+
+    /// Set the hot classification.
+    pub fn set_hot(&self, hot: bool) {
+        self.hot.store(hot, Ordering::Relaxed);
+    }
+
+    /// True if this frame is in its CLOCK-Pro cold-page test period.
+    pub fn is_cold_test(&self) -> bool {
+        self.cold_test.load(Ordering::Relaxed)
+    }
+
+    /// Set the cold-test classification.
+    pub fn set_cold_test(&self, test: bool) {
+        self.cold_test.store(test, Ordering::Relaxed);
+    }
+
+    /// Increment the approximate usage counter.
+    pub fn bump_usage(&self) {
+        self.usage_count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -61,15 +98,27 @@ pub struct PageGuard {
 }
 
 impl PageGuard {
+    /// Create a guard for an existing resident page (cache hit).
     fn new(frame_id: FrameId, page: Arc<Page>, pool: Arc<BufferPool>) -> Self {
-        pool.frames[frame_id]
-            .lock()
-            .pin_count
-            .fetch_add(1, Ordering::Relaxed);
-        pool.frames[frame_id]
-            .lock()
-            .ref_bit
-            .store(true, Ordering::Relaxed);
+        let frame = pool.frames[frame_id].lock();
+        frame.pin_count.fetch_add(1, Ordering::Relaxed);
+        frame.ref_bit.store(true, Ordering::Relaxed);
+        pool.metrics.inc_cache_hits();
+        pool.eviction_policy.record_access(frame_id, &frame);
+        drop(frame);
+        Self {
+            frame_id,
+            page,
+            pool,
+        }
+    }
+
+    /// Create a guard for a page that was just installed from disk or newly
+    /// allocated.  Does not count as a cache hit.
+    fn new_installed(frame_id: FrameId, page: Arc<Page>, pool: Arc<BufferPool>) -> Self {
+        let frame = pool.frames[frame_id].lock();
+        frame.pin_count.fetch_add(1, Ordering::Relaxed);
+        drop(frame);
         Self {
             frame_id,
             page,
@@ -182,18 +231,60 @@ pub struct BufferPool {
     /// Serializes eviction and new-page installation to avoid deadlocks with
     /// the sharded page table.
     eviction_lock: ParkingMutex<()>,
-    clock_hand: AtomicUsize,
+    /// Operational metrics.
+    metrics: Arc<Metrics>,
+    /// Eviction policy.  Default is CLOCK-Pro.
+    eviction_policy: Box<dyn EvictionPolicy>,
 }
 
 impl BufferPool {
     const NUM_SHARDS: usize = 64;
 
-    /// Create a buffer pool with `capacity` frames.
+    /// Create a buffer pool with `capacity` frames using the default
+    /// CLOCK-Pro eviction policy and a private metrics collector.
     pub fn new(
         capacity: usize,
         page_size: usize,
         disk: Arc<PagedFile>,
         allocator: Arc<SyncMutex<PageAllocator>>,
+    ) -> Result<Self> {
+        Self::with_metrics(
+            capacity,
+            page_size,
+            disk,
+            allocator,
+            Arc::new(Metrics::new()),
+        )
+    }
+
+    /// Create a buffer pool with an explicit shared metrics collector and the
+    /// default CLOCK-Pro eviction policy.
+    pub fn with_metrics(
+        capacity: usize,
+        page_size: usize,
+        disk: Arc<PagedFile>,
+        allocator: Arc<SyncMutex<PageAllocator>>,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self> {
+        Self::with_policy(
+            capacity,
+            page_size,
+            disk,
+            allocator,
+            metrics,
+            Box::new(ClockPro::new(capacity)),
+        )
+    }
+
+    /// Create a buffer pool with an explicit eviction policy and metrics
+    /// collection.  Primarily useful for tests.
+    pub fn with_policy(
+        capacity: usize,
+        page_size: usize,
+        disk: Arc<PagedFile>,
+        allocator: Arc<SyncMutex<PageAllocator>>,
+        metrics: Arc<Metrics>,
+        policy: Box<dyn EvictionPolicy>,
     ) -> Result<Self> {
         if capacity == 0 {
             return Err(Error::InvalidArgument(
@@ -214,8 +305,42 @@ impl BufferPool {
             frames,
             page_table,
             eviction_lock: ParkingMutex::new(()),
-            clock_hand: AtomicUsize::new(0),
+            metrics,
+            eviction_policy: policy,
         })
+    }
+
+    /// Return a reference to the pool's metrics collector.
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
+    /// Return the name of the active eviction policy.
+    pub fn eviction_policy_name(&self) -> &'static str {
+        self.eviction_policy.name()
+    }
+
+    /// Return the configured page size.
+    pub fn page_size(&self) -> usize {
+        self.page_size
+    }
+
+    /// Return the number of frames in the pool.
+    pub fn capacity(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Return a reference to the underlying paged file.
+    pub(crate) fn disk(&self) -> &Arc<PagedFile> {
+        &self.disk
+    }
+
+    /// Try to lock a frame without blocking.
+    pub(crate) fn try_lock_frame(
+        &self,
+        frame_id: FrameId,
+    ) -> Option<parking_lot::MutexGuard<'_, Frame>> {
+        self.frames[frame_id].try_lock()
     }
 
     /// Fetch an existing page by id.  Returns a guard that logically pins the
@@ -260,6 +385,7 @@ impl BufferPool {
         if let Ok(guard) = self.fetch(page_id) {
             return Ok(guard);
         }
+        self.metrics.inc_cache_misses();
         let frame_id = self.evict()?;
         let bytes = self.disk.read_page(page_id)?;
         let page = Page::from_bytes(bytes)?;
@@ -268,7 +394,7 @@ impl BufferPool {
             frame.page_id = page_id;
             frame.page = Arc::new(page);
             frame.dirty.store(false, Ordering::Relaxed);
-            frame.ref_bit.store(true, Ordering::Relaxed);
+            self.eviction_policy.record_install(page_id, &frame);
         }
         let shard = self.shard(page_id);
         let mut table = self.page_table[shard].write();
@@ -277,7 +403,7 @@ impl BufferPool {
         let frame = self.frames[frame_id].lock();
         let page = Arc::clone(&frame.page);
         drop(frame);
-        Ok(PageGuard::new(frame_id, page, Arc::clone(self)))
+        Ok(PageGuard::new_installed(frame_id, page, Arc::clone(self)))
     }
 
     /// Fetch an existing page, or create a fresh empty page with the given id if
@@ -376,7 +502,7 @@ impl BufferPool {
             frame.page_id = page_id;
             frame.page = Arc::new(Page::new(page_id, self.page_size)?);
             frame.dirty.store(true, Ordering::Relaxed);
-            frame.ref_bit.store(true, Ordering::Relaxed);
+            self.eviction_policy.record_install(page_id, &frame);
         }
         let shard = self.shard(page_id);
         let mut table = self.page_table[shard].write();
@@ -385,7 +511,7 @@ impl BufferPool {
         let frame = self.frames[frame_id].lock();
         let page = Arc::clone(&frame.page);
         drop(frame);
-        Ok(PageGuard::new(frame_id, page, Arc::clone(self)))
+        Ok(PageGuard::new_installed(frame_id, page, Arc::clone(self)))
     }
 
     /// Flush a specific frame to disk if it is dirty.
@@ -394,6 +520,7 @@ impl BufferPool {
         if frame.dirty.load(Ordering::Relaxed) && frame.page_id != NULL_PAGE_ID {
             self.disk.write_page(frame.page_id, &frame.page.data())?;
             frame.dirty.store(false, Ordering::Relaxed);
+            self.metrics.inc_page_flushes();
         }
         Ok(())
     }
@@ -501,6 +628,8 @@ impl BufferPool {
                 frame.page = Arc::new(Page::new(PageId::new(frame_id as u64), self.page_size)?);
                 frame.dirty.store(false, Ordering::Relaxed);
                 frame.ref_bit.store(false, Ordering::Relaxed);
+                frame.set_hot(false);
+                frame.set_cold_test(false);
                 let mut table = self.page_table[shard].write();
                 table.remove(&page_id);
             }
@@ -509,41 +638,39 @@ impl BufferPool {
         Ok(())
     }
 
-    /// Run one pass of the CLOCK algorithm and return an empty frame id.
+    /// Run the eviction policy and return an empty frame id.
     ///
     /// The caller must hold `eviction_lock`.
     fn evict(&self) -> Result<FrameId> {
-        let capacity = self.frames.len();
-        for _ in 0..capacity * 4 {
-            let hand = self.clock_hand.fetch_add(1, Ordering::Relaxed) % capacity;
-            let mut frame = match self.frames[hand].try_lock() {
-                Some(g) => g,
-                None => continue,
-            };
-            if frame.pin_count.load(Ordering::Acquire) > 0 {
-                continue;
+        let hand = self
+            .eviction_policy
+            .select_victim(&self.frames)
+            .ok_or_else(|| {
+                Error::Corruption(format!(
+                    "{} eviction could not find a victim frame",
+                    self.eviction_policy.name()
+                ))
+            })?;
+
+        let mut frame = self.frames[hand].lock();
+        self.eviction_policy.record_eviction(hand, &frame);
+        self.metrics.inc_evictions();
+
+        if frame.page_id != NULL_PAGE_ID {
+            if frame.dirty.load(Ordering::Relaxed) {
+                self.disk.write_page(frame.page_id, &frame.page.data())?;
+                self.metrics.inc_page_flushes();
             }
-            if frame.ref_bit.load(Ordering::Relaxed) {
-                frame.ref_bit.store(false, Ordering::Relaxed);
-                continue;
-            }
-            // Found a victim.
-            if frame.page_id != NULL_PAGE_ID {
-                if frame.dirty.load(Ordering::Relaxed) {
-                    self.disk.write_page(frame.page_id, &frame.page.data())?;
-                }
-                let shard = self.shard(frame.page_id);
-                let mut table = self.page_table[shard].write();
-                table.remove(&frame.page_id);
-                frame.page_id = NULL_PAGE_ID;
-            }
-            frame.dirty.store(false, Ordering::Relaxed);
-            frame.ref_bit.store(false, Ordering::Relaxed);
-            return Ok(hand);
+            let shard = self.shard(frame.page_id);
+            let mut table = self.page_table[shard].write();
+            table.remove(&frame.page_id);
+            frame.page_id = NULL_PAGE_ID;
         }
-        Err(Error::Corruption(
-            "CLOCK eviction could not find a victim frame".into(),
-        ))
+        frame.dirty.store(false, Ordering::Relaxed);
+        frame.ref_bit.store(false, Ordering::Relaxed);
+        frame.set_hot(false);
+        frame.set_cold_test(false);
+        Ok(hand)
     }
 
     fn shard(&self, page_id: PageId) -> usize {
@@ -735,5 +862,96 @@ mod tests {
             })
             .unwrap();
         assert!(pool.is_frame_dirty(id).unwrap());
+    }
+
+    fn make_pool_with_policy(
+        capacity: usize,
+        policy: Box<dyn EvictionPolicy>,
+    ) -> (Arc<BufferPool>, tempfile::TempDir, Arc<Metrics>) {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
+        let metrics = Arc::new(Metrics::new());
+        let pool = Arc::new(
+            BufferPool::with_policy(capacity, 512, disk, alloc, Arc::clone(&metrics), policy)
+                .unwrap(),
+        );
+        (pool, dir, metrics)
+    }
+
+    #[test]
+    fn simple_clock_policy_evicts_unpinned_frames() {
+        let (pool, _dir, _) =
+            make_pool_with_policy(2, Box::new(crate::eviction::SimpleClock::new()));
+        let g1 = pool.new_page().unwrap();
+        let id1 = g1.page().id;
+        drop(g1);
+        let g2 = pool.new_page().unwrap();
+        let id2 = g2.page().id;
+        drop(g2);
+        let g3 = pool.new_page().unwrap();
+        let id3 = g3.page().id;
+        drop(g3);
+        assert!(pool.fetch(id1).is_err() || pool.fetch(id2).is_err());
+        assert!(pool.fetch(id3).is_ok());
+    }
+
+    #[test]
+    fn clock_pro_policy_evicts_unpinned_frames() {
+        let (pool, _dir, _) = make_pool_with_policy(2, Box::new(ClockPro::new(2)));
+        let g1 = pool.new_page().unwrap();
+        let id1 = g1.page().id;
+        drop(g1);
+        let g2 = pool.new_page().unwrap();
+        let id2 = g2.page().id;
+        drop(g2);
+        let g3 = pool.new_page().unwrap();
+        let id3 = g3.page().id;
+        drop(g3);
+        assert!(pool.fetch(id1).is_err() || pool.fetch(id2).is_err());
+        assert!(pool.fetch(id3).is_ok());
+    }
+
+    #[test]
+    fn clock_pro_prefers_frequently_accessed_pages() {
+        let (pool, _dir, _) = make_pool_with_policy(4, Box::new(ClockPro::new(4)));
+        let guards: Vec<_> = (0..4).map(|_| pool.new_page().unwrap()).collect();
+        let ids: Vec<_> = guards.iter().map(|g| g.page().id).collect();
+        // Make the first two pages hot.
+        for _ in 0..5 {
+            let _ = pool.fetch(ids[0]).unwrap();
+            let _ = pool.fetch(ids[1]).unwrap();
+        }
+        drop(guards);
+        // Evict by allocating more pages.  Re-touch the hot pages between each
+        // eviction so the hot hand sees them as still referenced and does not
+        // demote them.
+        for _ in 0..4 {
+            let _ = pool.new_page().unwrap();
+            let _ = pool.fetch(ids[0]).unwrap();
+            let _ = pool.fetch(ids[1]).unwrap();
+        }
+        assert!(pool.fetch(ids[0]).is_ok(), "hot page 0 should survive");
+        assert!(pool.fetch(ids[1]).is_ok(), "hot page 1 should survive");
+        // At least one of the untouched cold pages should have been evicted.
+        assert!(
+            pool.fetch(ids[2]).is_err() || pool.fetch(ids[3]).is_err(),
+            "a cold page should have been evicted"
+        );
+    }
+
+    #[test]
+    fn eviction_increments_counter() {
+        let (pool, _dir, metrics) = make_pool_with_policy(2, Box::new(ClockPro::new(2)));
+        let g1 = pool.new_page().unwrap();
+        drop(g1);
+        let g2 = pool.new_page().unwrap();
+        drop(g2);
+        let before = metrics.snapshot().evictions;
+        let _g3 = pool.new_page().unwrap();
+        assert!(
+            metrics.snapshot().evictions > before,
+            "eviction counter should increase"
+        );
     }
 }

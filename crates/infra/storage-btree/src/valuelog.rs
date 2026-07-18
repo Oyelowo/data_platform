@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use parking_lot::Mutex as ParkingMutex;
+
 use crate::error::{Error, Result};
 use crate::io::{Boundary, OpenOptions, RealBackend, StorageBackend, StorageFile};
 use crate::sync::Mutex as SyncMutex;
@@ -35,6 +37,7 @@ pub struct ValueLog {
     ref_counts: SyncMutex<HashMap<(ValueOffset, ValueLen), usize>>,
     durability: Durability,
     backend: Arc<dyn StorageBackend>,
+    metrics: ParkingMutex<Option<std::sync::Arc<crate::metrics::Metrics>>>,
 }
 
 impl ValueLog {
@@ -72,7 +75,13 @@ impl ValueLog {
             ref_counts: SyncMutex::new(HashMap::new()),
             durability,
             backend,
+            metrics: ParkingMutex::new(None),
         })
+    }
+
+    /// Attach a metrics collector to this value log.
+    pub fn set_metrics(&self, metrics: std::sync::Arc<crate::metrics::Metrics>) {
+        *self.metrics.lock() = Some(metrics);
     }
 
     fn with_file<F, T>(&self, f: F) -> Result<T>
@@ -127,9 +136,16 @@ impl ValueLog {
             if self.durability == Durability::Immediate {
                 self.backend.pre_op(Boundary::ValueLogSync)?;
                 file.sync().map_err(Error::Io)?;
+                if let Some(m) = self.metrics.lock().as_ref() {
+                    m.inc_value_log_syncs();
+                }
             }
             Ok(())
         })?;
+
+        if let Some(m) = self.metrics.lock().as_ref() {
+            m.inc_value_log_bytes(write_len as u64);
+        }
 
         Ok((offset, len))
     }
@@ -159,7 +175,11 @@ impl ValueLog {
     /// fsync the log file.
     pub fn sync(&self) -> Result<()> {
         self.backend.pre_op(Boundary::ValueLogSync)?;
-        self.with_file(|file| file.sync().map_err(Error::Io))
+        self.with_file(|file| file.sync().map_err(Error::Io))?;
+        if let Some(m) = self.metrics.lock().as_ref() {
+            m.inc_value_log_syncs();
+        }
+        Ok(())
     }
 
     /// Sync and close the log file.

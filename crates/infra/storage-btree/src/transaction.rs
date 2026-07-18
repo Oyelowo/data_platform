@@ -1,14 +1,28 @@
 //! Public transaction wrapper for the in-place B+ tree engine.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use parking_lot::RwLock;
 
 use crate::cursor::BPlusTreeCursor;
 use crate::error::{Error, Result};
 use crate::options::BtreeOptions;
 use crate::tree::BPlusTree;
 use crate::txn::{IsolationLevel as V2IsolationLevel, Transaction as V2Transaction};
+
+/// A buffered modification made by a transaction but not yet committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WriteSetEntry {
+    /// Insert or overwrite with the given value.
+    Put(Vec<u8>),
+    /// Delete the key.
+    Delete,
+}
+
+/// Type alias for the per-transaction write set used by read-your-writes.
+pub type WriteSet = Arc<RwLock<BTreeMap<Vec<u8>, WriteSetEntry>>>;
 
 /// A multi-record transaction against a v2 B+ tree engine.
 pub struct BtreeTransaction {
@@ -19,6 +33,9 @@ pub struct BtreeTransaction {
     finished: bool,
     /// Number of mutating operations performed so far.
     op_count: usize,
+    /// Uncommitted writes made by this transaction, used for read-your-writes
+    /// in range scans.
+    write_set: WriteSet,
 }
 
 impl BtreeTransaction {
@@ -36,6 +53,7 @@ impl BtreeTransaction {
             ));
         }
         let txn = tree.begin_txn(v2_isolation)?;
+        tree.pool().metrics().inc_txns_begun();
         Ok(Self {
             tree,
             txn,
@@ -43,7 +61,13 @@ impl BtreeTransaction {
             read_only,
             finished: false,
             op_count: 0,
+            write_set: Arc::new(RwLock::new(BTreeMap::new())),
         })
+    }
+
+    /// Return a clone of the transaction's write set.
+    pub(crate) fn write_set(&self) -> WriteSet {
+        Arc::clone(&self.write_set)
     }
 
     fn check_write(&self) -> Result<()> {
@@ -86,6 +110,7 @@ impl storage_traits::Transaction for BtreeTransaction {
         if self.finished {
             return Err(Error::TxnFinished);
         }
+        self.tree.pool().metrics().inc_gets();
         self.tree
             .get_txn(&self.txn, key)
             .map(|v| v.map(Bytes::from))
@@ -95,6 +120,10 @@ impl storage_traits::Transaction for BtreeTransaction {
         self.check_write()?;
         self.check_value_size(value)?;
         self.tree.insert_txn(&self.txn, key, value)?;
+        self.tree.pool().metrics().inc_puts();
+        self.write_set
+            .write()
+            .insert(key.to_vec(), WriteSetEntry::Put(value.to_vec()));
         self.op_count += 1;
         Ok(())
     }
@@ -102,6 +131,10 @@ impl storage_traits::Transaction for BtreeTransaction {
     fn delete(&mut self, key: &[u8]) -> Result<()> {
         self.check_write()?;
         self.tree.delete_txn(&self.txn, key)?;
+        self.tree.pool().metrics().inc_deletes();
+        self.write_set
+            .write()
+            .insert(key.to_vec(), WriteSetEntry::Delete);
         self.op_count += 1;
         Ok(())
     }
@@ -114,7 +147,14 @@ impl storage_traits::Transaction for BtreeTransaction {
         if self.finished {
             return Err(Error::TxnFinished);
         }
-        BPlusTreeCursor::new(self.tree.clone(), &self.txn, start, end)
+        self.tree.pool().metrics().inc_scans_started();
+        BPlusTreeCursor::new(
+            self.tree.clone(),
+            &self.txn,
+            start,
+            end,
+            Some(self.write_set()),
+        )
     }
 
     fn commit(mut self) -> Result<()> {
@@ -124,6 +164,7 @@ impl storage_traits::Transaction for BtreeTransaction {
         self.check_op_limit_at_commit()?;
         self.finished = true;
         self.tree.commit_txn(&self.txn)?;
+        self.tree.pool().metrics().inc_txns_committed();
         Ok(())
     }
 
@@ -132,7 +173,10 @@ impl storage_traits::Transaction for BtreeTransaction {
             return Err(Error::TxnFinished);
         }
         self.finished = true;
-        self.tree.rollback_txn(&self.txn)
+        self.tree.rollback_txn(&self.txn)?;
+        self.write_set.write().clear();
+        self.tree.pool().metrics().inc_txns_rolled_back();
+        Ok(())
     }
 
     fn set_isolation(&mut self, level: storage_traits::IsolationLevel) -> Result<()> {

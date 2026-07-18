@@ -5,6 +5,8 @@
 //! page-local and idempotent.  See `PHASE5_DESIGN.md` for the full recovery
 //! protocol.
 
+use parking_lot::Mutex as ParkingMutex;
+
 use crate::error::{Error, Result};
 use crate::page::PageId;
 use crate::slot::{OwnedCell, OwnedValue, parse_cell};
@@ -840,6 +842,7 @@ fn encode_record_to_vec(record: &Record) -> Result<Vec<u8>> {
 /// Adapter that wraps `storage_wal::Wal` and appends physiological v2 records.
 pub struct WalLog {
     inner: storage_wal::Wal,
+    metrics: ParkingMutex<Option<std::sync::Arc<crate::metrics::Metrics>>>,
 }
 
 impl WalLog {
@@ -861,7 +864,15 @@ impl WalLog {
         let wal_dir = dir.as_ref().join("wal");
         let inner = storage_wal::Wal::open_with_fault_config(&wal_dir, options, fault_config)
             .map_err(|e| Error::Io(std::io::Error::other(format!("failed to open WAL: {e}"))))?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            metrics: ParkingMutex::new(None),
+        })
+    }
+
+    /// Attach a metrics collector to this WAL.
+    pub fn set_metrics(&self, metrics: std::sync::Arc<crate::metrics::Metrics>) {
+        *self.metrics.lock() = Some(metrics);
     }
 
     /// Append a raw physiological record and wait for durability.  Returns the
@@ -884,20 +895,36 @@ impl WalLog {
     ) -> Result<Lsn> {
         let mut payload = vec![0u8; record.encoded_size()];
         record.encode(&mut payload)?;
-        self.inner
+        let n = payload.len() as u64;
+        let result = self
+            .inner
             .append_record(
                 storage_wal::Record::new(storage_wal::RecordType::Put, bytes::Bytes::from(payload)),
                 durability,
             )
             .map_err(|e| Error::Io(std::io::Error::other(format!("WAL append failed: {e}"))))
-            .map(Lsn::new)
+            .map(Lsn::new);
+        if result.is_ok()
+            && let Some(m) = self.metrics.lock().as_ref()
+        {
+            m.inc_wal_bytes(n);
+        }
+        result
     }
 
     /// Force a flush of all buffered WAL records.  Blocks until durable.
     pub fn sync(&self) -> Result<()> {
-        self.inner
+        let start = std::time::Instant::now();
+        let result = self
+            .inner
             .sync()
-            .map_err(|e| Error::Io(std::io::Error::other(format!("WAL sync failed: {e}"))))
+            .map_err(|e| Error::Io(std::io::Error::other(format!("WAL sync failed: {e}"))));
+        if result.is_ok()
+            && let Some(m) = self.metrics.lock().as_ref()
+        {
+            m.record_wal_sync(start.elapsed().as_nanos() as u64);
+        }
+        result
     }
 
     /// Iterate over all physiological records starting from `start_lsn`.

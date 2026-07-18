@@ -568,6 +568,23 @@ impl BPlusTree {
         self.retired.with_mut(|r| r.len())
     }
 
+    /// Highest page id reachable from any pinned root plus the current root.
+    ///
+    /// Used by file shrink to avoid truncating pages that are still reachable
+    /// from active cursors or snapshots.
+    pub fn highest_rooted_page_id(&self) -> u64 {
+        let current_root = self.load_root();
+        let mut max = current_root.get();
+        self.active_roots.with_mut(|roots| {
+            for &root in roots.keys() {
+                if root.get() > max {
+                    max = root.get();
+                }
+            }
+        });
+        max
+    }
+
     /// Pin `root` so that `compact` will not reclaim pages reachable from it.
     ///
     /// Each call to `pin_root` must be paired with a later `unpin_root`.
@@ -1142,6 +1159,12 @@ impl BPlusTree {
 
             let child_id = child_for_key(&arc, key)?;
             if arc.latch_word() != version {
+                return Ok(None);
+            }
+            // A poisoned old root (or any transiently invalid internal node) may
+            // have a null child pointer.  Treat it like a concurrent structure
+            // modification and retry from the current root.
+            if child_id == NULL_PAGE_ID {
                 return Ok(None);
             }
 

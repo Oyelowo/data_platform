@@ -40,6 +40,7 @@
 //! require either a global page mutex or a full page copy on every write,
 //! both of which contradict the performance/scalability goals of the engine.
 
+mod backup;
 mod buffer;
 mod checkpoint;
 mod cleaner;
@@ -47,10 +48,13 @@ mod cursor;
 mod disk;
 mod engine;
 mod error;
+pub mod eviction;
 pub mod io;
+mod metrics;
 mod options;
 mod page;
 mod recovery;
+mod shrink;
 mod slot;
 mod space;
 mod sync;
@@ -69,5 +73,6 @@ pub use io::{
     Boundary, FaultRule, FaultSchedule, FaultyBackend, OpFamily, OpenOptions, RealBackend,
     StorageBackend, StorageFile,
 };
+pub use metrics::BtreeMetrics;
 pub use options::BtreeOptions;
 pub use transaction::BtreeTransaction;

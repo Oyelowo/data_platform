@@ -121,6 +121,12 @@ impl PagedFile {
             .sync_dir(self.path.parent().unwrap_or_else(|| Path::new(".")))?;
         Ok(())
     }
+
+    /// Truncate the file to `len` bytes.
+    pub fn set_len(&self, len: u64) -> Result<()> {
+        self.file.set_len(len)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
