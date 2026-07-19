@@ -1,0 +1,20 @@
+[package]
+name = "yelang-qir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Query Intermediate Representation (QIR), physical planning, and execution interface for Yelang"
+documentation.workspace = true
+
+[dependencies]
+yelang-arena = { path = "../yelang-arena" }
+yelang-hir = { path = "../yelang-hir" }
+yelang-ty = { path = "../yelang-ty" }
+yelang-tycheck = { path = "../yelang-tycheck" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-lexer = { path = "../yelang-lexer" }
+thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+rstest.workspace = true

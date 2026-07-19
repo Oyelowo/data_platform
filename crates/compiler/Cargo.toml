@@ -10,6 +10,7 @@ members = [
     "yelang-infer",
     "yelang-trait-solver",
     "yelang-tycheck",
+    "yelang-qir",
     "stdlib/core",
 ]
 resolver = "2"

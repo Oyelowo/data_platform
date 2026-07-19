@@ -863,6 +863,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-qir"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "rstest",
+ "thiserror",
+ "yelang-arena",
+ "yelang-hir",
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-ty",
+ "yelang-tycheck",
+]
+
+[[package]]
 name = "yelang-resolve"
 version = "0.1.0"
 dependencies = [
