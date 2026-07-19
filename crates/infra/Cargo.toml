@@ -18,6 +18,7 @@ members = [
     "storage-columnar",
     "storage-index",
     "storage-art",
+    "storage-vector",
     # "object_store",
     # "distributed_storages",
     # "consensus",
