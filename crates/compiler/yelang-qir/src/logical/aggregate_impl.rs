@@ -51,10 +51,10 @@ pub fn resolve_sugar_marker(ctx: &LoweringCtxt<'_>, method_def_id: DefId) -> Opt
         "max" => "Max",
         _ => return None,
     };
-    find_item_def_by_name(ctx, marker_name)
+    find_marker_def_by_name(ctx, marker_name)
 }
 
-fn find_item_def_by_name(ctx: &LoweringCtxt<'_>, name: &str) -> Option<DefId> {
+pub fn find_marker_def_by_name(ctx: &LoweringCtxt<'_>, name: &str) -> Option<DefId> {
     for (def_id, item) in ctx.krate().items.iter_enumerated() {
         let Some(item) = item.as_ref() else { continue };
         let Some(item_name) = ctx.tcx.resolve_symbol(item.ident.symbol) else { continue };

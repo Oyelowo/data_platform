@@ -808,6 +808,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-driver"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "rstest",
+ "thiserror",
+ "yelang-arena",
+ "yelang-ast",
+ "yelang-hir",
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-qir",
+ "yelang-resolve",
+ "yelang-ty",
+ "yelang-tycheck",
+]
+
+[[package]]
 name = "yelang-hir"
 version = "0.1.0"
 dependencies = [

@@ -65,10 +65,25 @@ pub fn lower(
         QueryableMethod::GroupBy => lower_group_by(plan, ctx, input, args, ty),
         QueryableMethod::Aggregate => lower_aggregate_call(plan, ctx, input, args, ty),
         QueryableMethod::Sum | QueryableMethod::Avg | QueryableMethod::Count | QueryableMethod::Product => {
-            let class = method_def_id
-                .and_then(|id| ctx.aggregate_class(id))
+            let method_def_id = method_def_id.ok_or(LoweringError::UnsupportedExpr)?;
+            // Map the sugar method to its aggregate marker type (e.g. `sum` ->
+            // `Sum`) and read its classification from the stdlib.  If the marker
+            // type is not available (e.g. in hand-written HIR tests), fall back
+            // to a classification registered directly on the method.
+            let marker_name = match method {
+                QueryableMethod::Sum => "Sum",
+                QueryableMethod::Avg => "Avg",
+                QueryableMethod::Count => "Count",
+                QueryableMethod::Product => "Product",
+                _ => unreachable!(),
+            };
+            let agg_def = aggregate_impl::find_marker_def_by_name(ctx, marker_name)
+                .or_else(|| ctx.aggregate_class(method_def_id).map(|_| method_def_id))
                 .ok_or_else(|| LoweringError::MissingAggregate(format!("{:?}", method)))?;
-            lower_aggregate_sugar(plan, ctx, input, method_def_id.unwrap(), class, ty)
+            let class = ctx
+                .aggregate_class(agg_def)
+                .ok_or_else(|| LoweringError::MissingAggregate(format!("{:?}", method)))?;
+            lower_aggregate_sugar(plan, ctx, input, agg_def, class, ty)
         }
         QueryableMethod::Execute => Ok(input),
     }
@@ -233,13 +248,12 @@ fn lower_aggregate_sugar(
     plan: &mut LogicalPlan,
     ctx: &mut LoweringCtxt<'_>,
     input: LirId,
-    method_def_id: DefId,
+    agg_def: DefId,
     class: AggregateClass,
     ty: TyId,
 ) -> Result<LirId, LoweringError> {
     let per_row = identity_per_row(plan, input);
     let elem_ty = plan.expr(per_row).ty();
-    let agg_def = aggregate_impl::resolve_sugar_marker(ctx, method_def_id).unwrap_or(method_def_id);
     let agg = aggregate_impl::build_builtin_aggregate(plan, ctx, agg_def, per_row, class, elem_ty, ty)
         .unwrap_or_else(|| placeholder_aggregate_op(plan, agg_def, class, per_row, elem_ty, ty));
     Ok(plan.aggregate(input, agg, ty))

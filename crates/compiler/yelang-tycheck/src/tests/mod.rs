@@ -2516,6 +2516,7 @@ fn inherent_method_call_with_autoref() {
             ident: yelang_ast::Ident::new(symbol(10), dummy_span()),
             kind: yelang_hir::hir::core::ImplItemKind::Fn {
                 sig: bar_sig,
+                generics: yelang_hir::hir::core::Generics { params: vec![], where_clause: None, span: dummy_span() },
                 body: bar_body,
             },
             attrs: vec![],
@@ -2638,6 +2639,7 @@ fn trait_method_call_extension() {
         ident: yelang_ast::Ident::new(symbol(10), dummy_span()),
         kind: yelang_hir::hir::core::TraitItemKind::Fn {
             sig: greet_sig.clone(),
+            generics: yelang_hir::hir::core::Generics { params: vec![], where_clause: None, span: dummy_span() },
             default: None,
         },
         attrs: vec![],
@@ -2673,6 +2675,7 @@ fn trait_method_call_extension() {
             path: Res::Def {
                 def_id: trait_def_id,
             },
+            args: vec![],
             span: dummy_span(),
         }),
         items: vec![yelang_hir::hir::core::ImplItem {
@@ -2680,6 +2683,7 @@ fn trait_method_call_extension() {
             ident: yelang_ast::Ident::new(symbol(10), dummy_span()),
             kind: yelang_hir::hir::core::ImplItemKind::Fn {
                 sig: greet_sig.clone(),
+                generics: yelang_hir::hir::core::Generics { params: vec![], where_clause: None, span: dummy_span() },
                 body: impl_body,
             },
             attrs: vec![],
@@ -2933,6 +2937,7 @@ fn method_dispatch_via_deref_trait() {
             path: Res::Def {
                 def_id: deref_trait,
             },
+            args: vec![],
             span: dummy_span(),
         }),
         items: vec![target_impl_assoc],
@@ -2973,6 +2978,7 @@ fn method_dispatch_via_deref_trait() {
         ident: yelang_ast::Ident::new(symbol(30), dummy_span()),
         kind: yelang_hir::hir::core::ImplItemKind::Fn {
             sig: get_sig,
+                generics: yelang_hir::hir::core::Generics { params: vec![], where_clause: None, span: dummy_span() },
             body: get_body,
         },
         attrs: vec![],
@@ -3175,6 +3181,7 @@ fn deref_chain_two_steps() {
                 path: Res::Def {
                     def_id: deref_trait,
                 },
+            args: vec![],
                 span: dummy_span(),
             }),
             items: vec![type_item],
@@ -3216,6 +3223,7 @@ fn deref_chain_two_steps() {
         ident: yelang_ast::Ident::new(symbol(30), dummy_span()),
         kind: yelang_hir::hir::core::ImplItemKind::Fn {
             sig: val_sig,
+                generics: yelang_hir::hir::core::Generics { params: vec![], where_clause: None, span: dummy_span() },
             body: val_body,
         },
         attrs: vec![],
@@ -3872,6 +3880,7 @@ fn field_through_deref_trait() {
             path: Res::Def {
                 def_id: deref_trait,
             },
+            args: vec![],
             span: dummy_span(),
         }),
         items: vec![target_impl_assoc],

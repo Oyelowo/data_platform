@@ -238,7 +238,8 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
             }
             for trait_item in items {
                 match &trait_item.kind {
-                    crate::hir::core::TraitItemKind::Fn { sig, default } => {
+                    crate::hir::core::TraitItemKind::Fn { sig, generics, default } => {
+                        visitor.visit_generics(generics);
                         walk_fn_sig(visitor, sig);
                         if let Some(body) = *default {
                             visitor.visit_body_by_id(body);
@@ -275,7 +276,8 @@ pub fn walk_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir Item) {
             }
             for impl_item in items {
                 match &impl_item.kind {
-                    crate::hir::core::ImplItemKind::Fn { sig, body } => {
+                    crate::hir::core::ImplItemKind::Fn { sig, generics, body } => {
+                        visitor.visit_generics(generics);
                         walk_fn_sig(visitor, sig);
                         visitor.visit_body_by_id(*body);
                     }
@@ -841,8 +843,10 @@ pub fn walk_trait_bound<'hir, V: Visitor<'hir>>(visitor: &mut V, bound: &'hir Tr
     }
 }
 
-pub fn walk_trait_ref<'hir, V: Visitor<'hir>>(_visitor: &mut V, _trait_ref: &'hir TraitRef) {
-    // Trait references contain only a resolved path; no nested HIR nodes to walk.
+pub fn walk_trait_ref<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_ref: &'hir TraitRef) {
+    for arg in &trait_ref.args {
+        walk_generic_arg(visitor, arg);
+    }
 }
 
 pub fn walk_use_path<'hir, V: Visitor<'hir>>(visitor: &mut V, path: &'hir UsePath) {
@@ -908,7 +912,8 @@ pub fn walk_impl<'hir, V: Visitor<'hir>>(visitor: &mut V, impl_: &'hir Impl) {
 
 pub fn walk_impl_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir ImplItem) {
     match &item.kind {
-        crate::hir::core::ImplItemKind::Fn { sig, body } => {
+        crate::hir::core::ImplItemKind::Fn { sig, generics, body } => {
+            visitor.visit_generics(generics);
             walk_fn_sig(visitor, sig);
             visitor.visit_body_by_id(*body);
         }
@@ -934,7 +939,8 @@ pub fn walk_trait<'hir, V: Visitor<'hir>>(visitor: &mut V, trait_: &'hir Trait) 
 
 pub fn walk_trait_item<'hir, V: Visitor<'hir>>(visitor: &mut V, item: &'hir TraitItem) {
     match &item.kind {
-        crate::hir::core::TraitItemKind::Fn { sig, default } => {
+        crate::hir::core::TraitItemKind::Fn { sig, generics, default } => {
+            visitor.visit_generics(generics);
             walk_fn_sig(visitor, sig);
             if let Some(body) = *default {
                 visitor.visit_body_by_id(body);

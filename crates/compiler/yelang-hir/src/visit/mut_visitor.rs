@@ -838,11 +838,13 @@ pub fn walk_trait_bound_mut(
 }
 
 pub fn walk_trait_ref_mut(
-    _v: &mut impl MutVisitor,
-    _crate_hir: &mut Crate,
-    _trait_ref: &mut TraitRef,
+    v: &mut impl MutVisitor,
+    crate_hir: &mut Crate,
+    trait_ref: &mut TraitRef,
 ) {
-    // Trait references contain only a resolved path; no nested HIR nodes to walk.
+    for arg in &mut trait_ref.args {
+        walk_generic_arg_mut(v, crate_hir, arg);
+    }
 }
 
 pub fn walk_use_path_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, path: &mut UsePath) {
@@ -915,7 +917,8 @@ pub fn walk_impl_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, impl_: &mut
 pub fn walk_impl_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut ImplItem) {
     v.visit_impl_item(item);
     match &mut item.kind {
-        crate::hir::core::ImplItemKind::Fn { sig, body } => {
+        crate::hir::core::ImplItemKind::Fn { sig, generics, body } => {
+            walk_generics_mut(v, crate_hir, generics);
             walk_fn_sig_mut(v, crate_hir, sig);
             visit_body_id_mut(v, crate_hir, *body);
         }
@@ -942,7 +945,8 @@ pub fn walk_trait_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, trait_: &m
 pub fn walk_trait_item_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, item: &mut TraitItem) {
     v.visit_trait_item(item);
     match &mut item.kind {
-        crate::hir::core::TraitItemKind::Fn { sig, default } => {
+        crate::hir::core::TraitItemKind::Fn { sig, generics, default } => {
+            walk_generics_mut(v, crate_hir, generics);
             walk_fn_sig_mut(v, crate_hir, sig);
             if let Some(body) = default {
                 visit_body_id_mut(v, crate_hir, *body);

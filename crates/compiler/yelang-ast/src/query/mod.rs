@@ -7,6 +7,7 @@
 
 mod create;
 mod delete;
+mod desugar;
 mod link;
 mod parse;
 mod select;
@@ -17,6 +18,7 @@ mod upsert;
 
 pub use create::*;
 pub use delete::*;
+pub use desugar::*;
 pub use link::*;
 pub use select::*;
 pub use unlink::*;

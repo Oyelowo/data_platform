@@ -69,12 +69,16 @@ fn resolve_with_fallback(fcx: &mut FnCtxt<'_>, ty: TyId) -> TyId {
             fcx.mk_float(FloatTy::F64)
         }
         Ty::Infer(InferTy::TyVar(_)) => {
-            // General type variable: try to resolve, otherwise error
+            // General type variable: try to resolve. If it resolves to another
+            // inference variable (e.g. a TyVar unified with an IntVar because
+            // of an unannotated closure parameter), apply the corresponding
+            // fallback. Otherwise report an error.
             let resolved = fcx.resolve_ty(ty);
-            if matches!(interner.ty(resolved), Ty::Infer(InferTy::TyVar(_))) {
-                fcx.mk_error()
-            } else {
-                resolved
+            match interner.ty(resolved) {
+                Ty::Infer(InferTy::TyVar(_)) => fcx.mk_error(),
+                Ty::Infer(InferTy::IntVar(_)) => resolve_with_fallback(fcx, resolved),
+                Ty::Infer(InferTy::FloatVar(_)) => resolve_with_fallback(fcx, resolved),
+                _ => resolved,
             }
         }
         _ => fcx.resolve_ty(ty),

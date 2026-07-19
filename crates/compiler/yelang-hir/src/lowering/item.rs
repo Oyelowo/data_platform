@@ -261,6 +261,7 @@ fn lower_trait_item(
                         .collect();
                     crate::hir::core::TraitItemKind::Fn {
                         sig: lower_fn_sig(ctx, &m.sig, m.is_const, inputs.clone()),
+                        generics: lower_generics(ctx, &m.generics),
                         default: m.body.as_ref().map(|body| {
                             crate::lowering::body::lower_block_as_body(
                                 ctx,
@@ -325,9 +326,13 @@ fn lower_trait_item(
     let super_traits: Vec<crate::hir::core::TraitRef> = t
         .super_traits
         .iter()
-        .map(|b| crate::hir::core::TraitRef {
-            path: crate::lowering::ty::lower_trait_bound(ctx, b).path,
-            span: b.span,
+        .map(|b| {
+            let bound = crate::lowering::ty::lower_trait_bound(ctx, b);
+            crate::hir::core::TraitRef {
+                path: bound.path,
+                args: bound.args,
+                span: bound.span,
+            }
         })
         .collect();
 
@@ -371,6 +376,7 @@ fn lower_impl_item(
         .as_ref()
         .map(|path| crate::hir::core::TraitRef {
             path: crate::lowering::expr::resolve_ast_path(ctx, path),
+            args: crate::lowering::ty::lower_generic_args_from_path(ctx, path),
             span: path.span,
         });
 
@@ -388,13 +394,14 @@ fn lower_impl_item(
                         .map(|p| crate::lowering::ty::lower_ty(ctx, &p.ty))
                         .collect();
                     let sig = lower_fn_sig(ctx, &m.sig, m.is_const, inputs.clone());
+                    let generics = lower_generics(ctx, &m.generics);
                     let body_id = crate::lowering::body::lower_block_as_body(
                         ctx,
                         &m.body,
                         &m.sig.params,
                         &inputs,
                     );
-                    crate::hir::core::ImplItemKind::Fn { sig, body: body_id }
+                    crate::hir::core::ImplItemKind::Fn { sig, generics, body: body_id }
                 }
                 yelang_ast::ImplItemKind::AssociatedType(at) => {
                     crate::hir::core::ImplItemKind::Type {

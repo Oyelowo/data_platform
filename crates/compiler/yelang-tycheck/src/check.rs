@@ -101,7 +101,7 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
             method,
             args,
             ..
-        } => check_method_call(fcx, *receiver, method, args),
+        } => check_method_call(fcx, _expr_id, *receiver, method, args),
         Expr::Field { expr, field } => check_field(fcx, *expr, field),
         Expr::Index { expr, index } => check_index(fcx, *expr, *index),
         Expr::Assign { left, right } => check_assign(fcx, *left, *right),
@@ -330,7 +330,10 @@ fn check_select_query(
     }
 
     if let Some(group_by) = &select.group_by {
-        check_group_by(fcx, span, group_by);
+        let _group_element_ty = check_group_by(fcx, span, group_by);
+        // `check_group_by` already bound the `into` identifier to the collection
+        // of groups (`Array<{ key: K, members: Array<T> }>`). Projections use
+        // that collection directly (e.g. `groups@g[*].key`).
     }
 
     check_expr(fcx, select.projection)
@@ -505,7 +508,7 @@ fn check_group_by(
     fcx: &mut FnCtxt<'_>,
     _span: yelang_lexer::Span,
     group_by: &yelang_hir::hir::query::GroupByClause,
-) {
+) -> TyId {
     let mut key_fields = Vec::new();
     for key in &group_by.keys {
         let ty = check_expr(fcx, key.expr);
@@ -550,7 +553,11 @@ fn check_group_by(
     }));
     let groups_array_ty = fcx.mk_array_ty(group_element_ty);
 
+    // The binder first names the whole collection of groups so that the
+    // projection can be type-checked as iterating over that collection.
     check_pat(fcx, group_by.into_binder, groups_array_ty);
+
+    group_element_ty
 }
 
 fn check_create_query(
@@ -1188,6 +1195,7 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
 
 fn check_method_call(
     fcx: &mut FnCtxt<'_>,
+    expr_id: ExprId,
     receiver: ExprId,
     method: &yelang_ast::Ident,
     args: &[ExprId],
@@ -1195,7 +1203,7 @@ fn check_method_call(
     if let Some(ty) = crate::array_builtins::try_check_array_method_call(fcx, receiver, method.symbol, args) {
         return ty;
     }
-    crate::method::check_method_call(fcx, receiver, method.symbol, args)
+    crate::method::check_method_call(fcx, expr_id, receiver, method.symbol, args)
 }
 
 // ---------------------------------------------------------------------------

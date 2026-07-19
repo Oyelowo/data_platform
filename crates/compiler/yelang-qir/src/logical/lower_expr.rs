@@ -93,14 +93,15 @@ pub fn lower_hir_expr(
                 .unwrap_or_else(|| plan.alloc_expr(QExpr::Lit(QLit::Unit, ty)));
             Ok(plan.alloc_expr(QExpr::If(c, t, e, ty)))
         }
-        Expr::Closure { params, body, .. } => {
+        Expr::Closure { body, .. } => {
+            let body_node = ctx.krate().body(body).ok_or(LoweringError::UnsupportedExpr)?;
+            let params: Vec<_> = body_node.params.iter().map(|p| p.pat).collect();
+            let body_expr = body_node.value;
             let binders: Vec<BinderId> = (0..params.len()).map(|_| plan.fresh_binder()).collect();
             ctx.push_binder_scope();
-            for (param, binder) in params.iter().zip(binders.iter()) {
-                ctx.insert_binder(param.pat, *binder);
+            for (pat, binder) in params.iter().zip(binders.iter()) {
+                ctx.insert_binder(*pat, *binder);
             }
-            let body_node = ctx.krate().body(body).ok_or(LoweringError::UnsupportedExpr)?;
-            let body_expr = body_node.value;
             let b = lower_hir_expr(plan, ctx, body_expr)?;
             ctx.pop_binder_scope();
             Ok(plan.alloc_expr(QExpr::Closure {

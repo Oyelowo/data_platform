@@ -13,6 +13,7 @@ pub use crate::hir::item::{Item, ItemKind};
 pub use crate::hir::pat::Pat;
 pub use crate::hir::ty::Ty;
 
+use crate::hir::ty::GenericArg;
 use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, StmtId};
 use crate::res::Res;
 
@@ -219,6 +220,7 @@ pub struct TraitItem {
 pub enum TraitItemKind {
     Fn {
         sig: FnSig,
+        generics: Generics,
         default: Option<BodyId>,
     },
     Const {
@@ -266,7 +268,7 @@ pub struct ImplItem {
 /// Kinds of impl items.
 #[derive(Debug, Clone)]
 pub enum ImplItemKind {
-    Fn { sig: FnSig, body: BodyId },
+    Fn { sig: FnSig, generics: Generics, body: BodyId },
     Const { ty: HirTyId, body: BodyId },
     Type { ty: HirTyId },
 }
@@ -275,6 +277,9 @@ pub enum ImplItemKind {
 #[derive(Debug, Clone)]
 pub struct TraitRef {
     pub path: Res,
+    /// Generic arguments written on the trait path, e.g. the `<T>` in
+    /// `impl<T> Queryable<T> for Array<T>`.
+    pub args: Vec<GenericArg>,
     pub span: Span,
 }
 

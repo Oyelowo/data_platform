@@ -1,5 +1,6 @@
 //! Lower HIR query constructs into LIR.
 
+use yelang_hir::hir::expr::Expr;
 use yelang_hir::hir::query::{Query, QueryKind, SelectQuery};
 
 use crate::errors::LoweringError;
@@ -108,13 +109,42 @@ pub fn lower_select_query(
     }
 
     // 7. Projection.
+    // Special case: `select groups@g[*].expr from ... group by ... into groups`.
+    // Use the group-by output as the input collection directly instead of
+    // scanning the `groups` binder as a free variable.
+    if let Some(group) = &sq.group_by {
+        if let Some((element_pat, element_expr)) =
+            group_collection_projection(ctx, sq.projection, group.into_binder)
+        {
+            let element_binder = plan.fresh_binder();
+            ctx.insert_binder(element_pat, element_binder);
+            let proj = super::lower_expr::lower_hir_expr(plan, ctx, element_expr)?;
+            let proj = wrap_as_closure(plan, element_binder, proj);
+            let out_ty = plan.expr(proj).ty();
+            input = plan.map(input, proj, out_ty);
+            plan.props[input].output_binder = Some(element_binder);
+            plan.set_root(input);
+            ctx.pop_binder_scope();
+            return Ok(input);
+        }
+    }
+
     let projection = super::lower_expr::lower_hir_expr(plan, ctx, sq.projection)?;
-    let input_binder = plan.props[input].output_binder;
-    let projection = input_binder.map(|b| wrap_as_closure(plan, b, projection)).unwrap_or(projection);
-    let out_ty = plan.expr(projection).ty();
-    input = plan.map(input, projection, out_ty);
-    if let Some((param, _)) = crate::rewrite::as_closure(plan, projection) {
-        plan.props[input].output_binder = Some(param);
+
+    // If the projection lowered to a subplan (e.g. a `Queryable::sum()`
+    // aggregate), use that plan node directly. Aggregates consume the whole
+    // input and produce a scalar; wrapping them in `Map` would evaluate the
+    // aggregate once per input row and yield an array of nulls.
+    if let crate::expr::QExpr::Subplan(lir, _ty) = plan.expr(projection) {
+        input = *lir;
+    } else {
+        let input_binder = plan.props[input].output_binder;
+        let projection = input_binder.map(|b| wrap_as_closure(plan, b, projection)).unwrap_or(projection);
+        let out_ty = plan.expr(projection).ty();
+        input = plan.map(input, projection, out_ty);
+        if let Some((param, _)) = crate::rewrite::as_closure(plan, projection) {
+            plan.props[input].output_binder = Some(param);
+        }
     }
 
     ctx.pop_binder_scope();
@@ -155,6 +185,47 @@ fn lower_from_node(
 
 fn ty() -> yelang_ty::ty::TyId {
     yelang_ty::ty::TyId::new(1)
+}
+
+/// If `projection` is a comprehension of the form `groups@g[*].expr` where
+/// `groups` is the `group by ... into groups` binder, return the element
+/// binder pattern and the element expression.  This lets `lower_select_query`
+/// treat the group-by output as the pipeline input instead of scanning a
+/// free variable.
+fn group_collection_projection(
+    ctx: &LoweringCtxt<'_>,
+    projection: yelang_hir::ids::ExprId,
+    into_binder: yelang_hir::ids::PatId,
+) -> Option<(yelang_hir::ids::PatId, yelang_hir::ids::ExprId)> {
+    let expr = ctx.krate().expr(projection)?;
+    let Expr::Comprehension {
+        variables,
+        element,
+        condition,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    if condition.is_some() || variables.len() != 1 {
+        return None;
+    }
+    let var = &variables[0];
+    // `[*]` is represented with `flatten == 0` in HIR (stars - 1), so accept
+    // either 0 or 1 to be robust against future HIR changes.
+    if var.flatten > 1 {
+        return None;
+    }
+    let source_expr = ctx.krate().expr(var.source)?;
+    if let Expr::Path {
+        res: yelang_hir::res::Res::Local { pat_id },
+    } = source_expr
+    {
+        if *pat_id == into_binder {
+            return Some((var.pat, *element));
+        }
+    }
+    None
 }
 
 /// Wrap `body` in a single-parameter closure over `binder`.

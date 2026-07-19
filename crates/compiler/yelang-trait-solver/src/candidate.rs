@@ -27,4 +27,6 @@ pub enum CandidateSource {
     AutoTrait,
     /// From a blanket impl.
     Blanket,
+    /// The self type is the trait type itself (trait object / trait-as-type).
+    TraitSelf,
 }

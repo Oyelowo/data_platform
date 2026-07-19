@@ -33,6 +33,7 @@ pub fn lower_method_call(
     args: &[ExprId],
     ty: TyId,
 ) -> Result<LoweredMethod, LoweringError> {
+    // Method resolutions are keyed by the method-call expression id.
     let res = resolve_method(ctx, expr_id);
 
     if let Some(res) = res {

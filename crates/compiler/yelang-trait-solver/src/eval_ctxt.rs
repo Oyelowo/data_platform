@@ -387,6 +387,17 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                 }
             }
 
+            // Trait-as-type self-impl: `Trait<T> for Trait<T>` holds because the
+            // trait name is also used as an abstract/queryable type in the surface
+            // language. This lets users chain methods whose intermediate return
+            // type is the trait itself (e.g. `xs.map(...).sum()` where `map`
+            // returns `Queryable<U>`).
+            if self.is_trait_self_type(&trait_pred.trait_ref) {
+                candidates.push(Candidate {
+                    source: CandidateSource::TraitSelf,
+                });
+            }
+
             // Auto-trait derivation.
             if let Some(info) = self.tcx.trait_info(trait_pred.trait_ref.def_id) {
                 if info.is_auto {
@@ -453,6 +464,7 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
             CandidateSource::UserImpl(impl_info) => self.try_user_impl_candidate(goal, impl_info),
             CandidateSource::AutoTrait => self.try_auto_trait_candidate(goal),
             CandidateSource::Blanket => Err(NoSolution),
+            CandidateSource::TraitSelf => self.try_trait_self_candidate(goal),
         }
     }
 
@@ -500,6 +512,36 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
         } else {
             Err(NoSolution)
         }
+    }
+
+    fn try_trait_self_candidate(&mut self, goal: Goal) -> SolverResult {
+        let trait_pred = match goal.predicate {
+            Predicate::Trait(tp) => tp,
+            _ => return Err(NoSolution),
+        };
+
+        let self_ty = self.trait_self_ty(&trait_pred.trait_ref)?;
+        let self_ty = self.resolve_ty(self_ty);
+        let adt_args = match self.interner.ty(self_ty) {
+            Ty::Adt(adt, args) if adt.def_id == trait_pred.trait_ref.def_id => args,
+            _ => return Err(NoSolution),
+        };
+
+        // The trait ref args are [Self, T1, T2, ...]. The Adt args are [U1, U2, ...].
+        // For the self-impl to hold we need Ti = Ui.
+        let trait_args: Vec<_> = trait_pred.trait_ref.args.iter().skip(1).cloned().collect();
+        let adt_args: Vec<_> = adt_args.iter().cloned().collect();
+        if trait_args.len() != adt_args.len() {
+            return Err(NoSolution);
+        }
+
+        let trait_args_list = self.interner.mk_generic_args(&trait_args);
+        let adt_args_list = self.interner.mk_generic_args(&adt_args);
+        self.infcx
+            .eq_generic_args(self.interner, &trait_args_list, &adt_args_list)
+            .map_err(|_| NoSolution)?;
+
+        Ok(self.make_response(Certainty::Yes))
     }
 
     fn try_user_impl_candidate(&mut self, goal: Goal, impl_info: &ImplInfo) -> SolverResult {
@@ -700,6 +742,19 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
             .next()
             .and_then(|arg| arg.expect_type_checked())
             .ok_or(NoSolution)
+    }
+
+    /// True if the goal's `Self` type is the trait type itself, e.g.
+    /// `Queryable<T> for Queryable<U>`.
+    fn is_trait_self_type(&mut self, trait_ref: &TraitRef) -> bool {
+        let Ok(self_ty) = self.trait_self_ty(trait_ref) else {
+            return false;
+        };
+        let self_ty = self.resolve_ty(self_ty);
+        match self.interner.ty(self_ty) {
+            Ty::Adt(adt, _) => adt.def_id == trait_ref.def_id,
+            _ => false,
+        }
     }
 
     // -----------------------------------------------------------------------

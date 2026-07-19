@@ -10,7 +10,7 @@ use crate::res::Res;
 use yelang_resolve::lang_items::LangItem;
 
 /// Extract and lower generic arguments from an AST path.
-fn lower_generic_args_from_path(
+pub(crate) fn lower_generic_args_from_path(
     ctx: &mut LoweringContext,
     path: &yelang_ast::Path,
 ) -> Vec<GenericArg> {

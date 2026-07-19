@@ -18,7 +18,7 @@
  */
 
 use yelang_arena::DefId;
-use yelang_hir::ids::ExprId;
+use yelang_hir::ids::{BodyId, ExprId};
 use yelang_interner::Symbol;
 
 use yelang_ty::generic::{GenericArg, Substitution};
@@ -74,6 +74,7 @@ pub struct MethodPick {
 /// the inferred result type.
 pub fn check_method_call(
     fcx: &mut FnCtxt<'_>,
+    expr_id: ExprId,
     receiver: ExprId,
     method: Symbol,
     args: &[ExprId],
@@ -87,6 +88,7 @@ pub fn check_method_call(
         if let Some(candidate) = pick_inherent_candidate(fcx, *probe_ty, method) {
             return confirm_and_record(
                 fcx,
+                expr_id,
                 receiver,
                 &MethodPick {
                     candidate,
@@ -99,6 +101,7 @@ pub fn check_method_call(
         if let Some(candidate) = pick_trait_candidate(fcx, *probe_ty, adjustments, method) {
             return confirm_and_record(
                 fcx,
+                expr_id,
                 receiver,
                 &MethodPick {
                     candidate,
@@ -269,6 +272,7 @@ fn trait_self_ty_for_probe(
 
 fn confirm_and_record(
     fcx: &mut FnCtxt<'_>,
+    expr_id: ExprId,
     receiver: ExprId,
     pick: &MethodPick,
     args: &[ExprId],
@@ -294,7 +298,7 @@ fn confirm_and_record(
             impl_def_id: None,
         },
     };
-    fcx.results.record_method_resolution(receiver, resolution);
+    fcx.results.record_method_resolution(expr_id, resolution);
 
     output
 }
@@ -330,11 +334,22 @@ fn confirm_method(fcx: &mut FnCtxt<'_>, pick: &MethodPick, args: &[ExprId]) -> T
 
     // Check the remaining arguments against the method's formal parameters.
     for (input, arg_expr) in inputs.iter().skip(1).zip(args.iter()) {
-        let arg_ty = check_expr(fcx, *arg_expr);
         let expected = match input {
             GenericArg::Type(ty) => *ty,
             _ => continue,
         };
+
+        // If the argument is a closure and the expected parameter is a function
+        // pointer, propagate the expected input types so that unannotated
+        // closure parameters can be inferred from the call context (e.g.
+        // `xs.map(|x| x * 10)`).
+        let arg_ty = if let Some(body_id) = closure_body_id(fcx, *arg_expr) {
+            let expected_inputs = expected_fn_input_tys(fcx, expected);
+            crate::check::check_closure_with_expected(fcx, body_id, &expected_inputs)
+        } else {
+            check_expr(fcx, *arg_expr)
+        };
+
         if fcx.coerce(arg_ty, expected).is_err() {
             let span = crate::check::expr_span(fcx, *arg_expr);
             fcx.report_mismatch(span, expected, arg_ty);
@@ -364,6 +379,37 @@ fn confirm_method(fcx: &mut FnCtxt<'_>, pick: &MethodPick, args: &[ExprId]) -> T
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// If `expr` is a closure expression, return its body id.
+fn closure_body_id(fcx: &FnCtxt<'_>, expr: ExprId) -> Option<BodyId> {
+    fcx.tcx
+        .crate_hir()
+        .expr(expr)
+        .and_then(|e| match e {
+            yelang_hir::hir::expr::Expr::Closure { body, .. } => Some(*body),
+            _ => None,
+        })
+}
+
+/// If `ty` is a function pointer, return the expected input types.
+fn expected_fn_input_tys(fcx: &mut FnCtxt<'_>, ty: TyId) -> Vec<TyId> {
+    let interner = fcx.tcx.interner();
+    if !interner.has_ty(ty) {
+        return vec![];
+    }
+    match interner.ty(ty) {
+        Ty::FnPtr(sig) => sig
+            .sig
+            .inputs
+            .iter()
+            .map(|arg| match arg {
+                GenericArg::Type(t) => *t,
+                _ => fcx.new_ty_var(),
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
 
 fn first_input_ty(_interner: &yelang_ty::interner::Interner, sig: PolyFnSig) -> Option<TyId> {
     sig.sig.inputs.iter().next().and_then(|arg| match arg {

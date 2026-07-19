@@ -180,7 +180,7 @@ fn collect_trait(tcx: &mut TyCtxt, def_id: DefId, tr: &hir::Trait) {
         .map(|item| {
             let kind = item.kind.clone();
             match &kind {
-                hir::TraitItemKind::Fn { sig, default: _ } => TraitItemDefData::Fn {
+                hir::TraitItemKind::Fn { sig, default: _, generics: _ } => TraitItemDefData::Fn {
                     def_id: item.def_id,
                     ident: item.ident,
                     sig: lower_fn_sig(&mut cx, sig),
@@ -238,7 +238,7 @@ fn collect_impl(tcx: &mut TyCtxt, imp: &hir::Impl) {
         .map(|item| {
             let kind = item.kind.clone();
             match &kind {
-                hir::ImplItemKind::Fn { sig, body: _ } => ImplItemDefData::Fn {
+                hir::ImplItemKind::Fn { sig, body: _, generics: _ } => ImplItemDefData::Fn {
                     def_id: item.def_id,
                     ident: item.ident,
                     sig: lower_fn_sig(&mut cx, sig),
@@ -402,7 +402,7 @@ fn lower_trait_ref(
         self_ty,
         &hir::TraitBound {
             path: tr.path.clone(),
-            args: vec![],
+            args: tr.args.clone(),
             span: tr.span,
         },
     )

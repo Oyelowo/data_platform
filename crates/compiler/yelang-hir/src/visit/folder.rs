@@ -1077,8 +1077,12 @@ pub fn walk_trait_bound(
     f.fold_trait_bound(bound)
 }
 
-pub fn walk_trait_ref(f: &mut impl Folder, crate_hir: &mut Crate, trait_ref: TraitRef) -> TraitRef {
-    let _ = crate_hir;
+pub fn walk_trait_ref(f: &mut impl Folder, crate_hir: &mut Crate, mut trait_ref: TraitRef) -> TraitRef {
+    trait_ref.args = trait_ref
+        .args
+        .into_iter()
+        .map(|arg| walk_generic_arg(f, crate_hir, arg))
+        .collect();
     f.fold_trait_ref(trait_ref)
 }
 
@@ -1176,8 +1180,9 @@ pub fn walk_impl(f: &mut impl Folder, crate_hir: &mut Crate, impl_: Impl) -> Imp
 
 pub fn walk_impl_item(f: &mut impl Folder, crate_hir: &mut Crate, item: ImplItem) -> ImplItem {
     let new_kind = match item.kind {
-        crate::hir::core::ImplItemKind::Fn { sig, body } => crate::hir::core::ImplItemKind::Fn {
+        crate::hir::core::ImplItemKind::Fn { sig, generics, body } => crate::hir::core::ImplItemKind::Fn {
             sig: walk_fn_sig(f, crate_hir, sig),
+            generics: walk_generics(f, crate_hir, generics),
             body: fold_body_id(f, crate_hir, body),
         },
         crate::hir::core::ImplItemKind::Const { ty, body } => {
@@ -1220,9 +1225,10 @@ pub fn walk_trait(f: &mut impl Folder, crate_hir: &mut Crate, trait_: Trait) -> 
 
 pub fn walk_trait_item(f: &mut impl Folder, crate_hir: &mut Crate, item: TraitItem) -> TraitItem {
     let new_kind = match item.kind {
-        crate::hir::core::TraitItemKind::Fn { sig, default } => {
+        crate::hir::core::TraitItemKind::Fn { sig, generics, default } => {
             crate::hir::core::TraitItemKind::Fn {
                 sig: walk_fn_sig(f, crate_hir, sig),
+                generics: walk_generics(f, crate_hir, generics),
                 default: default.map(|body| fold_body_id(f, crate_hir, body)),
             }
         }

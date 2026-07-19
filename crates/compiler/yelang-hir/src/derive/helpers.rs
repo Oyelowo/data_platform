@@ -423,7 +423,15 @@ pub fn method_impl_item(
     ImplItem {
         def_id: ctx.next_synthetic_def_id(),
         ident: ident(ctx, name),
-        kind: ImplItemKind::Fn { sig, body: body_id },
+        kind: ImplItemKind::Fn {
+            sig,
+            generics: crate::hir::core::Generics {
+                params: vec![],
+                where_clause: None,
+                span: ctx.derive_span,
+            },
+            body: body_id,
+        },
         attrs: vec![],
         span: ctx.derive_span,
         defaultness: crate::hir::core::Defaultness::Final,
@@ -456,6 +464,7 @@ pub fn impl_item(
                 path: Res::Def {
                     def_id: trait_def_id,
                 },
+                args: vec![],
                 span: ctx.derive_span,
             }),
         },

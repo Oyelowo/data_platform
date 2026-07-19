@@ -15,9 +15,11 @@ use crate::errors::LoweringError;
 use crate::expr::AggregateClass;
 use crate::logical::queryable::QueryableMethod;
 
-/// Build a map from `Queryable` trait method `DefId` to the LIR operator it
-/// represents. The mapping is driven solely by the method name in the trait
-/// definition loaded from `stdlib/core/src/query.ye`.
+/// Build a map from `Queryable` method `DefId` (trait or impl item) to the LIR
+/// operator it represents. The mapping is driven by the method name in the
+/// trait definition loaded from `stdlib/core/src/query.ye`, and then replicated
+/// for every impl of `Queryable` so method-resolution results that point at an
+/// impl item are still recognized.
 pub fn build_queryable_method_table(tcx: &TyCtxt) -> FxHashMap<DefId, QueryableMethod> {
     let mut table = FxHashMap::default();
     let Some(queryable_trait) = tcx.lang_item(LangItem::Queryable) else {
@@ -28,26 +30,48 @@ pub fn build_queryable_method_table(tcx: &TyCtxt) -> FxHashMap<DefId, QueryableM
         return table;
     };
 
+    fn method_by_name(name: Option<&str>) -> Option<QueryableMethod> {
+        match name {
+            Some("filter") => Some(QueryableMethod::Filter),
+            Some("map") => Some(QueryableMethod::Map),
+            Some("flat_map") => Some(QueryableMethod::FlatMap),
+            Some("take") => Some(QueryableMethod::Take),
+            Some("skip") => Some(QueryableMethod::Skip),
+            Some("order_by") => Some(QueryableMethod::OrderBy),
+            Some("distinct") => Some(QueryableMethod::Distinct),
+            Some("group_by") => Some(QueryableMethod::GroupBy),
+            Some("aggregate") => Some(QueryableMethod::Aggregate),
+            Some("sum") => Some(QueryableMethod::Sum),
+            Some("product") => Some(QueryableMethod::Product),
+            Some("avg") => Some(QueryableMethod::Avg),
+            Some("count") => Some(QueryableMethod::Count),
+            Some("execute") => Some(QueryableMethod::Execute),
+            _ => None,
+        }
+    }
+
     for item in &trait_def.items {
         let name = tcx.resolve_symbol(item.ident().symbol);
-        let method = match name {
-            Some("filter") => QueryableMethod::Filter,
-            Some("map") => QueryableMethod::Map,
-            Some("flat_map") => QueryableMethod::FlatMap,
-            Some("take") => QueryableMethod::Take,
-            Some("skip") => QueryableMethod::Skip,
-            Some("order_by") => QueryableMethod::OrderBy,
-            Some("distinct") => QueryableMethod::Distinct,
-            Some("group_by") => QueryableMethod::GroupBy,
-            Some("aggregate") => QueryableMethod::Aggregate,
-            Some("sum") => QueryableMethod::Sum,
-            Some("product") => QueryableMethod::Product,
-            Some("avg") => QueryableMethod::Avg,
-            Some("count") => QueryableMethod::Count,
-            Some("execute") => QueryableMethod::Execute,
-            _ => continue,
-        };
-        table.insert(item.def_id(), method);
+        if let Some(method) = method_by_name(name) {
+            table.insert(item.def_id(), method);
+        }
+    }
+
+    // Method resolution may record the impl item's DefId rather than the trait
+    // item's DefId. Register every Queryable impl item under the same operator
+    // shape so lowering works regardless of which DefId the type checker chose.
+    for imp in &tcx.crate_hir().impls {
+        let Some(tr) = &imp.of_trait else { continue };
+        let Res::Def { def_id: trait_def_id } = tr.path else { continue };
+        if trait_def_id != queryable_trait {
+            continue;
+        }
+        for item in &imp.items {
+            let name = tcx.resolve_symbol(item.ident.symbol);
+            if let Some(method) = method_by_name(name) {
+                table.insert(item.def_id, method);
+            }
+        }
     }
 
     table
