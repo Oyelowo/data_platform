@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7069d0368190aef98b7ae4e4c4d0994a6fccf570a106d2dd8f46083068d043c6 # shrinks to docs = [("doc6", "a"), ("doc0", "")]
+cc 3c52dc2a87daf1b38a5e953f52a6b4726e508ac93e83f5532d1fb1b67f999df4 # shrinks to docs = [("doc0", " b db f  rm    b z"), ("doc1", "  j "), ("doc04", "l   tqo  m  fmank"), ("doc1", "   qhqes "), ("doc0", " y   e    tqf  b w w lvim"), ("doc2", "eq   z   epxp  ix l dd s"), ("doc61", "     jtk    r  dp kty i j lop"), ("doc13", "r q   jkugcx u  "), ("doc3", " ads a "), ("doc5", "nd t   gb fq w"), ("doc704", "wn  t t od  iyp p  bw v"), ("doc706", "z"), ("doc121", "ww   jc "), ("doc036", "  dk jd ad celtmena vi g o"), ("doc8", "yo"), ("doc81", "v a b"), ("doc0", "mu d  ewact e lmkndoo cd   z  t ow o"), ("doc29", " y  vc"), ("doc0", " kx  bwf u   c qzs qd  vnu  "), ("doc5", "df  ln hk  ym  hzvqn"), ("doc82", " g o"), ("doc705", "  "), ("doc10", "vk n   pj   hgybd   "), ("doc6", "o n ko   s b     mjqe  "), ("doc500", "hiq fvesbbkn v  tohweu    s"), ("doc696", "se  x  f ")]
+cc c20823e24102d650629a00ad9aed2ad1e231e673d9305464bc59c2f9fcb65c82 # shrinks to docs = [("doc13", "ofe  i   wf   nen  wc b"), ("doc2", " l   hvjkk  t  bks  prbkxb  a o l b"), ("doc2", "xlx  of pk   id y casf  qy q s z  ua"), ("doc320", " yz ig nctz   h s   asn h     cphd  "), ("doc263", "nm e y   j"), ("doc372", "  lz   oj cyn oosislk p"), ("doc3", "mwvd n     w a   ad qid  l   n t  "), ("doc001", "  mga ybhec   gwq   fu p")]
