@@ -22,6 +22,7 @@ members = [
     "storage-time-series",
     "storage-search",
     "storage-geo",
+    "storage-graph",
     # "object_store",
     # "distributed_storages",
     # "consensus",

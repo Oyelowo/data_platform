@@ -2033,6 +2033,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "storage-graph"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bytes",
+ "crossbeam-channel",
+ "parking_lot",
+ "proptest",
+ "serde",
+ "serde_json",
+ "storage-compression",
+ "storage-file",
+ "storage-format",
+ "storage-metrics",
+ "storage-testkit",
+ "storage-traits",
+ "storage-wal",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "storage-index"
 version = "0.1.0"
 dependencies = [
