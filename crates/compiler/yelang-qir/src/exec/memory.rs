@@ -3,7 +3,7 @@
 use crate::errors::PlanError;
 use crate::exec::interface::{QueryExecutor, Value};
 use crate::exec::kernels::KernelRegistry;
-use crate::physical::PhysicalPlan;
+use crate::pir::PhysicalPlan;
 
 /// In-memory query executor.
 #[derive(Debug, Default)]

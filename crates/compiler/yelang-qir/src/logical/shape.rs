@@ -23,6 +23,22 @@ pub enum NestedShape {
     },
 }
 
+impl NestedShape {
+    /// Return the top-level type.
+    pub fn ty(&self) -> TyId {
+        match self {
+            NestedShape::Scalar(ty) | NestedShape::Collection(ty) => *ty,
+            NestedShape::Nested { elem, .. } => *elem,
+            NestedShape::Group { key, .. } => *key,
+        }
+    }
+
+    /// True if this shape represents a collection at the top level.
+    pub fn is_collection(&self) -> bool {
+        matches!(self, NestedShape::Collection(_) | NestedShape::Nested { .. } | NestedShape::Group { .. })
+    }
+}
+
 /// Whether an operator's result is correlated with an outer scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CorrelationMode {

@@ -1,24 +1,30 @@
 //! Query Intermediate Representation (QIR) for Yelang.
 //!
 //! This crate lowers typed HIR query and selector constructs into a logical
-//! query plan, applies logical rewrites (including decorrelation), produces a
-//! physical plan, and provides an execution interface backed by pluggable
-//! storage backends.
+//! query plan (LIR), applies logical rewrites (including decorrelation),
+//! produces a physical plan (PIR), and provides an execution interface backed
+//! by pluggable storage backends.
 
 pub mod backend;
+pub mod demand;
 pub mod errors;
 pub mod exec;
 pub mod expr;
 pub mod ids;
 pub mod logical;
-pub mod physical;
+pub mod pir;
 pub mod rewrite;
 pub mod util;
+pub mod volatility;
 
 pub use errors::{LoweringError, PlanError, QirResult};
 
 use yelang_hir::ids::{BodyId, QueryId};
 use yelang_tycheck::tcx::TyCtxt;
+use yelang_tycheck::typeck_results::TypeckResults;
+
+use crate::logical::lower::LoweringCtxt;
+use crate::logical::plan::LogicalPlan;
 
 /// Lower a typed HIR query to a logical QIR plan.
 ///
@@ -28,8 +34,18 @@ pub fn lower_query(
     tcx: &TyCtxt,
     body_id: BodyId,
     query_id: QueryId,
-) -> QirResult<logical::LogicalPlan> {
-    let mut plan = logical::LogicalPlan::empty();
-    plan.lower_query(tcx, body_id, query_id)?;
+    results: &TypeckResults,
+) -> QirResult<LogicalPlan> {
+    let mut plan = LogicalPlan::empty();
+    let ctx = LoweringCtxt::new(tcx, body_id, results);
+    logical::lower::lower_query(&mut plan, &ctx, query_id)?;
     Ok(plan)
+}
+
+/// Plan a logical plan into a physical plan for the given backend.
+pub fn plan_logical(
+    logical: &LogicalPlan,
+    backend: &dyn backend::capability::BackendCapability,
+) -> QirResult<pir::PhysicalPlan> {
+    Ok(pir::planner::plan_logical(logical, backend)?)
 }

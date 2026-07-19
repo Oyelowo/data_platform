@@ -1,32 +1,32 @@
-//! In-memory array/table backend.
+//! Streaming / event-bus backend.
 
 use crate::backend::capability::{BackendCapability, Cardinality, Support};
 use crate::expr::{AggregateClass, QExprId};
 use crate::logical::operator::ScanSource;
 use crate::pir::operator::ExchangeKind;
 
-/// A backend that executes against in-memory arrays.
+/// Backend for an unbounded event stream.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct MemoryBackend;
+pub struct StreamBackend;
 
-impl MemoryBackend {
-    /// Create a new in-memory backend capability.
+impl StreamBackend {
+    /// Create a new stream backend capability.
     pub fn new() -> Self {
         Self
     }
 }
 
-impl BackendCapability for MemoryBackend {
+impl BackendCapability for StreamBackend {
     fn can_push_down_filter(&self, _source: &ScanSource) -> bool {
         true
     }
 
     fn can_push_down_order(&self, _source: &ScanSource) -> bool {
-        true
+        false
     }
 
     fn can_push_down_limit(&self, _source: &ScanSource) -> bool {
-        true
+        false
     }
 
     fn supports_index_lookup(&self, _source: &ScanSource, _key: &[QExprId]) -> bool {
@@ -34,26 +34,27 @@ impl BackendCapability for MemoryBackend {
     }
 
     fn supports_hash_join(&self) -> Support {
-        Support::Yes
+        Support::No
     }
 
     fn supports_merge_join(&self) -> Support {
-        Support::Yes
+        Support::No
     }
 
     fn supports_nested_loop_join(&self) -> Support {
-        Support::Yes
+        Support::WithFallback
     }
 
-    fn supports_exchange(&self, _kind: &ExchangeKind) -> bool {
-        true
+    fn supports_exchange(&self, kind: &ExchangeKind) -> bool {
+        matches!(kind, ExchangeKind::Single | ExchangeKind::RepartitionBy(_))
     }
 
-    fn supports_aggregation(&self, _class: AggregateClass) -> bool {
-        true
+    fn supports_aggregation(&self, class: AggregateClass) -> bool {
+        // Streaming prefers distributive/algebraic; holistic is expensive.
+        matches!(class, AggregateClass::Distributive | AggregateClass::Algebraic)
     }
 
     fn estimated_cardinality(&self, _source: &ScanSource) -> Cardinality {
-        Cardinality::Small
+        Cardinality::Large
     }
 }

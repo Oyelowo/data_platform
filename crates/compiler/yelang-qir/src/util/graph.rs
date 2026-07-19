@@ -2,11 +2,11 @@
 
 use std::collections::HashSet;
 
-use crate::ids::QirId;
+use crate::ids::LirId;
 use crate::logical::LogicalPlan;
 
 /// Return the set of operator ids reachable from `root`.
-pub fn reachable(plan: &LogicalPlan, root: QirId) -> HashSet<QirId> {
+pub fn reachable(plan: &LogicalPlan, root: LirId) -> HashSet<LirId> {
     let mut seen = HashSet::new();
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
@@ -14,41 +14,33 @@ pub fn reachable(plan: &LogicalPlan, root: QirId) -> HashSet<QirId> {
             continue;
         }
         if let Some(op) = plan.operators.get(id) {
-            crate::util::graph::collect_children(op, &mut stack);
+            collect_children(op, &mut stack);
         }
     }
     seen
 }
 
-fn collect_children(op: &crate::logical::operator::Operator, out: &mut Vec<QirId>) {
-    use crate::logical::operator::Operator;
+fn collect_children(op: &crate::logical::operator::LirOp, out: &mut Vec<LirId>) {
+    use crate::logical::operator::LirOp;
     match op {
-        Operator::Scan { .. } | Operator::Expr(_) => {}
-        Operator::Filter { input, .. }
-        | Operator::Map { input, .. }
-        | Operator::FlatMap { input, .. }
-        | Operator::OrderBy { input, .. }
-        | Operator::Range { input, .. }
-        | Operator::Aggregate { input, .. }
-        | Operator::Window { input, .. }
-        | Operator::Distinct { input, .. }
-        | Operator::AttachField { input, .. }
-        | Operator::GroupBy { input, .. } => out.push(*input),
-        Operator::SetOp { left, right, .. } => {
+        LirOp::Scan { .. } | LirOp::Values { .. } | LirOp::Expr(_) => {}
+        LirOp::Filter { input, .. }
+        | LirOp::Map { input, .. }
+        | LirOp::FlatMap { input, .. }
+        | LirOp::OrderBy { input, .. }
+        | LirOp::Slice { input, .. }
+        | LirOp::Distinct { input, .. }
+        | LirOp::GroupBy { input, .. }
+        | LirOp::Aggregate { input, .. }
+        | LirOp::AggregateGroupBy { input, .. }
+        | LirOp::EdgeExpand { input, .. }
+        | LirOp::AttachField { input, .. }
+        | LirOp::Window { input, .. } => out.push(*input),
+        LirOp::Join { left, right, .. } | LirOp::DependentJoin { outer: left, inner: right, .. } | LirOp::SetOp { left, right, .. } => {
             out.push(*left);
             out.push(*right);
         }
-        Operator::InnerJoin { left, right, .. }
-        | Operator::LeftOuterJoin { left, right, .. }
-        | Operator::SemiJoin { left, right, .. }
-        | Operator::AntiJoin { left, right, .. }
-        | Operator::MarkJoin { left, right, .. }
-        | Operator::CrossJoin { left, right }
-        | Operator::DependentJoin { outer: left, inner: right, .. } => {
-            out.push(*left);
-            out.push(*right);
-        }
-        Operator::Construct { fields, .. } => {
+        LirOp::Construct { fields, .. } => {
             for (_, id) in fields {
                 out.push(*id);
             }

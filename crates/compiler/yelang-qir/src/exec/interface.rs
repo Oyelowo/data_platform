@@ -1,20 +1,8 @@
 //! Execution interface for physical QIR plans.
 
 use crate::errors::PlanError;
-use crate::physical::PhysicalPlan;
-
-/// A runtime value produced by query execution.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Value {
-    Null,
-    Bool(bool),
-    Int(i128),
-    Float(f64),
-    Str(String),
-    Array(Vec<Value>),
-    Record(Vec<(String, Value)>),
-    Error(String),
-}
+pub use crate::exec::value::Value;
+use crate::pir::PhysicalPlan;
 
 /// Trait implemented by query executors.
 pub trait QueryExecutor {

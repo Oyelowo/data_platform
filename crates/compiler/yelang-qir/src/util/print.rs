@@ -1,7 +1,7 @@
 //! Debug and pretty-printing helpers for QIR plans.
 
 use crate::logical::LogicalPlan;
-use crate::physical::PhysicalPlan;
+use crate::pir::PhysicalPlan;
 
 /// Pretty-print a logical plan to a string.
 pub fn print_logical(plan: &LogicalPlan) -> String {

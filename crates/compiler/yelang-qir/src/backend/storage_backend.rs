@@ -1,22 +1,22 @@
-//! In-memory array/table backend.
+//! Embedded storage-engine backend (LSM, B-tree, etc.).
 
 use crate::backend::capability::{BackendCapability, Cardinality, Support};
 use crate::expr::{AggregateClass, QExprId};
 use crate::logical::operator::ScanSource;
 use crate::pir::operator::ExchangeKind;
 
-/// A backend that executes against in-memory arrays.
+/// Backend for an embedded storage engine.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct MemoryBackend;
+pub struct StorageBackend;
 
-impl MemoryBackend {
-    /// Create a new in-memory backend capability.
+impl StorageBackend {
+    /// Create a new storage backend capability.
     pub fn new() -> Self {
         Self
     }
 }
 
-impl BackendCapability for MemoryBackend {
+impl BackendCapability for StorageBackend {
     fn can_push_down_filter(&self, _source: &ScanSource) -> bool {
         true
     }
@@ -30,11 +30,11 @@ impl BackendCapability for MemoryBackend {
     }
 
     fn supports_index_lookup(&self, _source: &ScanSource, _key: &[QExprId]) -> bool {
-        false
+        true
     }
 
     fn supports_hash_join(&self) -> Support {
-        Support::Yes
+        Support::WithFallback
     }
 
     fn supports_merge_join(&self) -> Support {
@@ -42,11 +42,11 @@ impl BackendCapability for MemoryBackend {
     }
 
     fn supports_nested_loop_join(&self) -> Support {
-        Support::Yes
+        Support::WithFallback
     }
 
     fn supports_exchange(&self, _kind: &ExchangeKind) -> bool {
-        true
+        false
     }
 
     fn supports_aggregation(&self, _class: AggregateClass) -> bool {
@@ -54,6 +54,6 @@ impl BackendCapability for MemoryBackend {
     }
 
     fn estimated_cardinality(&self, _source: &ScanSource) -> Cardinality {
-        Cardinality::Small
+        Cardinality::Medium
     }
 }
