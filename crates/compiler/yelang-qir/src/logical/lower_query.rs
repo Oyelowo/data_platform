@@ -46,7 +46,9 @@ pub fn lower_select_query(
     if let Some(cond) = sq.where_clause {
         let pred = super::lower_expr::lower_hir_expr(plan, ctx, cond)?;
         let out_ty = plan.props[input].output_ty;
+        let input_binder = plan.props[input].output_binder;
         input = plan.filter(input, pred, out_ty);
+        plan.props[input].output_binder = input_binder;
     }
 
     // 4. GROUP BY.
@@ -101,6 +103,9 @@ pub fn lower_select_query(
     let projection = super::lower_expr::lower_hir_expr(plan, ctx, sq.projection)?;
     let out_ty = plan.expr(projection).ty();
     input = plan.map(input, projection, out_ty);
+    if let Some((param, _)) = crate::rewrite::as_closure(plan, projection) {
+        plan.props[input].output_binder = Some(param);
+    }
 
     ctx.pop_binder_scope();
 
@@ -124,10 +129,13 @@ fn lower_from_node(
     // Register the element binder so filters/projections can reference it.
     let binder = plan.fresh_binder();
     ctx.insert_binder(from.binder, binder);
+    plan.props[root].output_binder = Some(binder);
 
     if let Some(filter) = from.filter {
         let pred = super::lower_expr::lower_hir_expr(plan, ctx, filter)?;
+        let root_binder = plan.props[root].output_binder;
         root = plan.filter(root, pred, elem_ty);
+        plan.props[root].output_binder = root_binder;
     }
 
     // TODO: per-root order_by and range.

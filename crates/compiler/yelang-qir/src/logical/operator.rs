@@ -248,6 +248,121 @@ impl LirOp {
             }
         }
     }
+
+    /// Map every scalar expression id embedded in this operator using `f`.
+    pub fn map_expressions<F>(&mut self, mut f: F)
+    where
+        F: FnMut(QExprId) -> QExprId,
+    {
+        match self {
+            LirOp::Scan { source, .. } => {
+                if let ScanSource::Expr(e) = source {
+                    *e = f(*e);
+                }
+            }
+            LirOp::Values { rows, .. } => {
+                for e in rows {
+                    *e = f(*e);
+                }
+            }
+            LirOp::Filter { predicate, .. } => *predicate = f(*predicate),
+            LirOp::Map { projection, .. } | LirOp::FlatMap { projection, .. } => {
+                *projection = f(*projection)
+            }
+            LirOp::OrderBy { keys, .. } => {
+                for k in keys {
+                    k.expr = f(k.expr);
+                }
+            }
+            LirOp::Slice { offset, limit, .. } => {
+                *offset = f(*offset);
+                if let Some(l) = limit {
+                    *l = f(*l);
+                }
+            }
+            LirOp::Distinct { by, .. } => {
+                if let Some(b) = by {
+                    for e in b {
+                        *e = f(*e);
+                    }
+                }
+            }
+            LirOp::GroupBy { key, .. } => *key = f(*key),
+            LirOp::Aggregate { agg, .. } => agg.per_row = f(agg.per_row),
+            LirOp::AggregateGroupBy { group_keys, aggregates, .. } => {
+                for k in group_keys {
+                    *k = f(*k);
+                }
+                for a in aggregates {
+                    a.per_row = f(a.per_row);
+                }
+            }
+            LirOp::Join { predicate, .. } | LirOp::DependentJoin { predicate, .. } => {
+                if let Some(p) = predicate {
+                    *p = f(*p);
+                }
+            }
+            LirOp::EdgeExpand { predicate, .. } => {
+                if let Some(p) = predicate {
+                    *p = f(*p);
+                }
+            }
+            LirOp::Window { partition, order, .. } => {
+                for e in partition {
+                    *e = f(*e);
+                }
+                for k in order {
+                    k.expr = f(k.expr);
+                }
+            }
+            LirOp::Expr(e) => *e = f(*e),
+            LirOp::AttachField { .. } | LirOp::Construct { .. } | LirOp::SetOp { .. } => {}
+        }
+    }
+
+    /// Return all scalar expression ids embedded directly in this operator.
+    pub fn expressions(&self) -> Vec<QExprId> {
+        let mut out = Vec::new();
+        match self {
+            LirOp::Scan { source, .. } => {
+                if let ScanSource::Expr(e) = source {
+                    out.push(*e);
+                }
+            }
+            LirOp::Values { rows, .. } => out.extend(rows.iter().copied()),
+            LirOp::Filter { predicate, .. } => out.push(*predicate),
+            LirOp::Map { projection, .. } | LirOp::FlatMap { projection, .. } => out.push(*projection),
+            LirOp::OrderBy { keys, .. } => out.extend(keys.iter().map(|k| k.expr)),
+            LirOp::Slice { offset, limit, .. } => {
+                out.push(*offset);
+                out.extend(limit.iter().copied());
+            }
+            LirOp::Distinct { by, .. } => {
+                if let Some(b) = by {
+                    out.extend(b.iter().copied());
+                }
+            }
+            LirOp::GroupBy { key, .. } => out.push(*key),
+            LirOp::Aggregate { agg, .. } => out.push(agg.per_row),
+            LirOp::AggregateGroupBy { group_keys, aggregates, .. } => {
+                out.extend(group_keys.iter().copied());
+                out.extend(aggregates.iter().map(|a| a.per_row));
+            }
+            LirOp::Join { predicate, .. } | LirOp::DependentJoin { predicate, .. } => {
+                out.extend(predicate.iter().copied());
+            }
+            LirOp::EdgeExpand { predicate, .. } => {
+                out.extend(predicate.iter().copied());
+            }
+            LirOp::Window { partition, order, .. } => {
+                out.extend(partition.iter().copied());
+                out.extend(order.iter().map(|k| k.expr));
+            }
+            LirOp::Expr(e) => out.push(*e),
+            LirOp::AttachField { .. } | LirOp::Construct { .. } | LirOp::SetOp { .. } => {}
+        }
+        out
+    }
 }
 
 /// An aggregate operation.

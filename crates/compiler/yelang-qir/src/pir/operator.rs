@@ -86,8 +86,15 @@ pub enum PirOp {
     NestedLoopJoin {
         outer: PirId,
         inner: PirId,
-        predicate: QExprId,
+        predicate: Option<QExprId>,
         kind: JoinKind,
+    },
+
+    /// Group rows by a key without applying a reduction aggregate.
+    /// The executor collects the matching rows into a nested collection.
+    GroupBy {
+        input: PirId,
+        key: QExprId,
     },
 
     /// Aggregations.
@@ -205,6 +212,7 @@ impl PirOp {
             | PirOp::TopK { input, .. }
             | PirOp::Slice { input, .. }
             | PirOp::Distinct { input, .. }
+            | PirOp::GroupBy { input, .. }
             | PirOp::HashAggregate { input, .. }
             | PirOp::SortAggregate { input, .. }
             | PirOp::StreamingAggregate { input, .. }
@@ -236,6 +244,7 @@ impl PirOp {
             | PirOp::TopK { input, .. }
             | PirOp::Slice { input, .. }
             | PirOp::Distinct { input, .. }
+            | PirOp::GroupBy { input, .. }
             | PirOp::HashAggregate { input, .. }
             | PirOp::SortAggregate { input, .. }
             | PirOp::StreamingAggregate { input, .. }

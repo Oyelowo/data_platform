@@ -113,7 +113,10 @@ fn lower_filter(
     let pred = expect_one_arg(args)?;
     let pred_expr = lower_hir_expr(plan, ctx, pred)?;
     let out_ty = plan.props[input].output_ty;
-    Ok(plan.filter(input, pred_expr, out_ty))
+    let input_binder = plan.props[input].output_binder;
+    let id = plan.filter(input, pred_expr, out_ty);
+    plan.props[id].output_binder = input_binder;
+    Ok(id)
 }
 
 fn lower_map(
@@ -125,7 +128,11 @@ fn lower_map(
     let proj = expect_one_arg(args)?;
     let proj_expr = lower_hir_expr(plan, ctx, proj)?;
     let out_ty = closure_return_ty(ctx, proj).unwrap_or_else(|| plan.props[input].output_ty);
-    Ok(plan.map(input, proj_expr, out_ty))
+    let id = plan.map(input, proj_expr, out_ty);
+    if let Some((param, _)) = crate::rewrite::as_closure(plan, proj_expr) {
+        plan.props[id].output_binder = Some(param);
+    }
+    Ok(id)
 }
 
 fn lower_flat_map(
@@ -137,7 +144,11 @@ fn lower_flat_map(
     let proj = expect_one_arg(args)?;
     let proj_expr = lower_hir_expr(plan, ctx, proj)?;
     let out_ty = closure_return_ty(ctx, proj).unwrap_or_else(|| plan.props[input].output_ty);
-    Ok(plan.flat_map(input, proj_expr, out_ty))
+    let id = plan.flat_map(input, proj_expr, out_ty);
+    if let Some((param, _)) = crate::rewrite::as_closure(plan, proj_expr) {
+        plan.props[id].output_binder = Some(param);
+    }
+    Ok(id)
 }
 
 fn lower_take(

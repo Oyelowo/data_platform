@@ -138,6 +138,9 @@ fn lower_path(
         Res::Local { pat_id } => {
             if let Some(binder) = ctx.lookup_binder(*pat_id) {
                 Ok(plan.alloc_expr(QExpr::Column(binder, ty)))
+            } else if let Some(expr) = ctx.lookup_local_value(*pat_id) {
+                // Inlined local variable (e.g. a `let`-bound array source).
+                Ok(expr)
             } else {
                 Ok(plan.alloc_expr(QExpr::Error(ty)))
             }

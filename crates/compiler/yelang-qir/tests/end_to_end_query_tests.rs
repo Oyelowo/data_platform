@@ -7,7 +7,10 @@
 use std::path::PathBuf;
 
 use yelang_hir::lowering::context::lower_crate;
+use yelang_qir::backend::MemoryBackend;
+use yelang_qir::exec::{MemoryExecutor, QueryExecutor, Value};
 use yelang_qir::logical::plan::LogicalPlan;
+use yelang_qir::pir::planner::plan_logical;
 use yelang_resolve::resolve_crate;
 use yelang_tycheck::type_check_crate;
 use yelang_tycheck::tcx::TyCtxt;
@@ -105,6 +108,13 @@ fn compile(src: &str) -> (TyCtxt, LogicalPlan) {
     (tcx, plan)
 }
 
+/// Compile a snippet and execute the first query found in `main`.
+fn run(src: &str) -> Value {
+    let (_tcx, plan) = compile(src);
+    let physical = plan_logical(&plan, &MemoryBackend::new()).expect("physical planning failed");
+    MemoryExecutor::new().execute(&physical).expect("execution failed")
+}
+
 /// Find the first query expression inside a function body.
 fn find_query_in_body(tcx: &TyCtxt, body_id: yelang_hir::ids::BodyId) -> Option<yelang_hir::ids::QueryId> {
     let body = tcx.crate_hir().body(body_id)?;
@@ -154,4 +164,47 @@ fn main() {
 "#;
     let (_tcx, plan) = compile(src);
     assert!(plan.root.is_some(), "QIR lowering should produce a root operator");
+}
+
+#[test]
+fn e2e_filter_and_map() {
+    let src = r#"
+fn main() {
+    let users = [1, 2, 3, 4, 5];
+    let _ = select u + 10 from users@u where u > 2;
+}
+"#;
+    let result = run(src);
+    let ints: Vec<i128> = result
+        .try_into_array()
+        .unwrap()
+        .into_iter()
+        .map(|v| match v {
+            Value::Int(n) => n,
+            _ => panic!("expected int, got {:?}", v),
+        })
+        .collect();
+    assert_eq!(ints, vec![13, 14, 15]);
+}
+
+#[test]
+fn e2e_order_by_and_range() {
+    let src = r#"
+fn main() {
+    let users = [5, 1, 4, 2, 3];
+    let _ = select u from users@u order by u asc range 1..3;
+}
+"#;
+    let result = run(src);
+    let ints: Vec<i128> = result
+        .try_into_array()
+        .unwrap()
+        .into_iter()
+        .map(|v| match v {
+            Value::Int(n) => n,
+            _ => panic!("expected int, got {:?}", v),
+        })
+        .collect();
+    // Sorted: [1, 2, 3, 4, 5]; range 1..3 -> offset 1, limit 3 -> [2, 3, 4]
+    assert_eq!(ints, vec![2, 3, 4]);
 }

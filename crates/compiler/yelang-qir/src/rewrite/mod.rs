@@ -53,6 +53,10 @@ pub fn apply_rewrites(plan: &mut LogicalPlan) -> Result<LirId, LoweringError> {
         changed |= push_project::PushProjectPass.run(plan)?;
         changed |= predicate_pushdown::PredicatePushdownPass.run(plan)?;
         changed |= projection_pushdown::ProjectionPushdownPass.run(plan)?;
+        // Unnest scalar subplans into joins, then flatten any correlated
+        // dependent joins that resulted.
+        changed |= unnest_subqueries::UnnestSubqueriesPass.run(plan)?;
+        changed |= decorrelate::DecorrelatePass.run(plan)?;
     }
 
     Ok(plan.root.unwrap_or(root))

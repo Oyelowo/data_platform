@@ -30,6 +30,10 @@ pub struct LoweringCtxt<'a> {
     pub queryable_methods: FxHashMap<DefId, QueryableMethod>,
     /// Binder scope stack mapping HIR pattern ids to pipeline binder ids.
     binder_scopes: Vec<FxHashMap<PatId, BinderId>>,
+    /// Local variable values that should be inlined as QExpr fragments.
+    ///
+    /// Used for `let`-bound sources in query context (e.g. `let users = [1,2,3]`).
+    local_values: FxHashMap<PatId, crate::ids::QExprId>,
 }
 
 impl<'a> LoweringCtxt<'a> {
@@ -42,6 +46,7 @@ impl<'a> LoweringCtxt<'a> {
             aggregate_classes: FxHashMap::default(),
             queryable_methods: FxHashMap::default(),
             binder_scopes: vec![FxHashMap::default()],
+            local_values: FxHashMap::default(),
         }
     }
 
@@ -86,6 +91,17 @@ impl<'a> LoweringCtxt<'a> {
         None
     }
 
+    /// Register a local variable initializer so that references to the variable
+    /// can be inlined into QExpr instead of being treated as pipeline rows.
+    pub fn insert_local_value(&mut self, pat_id: PatId, expr: crate::ids::QExprId) {
+        self.local_values.insert(pat_id, expr);
+    }
+
+    /// Look up the inlined QExpr for a local variable, if any.
+    pub fn lookup_local_value(&self, pat_id: PatId) -> Option<crate::ids::QExprId> {
+        self.local_values.get(&pat_id).copied()
+    }
+
     /// Populate the `queryable_methods` and `aggregate_classes` tables by
     /// introspecting the real `Queryable` and `Aggregate` lang-item definitions
     /// loaded from `stdlib/core/src/*.ye`.
@@ -110,6 +126,48 @@ impl<'a> LoweringCtxt<'a> {
     pub fn queryable_method(&self, def_id: DefId) -> Option<QueryableMethod> {
         self.queryable_methods.get(&def_id).copied()
     }
+}
+
+/// Walk the function body and inline any `let`-bound initializers that appear
+/// before the query.  This lets `from users@u` work when `users` is a local
+/// array literal or other constant expression.
+pub fn populate_local_values(
+    plan: &mut LogicalPlan,
+    ctx: &mut LoweringCtxt<'_>,
+    body_id: BodyId,
+) -> Result<(), LoweringError> {
+    let body = match ctx.krate().body(body_id) {
+        Some(b) => b,
+        None => return Ok(()),
+    };
+    let body_expr = match ctx.krate().expr(body.value) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+
+    let stmts = match body_expr {
+        yelang_hir::hir::expr::Expr::Block { block } => block.stmts.clone(),
+        _ => return Ok(()),
+    };
+
+    for stmt_id in stmts {
+        let stmt = ctx
+            .krate()
+            .stmt(stmt_id)
+            .ok_or(LoweringError::UnsupportedExpr)?;
+        let (pat, init) = match stmt {
+            yelang_hir::hir::core::Stmt::Let {
+                pat,
+                init: Some(init),
+                ..
+            } => (*pat, *init),
+            _ => continue,
+        };
+        let expr = super::lower_expr::lower_hir_expr(plan, ctx, init)?;
+        ctx.insert_local_value(pat, expr);
+    }
+
+    Ok(())
 }
 
 /// Lower a typed HIR query into a logical plan.

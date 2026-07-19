@@ -41,6 +41,9 @@ pub struct LogicalProps {
     pub demand: DemandSet,
     /// Volatility of this operator.
     pub volatility: Volatility,
+    /// The binder that names a single output row of this operator, when known.
+    /// Used by decorrelation and other binder-provenance passes.
+    pub output_binder: Option<BinderId>,
 }
 
 impl LogicalProps {
@@ -55,6 +58,7 @@ impl LogicalProps {
             non_null: vec![],
             demand: DemandSet::all(),
             volatility: Volatility::Stable,
+            output_binder: None,
         }
     }
 }

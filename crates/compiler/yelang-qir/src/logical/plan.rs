@@ -146,7 +146,7 @@ impl LogicalPlan {
         self.slice_unchecked(input, offset, limit, out_ty, false)
     }
 
-    fn slice_unchecked(
+    pub(crate) fn slice_unchecked(
         &mut self,
         input: LirId,
         offset: QExprId,

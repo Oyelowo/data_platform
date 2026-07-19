@@ -45,6 +45,56 @@ impl RecordBatch {
     }
 }
 
+impl Value {
+    pub fn to_bool(&self) -> bool {
+        matches!(self, Value::Bool(true))
+    }
+
+    pub fn field(&self, name: Symbol) -> Option<&Value> {
+        match self {
+            Value::Record(fields) => fields.iter().find(|(n, _)| *n == name).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    pub fn try_into_array(self) -> Result<Vec<Value>, String> {
+        match self {
+            Value::Array(a) => Ok(a),
+            _ => Err("expected array".to_string()),
+        }
+    }
+
+    pub fn try_into_record(self) -> Result<Vec<(Symbol, Value)>, String> {
+        match self {
+            Value::Record(r) => Ok(r),
+            _ => Err("expected record".to_string()),
+        }
+    }
+}
+
+pub fn value_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Null, Value::Null) => true,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits(),
+        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Array(xs), Value::Array(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(a, b)| value_eq(a, b))
+        }
+        (Value::Record(xs), Value::Record(ys)) => {
+            xs.len() == ys.len()
+                && xs.iter().all(|(n, v)| {
+                    ys.iter()
+                        .find(|(m, _)| m == n)
+                        .map(|(_, w)| value_eq(v, w))
+                        .unwrap_or(false)
+                })
+        }
+        _ => false,
+    }
+}
+
 /// Schema placeholder for Arrow integration.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ArrowSchema {

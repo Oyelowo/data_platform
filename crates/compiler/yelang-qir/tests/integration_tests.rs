@@ -25,8 +25,9 @@ fn logical_to_physical_plan_runs() {
 
     let backend = MemoryBackend::new();
     let physical = plan_logical(&logical, &backend);
-    // The skeleton planner currently returns NoValidPlan because Cascades is not implemented.
-    assert!(physical.is_err());
+    assert!(physical.is_ok());
+    let physical = physical.unwrap();
+    assert!(physical.root.is_some());
 }
 
 #[test]

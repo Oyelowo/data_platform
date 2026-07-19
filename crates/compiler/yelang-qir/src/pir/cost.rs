@@ -37,6 +37,7 @@ pub fn estimate_cardinality(plan: &PhysicalPlan, id: PirId) -> Cardinality {
         | PirOp::TopK { input, .. }
         | PirOp::Slice { input, .. }
         | PirOp::Distinct { input, .. }
+        | PirOp::GroupBy { input, .. }
         | PirOp::Exchange { input, .. }
         | PirOp::LocalRepartition { input, .. }
         | PirOp::EdgeExpand { input, .. }

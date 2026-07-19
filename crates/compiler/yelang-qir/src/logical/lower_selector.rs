@@ -39,6 +39,7 @@ pub fn lower_comprehension(
         let scan = plan.scan(ScanSource::Expr(source_expr), source_ty);
         let binder = plan.fresh_binder();
         ctx.insert_binder(var.pat, binder);
+        plan.props[scan].output_binder = Some(binder);
         input = Some(match input {
             Some(_prev) => {
                 // TODO: build a FlatMap that iterates prev and yields scan.
@@ -53,12 +54,17 @@ pub fn lower_comprehension(
     if let Some(cond) = condition {
         let pred = super::lower_expr::lower_hir_expr(plan, ctx, *cond)?;
         let out_ty = plan.props[input].output_ty;
+        let input_binder = plan.props[input].output_binder;
         input = plan.filter(input, pred, out_ty);
+        plan.props[input].output_binder = input_binder;
     }
 
     let proj = super::lower_expr::lower_hir_expr(plan, ctx, *element)?;
     let out_ty = plan.expr(proj).ty();
     input = plan.map(input, proj, out_ty);
+    if let Some((param, _)) = crate::rewrite::as_closure(plan, proj) {
+        plan.props[input].output_binder = Some(param);
+    }
 
     ctx.pop_binder_scope();
 

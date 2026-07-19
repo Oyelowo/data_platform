@@ -79,7 +79,7 @@ fn ordering_satisfies(actual: &PhysicalOrdering, required: &PhysicalOrdering) ->
     actual.keys.starts_with(&required.keys)
 }
 
-fn partitioning_satisfies(actual: &Partitioning, required: &Partitioning) -> bool {
+pub(crate) fn partitioning_satisfies(actual: &Partitioning, required: &Partitioning) -> bool {
     match (actual, required) {
         (_, Partitioning::Any) => true,
         (Partitioning::Singleton, Partitioning::Singleton) => true,
