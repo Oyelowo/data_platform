@@ -101,6 +101,95 @@ fn closure(plan: &mut LogicalPlan, param: yelang_qir::ids::BinderId, body: yelan
     })
 }
 
+fn closure2(plan: &mut LogicalPlan, p1: yelang_qir::ids::BinderId, p2: yelang_qir::ids::BinderId, body: yelang_qir::ids::QExprId) -> yelang_qir::ids::QExprId {
+    plan.alloc_expr(QExpr::Closure {
+        params: vec![p1, p2],
+        body,
+        captures: vec![],
+        ty: ty(),
+    })
+}
+
+fn closure0(plan: &mut LogicalPlan, body: yelang_qir::ids::QExprId) -> yelang_qir::ids::QExprId {
+    plan.alloc_expr(QExpr::Closure {
+        params: vec![],
+        body,
+        captures: vec![],
+        ty: ty(),
+    })
+}
+
+fn field(plan: &mut LogicalPlan, base: yelang_qir::ids::QExprId, field_sym: Symbol) -> yelang_qir::ids::QExprId {
+    plan.alloc_expr(QExpr::Field(base, field_sym, ty()))
+}
+
+fn record(plan: &mut LogicalPlan, fields: Vec<(Symbol, yelang_qir::ids::QExprId)>) -> yelang_qir::ids::QExprId {
+    plan.alloc_expr(QExpr::Record(fields, ty()))
+}
+
+fn binary(plan: &mut LogicalPlan, op: yelang_qir::expr::QBinaryOp, l: yelang_qir::ids::QExprId, r: yelang_qir::ids::QExprId) -> yelang_qir::ids::QExprId {
+    plan.alloc_expr(QExpr::Binary(op, l, r, ty()))
+}
+
+/// Field symbol used for the `value` field of Sum/Product accumulator records.
+fn value_sym() -> Symbol {
+    Symbol::from(100)
+}
+
+/// Build a bootstrap Sum-like aggregate over the given per-row binder and body.
+fn sum_aggregate_op(
+    plan: &mut LogicalPlan,
+    row_binder: yelang_qir::ids::BinderId,
+    per_row_body: yelang_qir::ids::QExprId,
+) -> AggregateOp {
+    let per_row = closure(plan, row_binder, per_row_body);
+
+    let v = value_sym();
+    let zero = int_lit(plan, 0);
+    let init_body = record(plan, vec![(v, zero)]);
+    let init = closure0(plan, init_body);
+
+    let acc = plan.fresh_binder();
+    let item = plan.fresh_binder();
+    let acc_col = col(plan, acc);
+    let item_col = col(plan, item);
+    let acc_value = field(plan, acc_col, v);
+    let step_sum = binary(plan, yelang_qir::expr::QBinaryOp::Add, acc_value, item_col);
+    let step_body = record(plan, vec![(v, step_sum)]);
+    let step = closure2(plan, acc, item, step_body);
+
+    let a = plan.fresh_binder();
+    let b = plan.fresh_binder();
+    let a_col = col(plan, a);
+    let b_col = col(plan, b);
+    let a_value = field(plan, a_col, v);
+    let b_value = field(plan, b_col, v);
+    let merge_sum = binary(plan, yelang_qir::expr::QBinaryOp::Add, a_value, b_value);
+    let merge_body = record(plan, vec![(v, merge_sum)]);
+    let merge = closure2(plan, a, b, merge_body);
+
+    let acc = plan.fresh_binder();
+    let acc_col2 = col(plan, acc);
+    let finish_body = field(plan, acc_col2, v);
+    let finish = closure(plan, acc, finish_body);
+
+    let config = record(plan, vec![]);
+
+    AggregateOp {
+        agg_def: DefId::new(1),
+        impl_def: DefId::new(1),
+        class: AggregateClass::Distributive,
+        per_row,
+        init,
+        step,
+        merge,
+        finish,
+        config,
+        acc_ty: ty(),
+        out_ty: ty(),
+    }
+}
+
 #[test]
 fn end_to_end_filter_project_slice() {
     let mut logical = LogicalPlan::empty();
@@ -168,15 +257,8 @@ fn end_to_end_scalar_aggregate() {
     logical.props[values].output_binder = Some(yelang_qir::ids::BinderId(1));
 
     let x = logical.fresh_binder();
-    let per_row = col(&mut logical, x);
-    let agg = AggregateOp {
-        agg_def: DefId::new(1),
-        impl_def: DefId::new(1),
-        class: AggregateClass::Distributive,
-        per_row,
-        acc_ty: ty(),
-        out_ty: ty(),
-    };
+    let per_row_body = col(&mut logical, x);
+    let agg = sum_aggregate_op(&mut logical, x, per_row_body);
     let aggregated = logical.aggregate(values, agg, ty());
     logical.set_root(aggregated);
 
@@ -209,7 +291,8 @@ fn end_to_end_group_by() {
 
     let x = logical.fresh_binder();
     let cx = col(&mut logical, x);
-    let key = logical.alloc_expr(QExpr::Field(cx, a_sym, ty()));
+    let key_body = logical.alloc_expr(QExpr::Field(cx, a_sym, ty()));
+    let key = closure(&mut logical, x, key_body);
     let grouped = logical.group_by(values, key, ty(), Symbol::from(3), ty());
     logical.set_root(grouped);
 
@@ -237,17 +320,11 @@ fn end_to_end_hash_aggregate_group_by() {
 
     let x = logical.fresh_binder();
     let cx = col(&mut logical, x);
-    let group_key = logical.alloc_expr(QExpr::Field(cx, a_sym, ty()));
+    let group_key_body = logical.alloc_expr(QExpr::Field(cx, a_sym, ty()));
+    let group_key = closure(&mut logical, x, group_key_body);
 
-    let per_row = logical.alloc_expr(QExpr::Field(cx, b_sym, ty()));
-    let agg = AggregateOp {
-        agg_def: DefId::new(1),
-        impl_def: DefId::new(1),
-        class: AggregateClass::Distributive,
-        per_row,
-        acc_ty: ty(),
-        out_ty: ty(),
-    };
+    let per_row_body = logical.alloc_expr(QExpr::Field(cx, b_sym, ty()));
+    let agg = sum_aggregate_op(&mut logical, x, per_row_body);
     let aggregated = logical.aggregate_group_by(values, vec![group_key], vec![agg], ty());
     logical.set_root(aggregated);
 

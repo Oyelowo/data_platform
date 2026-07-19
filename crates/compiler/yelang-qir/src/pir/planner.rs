@@ -226,6 +226,11 @@ impl<'a> Planner<'a> {
                 impl_def: a.impl_def,
                 class: a.class,
                 input_expr: a.per_row,
+                init: a.init,
+                step: a.step,
+                merge: a.merge,
+                finish: a.finish,
+                config: a.config,
                 acc_ty: a.acc_ty,
                 out_ty: a.out_ty,
             })

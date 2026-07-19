@@ -1,6 +1,7 @@
 //! Logical QIR: backend-agnostic operators and lowering from typed HIR.
 
 pub mod aggregate;
+pub mod aggregate_impl;
 pub mod iterator;
 pub mod links;
 pub mod lower;

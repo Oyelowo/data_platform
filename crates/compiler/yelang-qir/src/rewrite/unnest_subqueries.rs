@@ -105,7 +105,7 @@ fn find_subplan_in_expr(
 ) -> Option<(LirId, yelang_ty::ty::TyId)> {
     match plan.expr(expr) {
         QExpr::Subplan(lir, ty) => Some((*lir, *ty)),
-        QExpr::Field(base, _, _) | QExpr::Cast(base, _) | QExpr::Unary(_, base, _) => {
+        QExpr::Field(base, _, _) | QExpr::Cast(base, _, _) | QExpr::Unary(_, base, _) => {
             find_subplan_in_expr(plan, *base)
         }
         QExpr::Index(base, idx, _) | QExpr::Binary(_, base, idx, _) => {
@@ -493,12 +493,12 @@ fn rewrite_expr(
             }
         }
 
-        QExpr::Cast(e, ty) => {
+        QExpr::Cast(e, kind, ty) => {
             let e2 = rewrite_expr(plan, e, input_binder, left_expr, sub_lir, right_expr);
             if e2 == e {
                 expr
             } else {
-                plan.alloc_expr(QExpr::Cast(e2, ty))
+                plan.alloc_expr(QExpr::Cast(e2, kind, ty))
             }
         }
     }

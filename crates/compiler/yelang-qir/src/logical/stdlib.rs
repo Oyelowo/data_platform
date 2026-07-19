@@ -40,6 +40,11 @@ pub fn build_queryable_method_table(tcx: &TyCtxt) -> FxHashMap<DefId, QueryableM
             Some("distinct") => QueryableMethod::Distinct,
             Some("group_by") => QueryableMethod::GroupBy,
             Some("aggregate") => QueryableMethod::Aggregate,
+            Some("sum") => QueryableMethod::Sum,
+            Some("product") => QueryableMethod::Product,
+            Some("avg") => QueryableMethod::Avg,
+            Some("count") => QueryableMethod::Count,
+            Some("execute") => QueryableMethod::Execute,
             _ => continue,
         };
         table.insert(item.def_id(), method);

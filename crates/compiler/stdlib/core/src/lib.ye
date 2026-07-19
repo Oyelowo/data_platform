@@ -11,4 +11,4 @@ pub mod aggregate;
 // without importing.
 pub use iter::{Iterator, IntoIterator};
 pub use query::{Queryable, Seq, Group};
-pub use aggregate::{Aggregate, AggregateClass, Sum, Count, Avg};
+pub use aggregate::{Aggregate, AggregateClass, Sum, Product, Count, Avg, Min, Max};

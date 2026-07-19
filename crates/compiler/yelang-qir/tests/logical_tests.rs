@@ -41,11 +41,17 @@ fn logical_plan_aggregate_sets_cardinality_one() {
     let mut plan = LogicalPlan::empty();
     let source_expr = plan.alloc_expr(QExpr::Lit(QLit::Int(1), ty()));
     let scan = plan.scan(ScanSource::Expr(source_expr), ty());
+    let unit = plan.alloc_expr(QExpr::Record(vec![], ty()));
     let agg = yelang_qir::logical::operator::AggregateOp {
         agg_def: yelang_arena::DefId::new(1),
         impl_def: yelang_arena::DefId::new(2),
         class: yelang_qir::expr::AggregateClass::Distributive,
         per_row: plan.alloc_expr(QExpr::Lit(QLit::Int(1), ty())),
+        init: unit,
+        step: unit,
+        merge: unit,
+        finish: unit,
+        config: unit,
         acc_ty: ty(),
         out_ty: ty(),
     };

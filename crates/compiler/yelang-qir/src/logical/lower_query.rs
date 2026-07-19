@@ -3,7 +3,8 @@
 use yelang_hir::hir::query::{Query, QueryKind, SelectQuery};
 
 use crate::errors::LoweringError;
-use crate::ids::LirId;
+use crate::expr::QExpr;
+use crate::ids::{BinderId, LirId, QExprId};
 use crate::logical::lower::LoweringCtxt;
 use crate::logical::operator::ScanSource;
 use crate::logical::plan::LogicalPlan;
@@ -47,16 +48,21 @@ pub fn lower_select_query(
         let pred = super::lower_expr::lower_hir_expr(plan, ctx, cond)?;
         let out_ty = plan.props[input].output_ty;
         let input_binder = plan.props[input].output_binder;
+        let pred = input_binder.map(|b| wrap_as_closure(plan, b, pred)).unwrap_or(pred);
         input = plan.filter(input, pred, out_ty);
         plan.props[input].output_binder = input_binder;
     }
 
     // 4. GROUP BY.
     if let Some(group) = &sq.group_by {
+        let input_binder = plan.props[input].output_binder;
         let key_exprs: Result<Vec<_>, _> = group
             .keys
             .iter()
-            .map(|k| super::lower_expr::lower_hir_expr(plan, ctx, k.expr))
+            .map(|k| {
+                let expr = super::lower_expr::lower_hir_expr(plan, ctx, k.expr)?;
+                Ok(input_binder.map(|b| wrap_as_closure(plan, b, expr)).unwrap_or(expr))
+            })
             .collect();
         let key_exprs = key_exprs?;
         let out_ty = ctx.results.pat_ty(group.into_binder).unwrap_or(ty());
@@ -68,11 +74,13 @@ pub fn lower_select_query(
 
     // 5. ORDER BY.
     if !sq.order_by.is_empty() {
+        let input_binder = plan.props[input].output_binder;
         let lowered: Result<Vec<_>, _> = sq
             .order_by
             .iter()
             .map(|part| {
                 let expr = super::lower_expr::lower_hir_expr(plan, ctx, part.expr)?;
+                let expr = input_binder.map(|b| wrap_as_closure(plan, b, expr)).unwrap_or(expr);
                 Ok(crate::expr::OrderKey {
                     expr,
                     dir: crate::expr::Direction::Asc,
@@ -101,6 +109,8 @@ pub fn lower_select_query(
 
     // 7. Projection.
     let projection = super::lower_expr::lower_hir_expr(plan, ctx, sq.projection)?;
+    let input_binder = plan.props[input].output_binder;
+    let projection = input_binder.map(|b| wrap_as_closure(plan, b, projection)).unwrap_or(projection);
     let out_ty = plan.expr(projection).ty();
     input = plan.map(input, projection, out_ty);
     if let Some((param, _)) = crate::rewrite::as_closure(plan, projection) {
@@ -145,4 +155,18 @@ fn lower_from_node(
 
 fn ty() -> yelang_ty::ty::TyId {
     yelang_ty::ty::TyId::new(1)
+}
+
+/// Wrap `body` in a single-parameter closure over `binder`.
+///
+/// Query syntax (e.g. `where u > 2`, `select u + 10`) produces bare
+/// expressions that reference the pipeline binder.  The executor expects
+/// filter/projection/order predicates to be closures, so we wrap them here.
+fn wrap_as_closure(plan: &mut LogicalPlan, binder: BinderId, body: QExprId) -> QExprId {
+    plan.alloc_expr(QExpr::Closure {
+        params: vec![binder],
+        body,
+        captures: vec![],
+        ty: plan.expr(body).ty(),
+    })
 }

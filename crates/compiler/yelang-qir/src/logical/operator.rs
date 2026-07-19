@@ -376,6 +376,16 @@ pub struct AggregateOp {
     pub class: AggregateClass,
     /// Per-row input expression fed to `step`.
     pub per_row: QExprId,
+    /// Closure `() -> Acc` producing the initial accumulator.
+    pub init: QExprId,
+    /// Closure `(Acc, In) -> Acc` consuming one row.
+    pub step: QExprId,
+    /// Closure `(Acc, Acc) -> Acc` merging partial accumulators.
+    pub merge: QExprId,
+    /// Closure `Acc -> Out` producing the final result.
+    pub finish: QExprId,
+    /// Aggregate config value (e.g., `Percentile { p: 0.5 }`).
+    pub config: QExprId,
     /// Accumulator type.
     pub acc_ty: TyId,
     /// Output type.

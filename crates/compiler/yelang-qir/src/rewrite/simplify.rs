@@ -308,12 +308,12 @@ pub fn simplify_expr(plan: &mut LogicalPlan, expr: QExprId) -> QExprId {
                 })
             }
         }
-        QExpr::Cast(e, ty) => {
+        QExpr::Cast(e, kind, ty) => {
             let e2 = simplify_expr(plan, e);
             if e2 == e {
                 expr
             } else {
-                plan.alloc_expr(QExpr::Cast(e2, ty))
+                plan.alloc_expr(QExpr::Cast(e2, kind, ty))
             }
         }
         QExpr::AggregateCall(call, ty) => {

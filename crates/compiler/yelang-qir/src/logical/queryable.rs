@@ -9,6 +9,7 @@ use yelang_ty::ty::{Ty, TyId};
 use crate::errors::LoweringError;
 use crate::expr::{AggregateClass, OrderKey, QExpr, QExprId};
 use crate::ids::LirId;
+use crate::logical::aggregate_impl;
 use crate::logical::lower::LoweringCtxt;
 use crate::logical::lower_expr::lower_hir_expr;
 use crate::logical::operator::{AggregateOp, ScanSource};
@@ -31,6 +32,7 @@ pub enum QueryableMethod {
     GroupBy,
     Aggregate,
     Sum,
+    Product,
     Avg,
     Count,
     Execute,
@@ -62,11 +64,11 @@ pub fn lower(
         QueryableMethod::Distinct => Ok(plan.distinct(input, None, plan.props[input].output_ty)),
         QueryableMethod::GroupBy => lower_group_by(plan, ctx, input, args, ty),
         QueryableMethod::Aggregate => lower_aggregate_call(plan, ctx, input, args, ty),
-        QueryableMethod::Sum | QueryableMethod::Avg | QueryableMethod::Count => {
+        QueryableMethod::Sum | QueryableMethod::Avg | QueryableMethod::Count | QueryableMethod::Product => {
             let class = method_def_id
                 .and_then(|id| ctx.aggregate_class(id))
                 .ok_or_else(|| LoweringError::MissingAggregate(format!("{:?}", method)))?;
-            lower_aggregate_sugar(plan, input, method_def_id.unwrap(), class, ty)
+            lower_aggregate_sugar(plan, ctx, input, method_def_id.unwrap(), class, ty)
         }
         QueryableMethod::Execute => Ok(input),
     }
@@ -222,19 +224,14 @@ fn lower_aggregate_call(
         .ok_or_else(|| LoweringError::MissingAggregate(format!("agg#{}", agg_def.raw())))?;
     let per_row = identity_per_row(plan, input);
     let elem_ty = plan.expr(per_row).ty();
-    let agg = AggregateOp {
-        agg_def,
-        impl_def: agg_def,
-        class,
-        per_row,
-        acc_ty: elem_ty,
-        out_ty: ty,
-    };
+    let agg = aggregate_impl::build_builtin_aggregate(plan, ctx, agg_def, per_row, class, elem_ty, ty)
+        .unwrap_or_else(|| placeholder_aggregate_op(plan, agg_def, class, per_row, elem_ty, ty));
     Ok(plan.aggregate(input, agg, ty))
 }
 
 fn lower_aggregate_sugar(
     plan: &mut LogicalPlan,
+    ctx: &mut LoweringCtxt<'_>,
     input: LirId,
     method_def_id: DefId,
     class: AggregateClass,
@@ -242,21 +239,46 @@ fn lower_aggregate_sugar(
 ) -> Result<LirId, LoweringError> {
     let per_row = identity_per_row(plan, input);
     let elem_ty = plan.expr(per_row).ty();
-    let agg = AggregateOp {
-        agg_def: method_def_id,
-        impl_def: method_def_id,
+    let agg_def = aggregate_impl::resolve_sugar_marker(ctx, method_def_id).unwrap_or(method_def_id);
+    let agg = aggregate_impl::build_builtin_aggregate(plan, ctx, agg_def, per_row, class, elem_ty, ty)
+        .unwrap_or_else(|| placeholder_aggregate_op(plan, agg_def, class, per_row, elem_ty, ty));
+    Ok(plan.aggregate(input, agg, ty))
+}
+
+fn placeholder_aggregate_op(
+    plan: &mut LogicalPlan,
+    agg_def: DefId,
+    class: AggregateClass,
+    per_row: QExprId,
+    acc_ty: TyId,
+    out_ty: TyId,
+) -> AggregateOp {
+    let unit = plan.alloc_expr(QExpr::Record(vec![], acc_ty));
+    AggregateOp {
+        agg_def,
+        impl_def: agg_def,
         class,
         per_row,
-        acc_ty: elem_ty,
-        out_ty: ty,
-    };
-    Ok(plan.aggregate(input, agg, ty))
+        init: unit,
+        step: unit,
+        merge: unit,
+        finish: unit,
+        config: unit,
+        acc_ty,
+        out_ty,
+    }
 }
 
 fn identity_per_row(plan: &mut LogicalPlan, input: LirId) -> QExprId {
     let elem_ty = plan.props[input].output_ty;
-    let binder = plan.fresh_binder();
-    plan.alloc_expr(QExpr::Column(binder, elem_ty))
+    let binder = plan.props[input].output_binder.unwrap_or_else(|| plan.fresh_binder());
+    let body = plan.alloc_expr(QExpr::Column(binder, elem_ty));
+    plan.alloc_expr(QExpr::Closure {
+        params: vec![binder],
+        body,
+        captures: vec![],
+        ty: elem_ty,
+    })
 }
 
 fn resolve_aggregate_marker_def(

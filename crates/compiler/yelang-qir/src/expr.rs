@@ -74,7 +74,7 @@ pub enum QExpr {
         ty: TyId,
     },
     /// Coerce a value to another type.
-    Cast(QExprId, TyId),
+    Cast(QExprId, CastKind, TyId),
     /// A subplan fragment embedded in an expression.
     ///
     /// Produced when a method call on `Queryable`/`Aggregate`/`Iterator` is
@@ -106,7 +106,7 @@ impl QExpr {
             | QExpr::Let { ty, .. }
             | QExpr::AggregateCall(_, ty)
             | QExpr::WindowCall { ty, .. }
-            | QExpr::Cast(_, ty)
+            | QExpr::Cast(_, _, ty)
             | QExpr::Subplan(_, ty)
             | QExpr::Error(ty) => *ty,
         }
@@ -143,6 +143,16 @@ pub struct AggregateCall {
     pub input: QExprId,
     /// Per-row input expression fed to `step`.
     pub per_row: QExprId,
+    /// Closure `() -> Acc` producing the initial accumulator.
+    pub init: QExprId,
+    /// Closure `(Acc, In) -> Acc` consuming one row.
+    pub step: QExprId,
+    /// Closure `(Acc, Acc) -> Acc` merging partial accumulators.
+    pub merge: QExprId,
+    /// Closure `Acc -> Out` producing the final result.
+    pub finish: QExprId,
+    /// Aggregate config value (e.g., `Percentile { p: 0.5 }`).
+    pub config: QExprId,
     /// Accumulator type.
     pub acc_ty: TyId,
     /// Output type.
@@ -192,6 +202,19 @@ pub enum FrameBound {
     CurrentRow,
     Following(u64),
     UnboundedFollowing,
+}
+
+/// Kind of cast.  Keeping this explicit lets the executor interpret casts
+/// without needing a `TyCtxt` to inspect the target type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CastKind {
+    /// Cast an integer value to a floating-point value.
+    IntToFloat,
+    /// Cast a floating-point value to an integer value.
+    FloatToInt,
+    /// Cast between numeric types where the executor should inspect the
+    /// runtime value and target type family.
+    Numeric,
 }
 
 /// A sort key.

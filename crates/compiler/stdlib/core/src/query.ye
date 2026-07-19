@@ -3,18 +3,15 @@
 // `Queryable` is the optimizable, backend-agnostic pipeline interface. The
 // compiler recognizes the trait via `@lang("queryable")` and lowers calls to
 // its methods into QIR logical operators.
-//
-// NOTE: the bootstrap compiler does not yet support method-level generics in
-// trait bodies, so the methods here are *declarations* only. User code reaches
-// the query pipeline through the dedicated `select` syntax, not through these
-// method calls. Once method-level generics are fully supported, these methods
-// will become the canonical surface API.
 
 @lang("queryable")
 trait Queryable<T> {
+    // Lazy transformations.
     fn filter(self, pred: fn(T) -> bool) -> Self;
     fn map<U>(self, f: fn(T) -> U) -> Queryable<U>;
     fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U>;
+
+    // Ordering, grouping, slicing.
     fn order_by<K>(self, key: fn(T) -> K) -> Seq<T>;
     fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>>;
     fn distinct(self) -> Self;
@@ -26,6 +23,83 @@ trait Queryable<T> {
     fn aggregate<A, Acc, Out>(self, agg: A) -> Out
     where
         A: Aggregate<T, Acc, Out>;
+
+    // Sugar methods. The QIR lowering inlines their default bodies, which all
+    // reduce to `self.aggregate(Marker)`. User overrides are respected.
+    fn sum(self) -> T
+    where
+        Self: Sized,
+    {
+        self.aggregate(Sum {})
+    }
+
+    fn product(self) -> T
+    where
+        Self: Sized,
+    {
+        self.aggregate(Product {})
+    }
+
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        self.aggregate(Count {})
+    }
+
+    fn avg(self) -> f64
+    where
+        Self: Sized,
+    {
+        self.aggregate(Avg {})
+    }
+
+    fn min(self) -> Option<T>
+    where
+        Self: Sized,
+    {
+        self.aggregate(Min {})
+    }
+
+    fn max(self) -> Option<T>
+    where
+        Self: Sized,
+    {
+        self.aggregate(Max {})
+    }
+
+    // Eager fold/reduce. These are declared without default bodies for now
+    // because the bootstrap compiler does not yet support method-level
+    // generics in trait default bodies in all configurations.
+    fn fold<Acc>(self, init: Acc, f: fn(Acc, T) -> Acc) -> Acc;
+    fn reduce(self, f: fn(T, T) -> T) -> Option<T>;
+
+    // Force materialization.
+    fn execute(self) -> Vec<T>;
+}
+
+// Placeholder impl for the built-in `Array<T>` type.  The QIR lowering intercepts
+// calls to these methods and emits logical operators; the bodies are never
+// executed as written.
+impl<T> Queryable<T> for Array<T> {
+    fn filter(self, pred: fn(T) -> bool) -> Self { self }
+    fn map<U>(self, f: fn(T) -> U) -> Queryable<U> { self }
+    fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U> { self }
+    fn order_by<K>(self, key: fn(T) -> K) -> Seq<T> { Seq { inner: self } }
+    fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>> { self }
+    fn distinct(self) -> Self { self }
+    fn take(self, n: usize) -> Self { self }
+    fn skip(self, n: usize) -> Self { self }
+    fn aggregate<A, Acc, Out>(self, agg: A) -> Out where A: Aggregate<T, Acc, Out> { 0 }
+    fn sum(self) -> T where Self: Sized { self.aggregate(Sum {}) }
+    fn product(self) -> T where Self: Sized { self.aggregate(Product {}) }
+    fn count(self) -> usize where Self: Sized { self.aggregate(Count {}) }
+    fn avg(self) -> f64 where Self: Sized { self.aggregate(Avg {}) }
+    fn min(self) -> Option<T> where Self: Sized { self.aggregate(Min {}) }
+    fn max(self) -> Option<T> where Self: Sized { self.aggregate(Max {}) }
+    fn fold<Acc>(self, init: Acc, f: fn(Acc, T) -> Acc) -> Acc { init }
+    fn reduce(self, f: fn(T, T) -> T) -> Option<T> { Option::None }
+    fn execute(self) -> Vec<T> { self }
 }
 
 // Result type of `order_by`. A `Seq` is an ordered collection; logical `Slice`

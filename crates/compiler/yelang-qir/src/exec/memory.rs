@@ -1,12 +1,14 @@
 //! In-memory interpreter for physical QIR plans.
 
+use yelang_arena::FxHashMap;
 use yelang_interner::Symbol;
 
 use crate::errors::PlanError;
 use crate::exec::interface::{QueryExecutor, Value};
 use crate::exec::kernels::KernelRegistry;
 use crate::exec::value::value_eq;
-use crate::expr::{Direction, OrderKey, QExpr, QExprId, QLit};
+use crate::expr::{CastKind, Direction, OrderKey, QExpr, QExprId, QLit};
+use crate::ids::BinderId;
 use crate::pir::operator::{AggMode, PirOp};
 use crate::pir::plan::PhysicalPlan;
 use crate::pir::props::PhysicalProps;
@@ -36,7 +38,7 @@ impl QueryExecutor for MemoryExecutor {
         let ctx = ExecCtx {
             plan,
             kernels: &self.kernels,
-            row: Value::Null,
+            bindings: FxHashMap::default(),
         };
         ctx.execute(root, &PhysicalProps::any())
     }
@@ -45,7 +47,7 @@ impl QueryExecutor for MemoryExecutor {
 struct ExecCtx<'a> {
     plan: &'a PhysicalPlan,
     kernels: &'a KernelRegistry,
-    row: Value,
+    bindings: FxHashMap<BinderId, Value>,
 }
 
 impl<'a> ExecCtx<'a> {
@@ -60,8 +62,7 @@ impl<'a> ExecCtx<'a> {
                 let rows = self.execute(*input, _required)?.into_array()?;
                 let mut out = Vec::new();
                 for row in rows {
-                    let ctx = self.with_row(row.clone());
-                    let pred = ctx.apply_closure(*predicate)?;
+                    let pred = self.apply_closure(*predicate, vec![row.clone()])?;
                     if pred.to_bool() {
                         out.push(row);
                     }
@@ -72,8 +73,7 @@ impl<'a> ExecCtx<'a> {
                 let rows = self.execute(*input, _required)?.into_array()?;
                 let mut out = Vec::new();
                 for row in rows {
-                    let ctx = self.with_row(row);
-                    out.push(ctx.apply_closure(*projection)?);
+                    out.push(self.apply_closure(*projection, vec![row])?);
                 }
                 Ok(Value::Array(out))
             }
@@ -81,8 +81,7 @@ impl<'a> ExecCtx<'a> {
                 let rows = self.execute(*input, _required)?.into_array()?;
                 let mut out = Vec::new();
                 for row in rows {
-                    let ctx = self.with_row(row);
-                    let mapped = ctx.apply_closure(*projection)?;
+                    let mapped = self.apply_closure(*projection, vec![row])?;
                     out.extend(mapped.into_array()?);
                 }
                 Ok(Value::Array(out))
@@ -117,8 +116,7 @@ impl<'a> ExecCtx<'a> {
                 let rows = self.execute(*input, _required)?.into_array()?;
                 let mut groups: Vec<(Value, Vec<Value>)> = Vec::new();
                 for row in rows {
-                    let ctx = self.with_row(row.clone());
-                    let k = ctx.apply_closure(*key)?;
+                    let k = self.apply_closure(*key, vec![row.clone()])?;
                     if let Some((_, vals)) = groups.iter_mut().find(|(gk, _)| value_eq(gk, &k)) {
                         vals.push(row);
                     } else {
@@ -152,8 +150,7 @@ impl<'a> ExecCtx<'a> {
                             (Symbol::from(2), i.clone()),
                         ]);
                         let include = if let Some(pred) = predicate {
-                            let ctx = self.with_row(pair.clone());
-                            ctx.apply_closure(*pred)?.to_bool()
+                            self.apply_closure(*pred, vec![pair.clone()])?.to_bool()
                         } else {
                             true
                         };
@@ -223,7 +220,7 @@ impl<'a> ExecCtx<'a> {
             QExpr::Lit(QLit::Float(f), _) => Ok(Value::Float(*f)),
             QExpr::Lit(QLit::Str(s), _) => Ok(Value::Str(*s)),
             QExpr::Lit(QLit::Unit, _) => Ok(Value::Null),
-            QExpr::Column(_, _) => Ok(self.row.clone()),
+            QExpr::Column(binder, _) => Ok(self.lookup(*binder)),
             QExpr::Field(base, field, _) => {
                 let base = self.eval(*base)?;
                 Ok(base.field(*field).cloned().unwrap_or(Value::Null))
@@ -260,26 +257,44 @@ impl<'a> ExecCtx<'a> {
                     self.eval(*e)
                 }
             }
+            QExpr::Cast(e, kind, _) => {
+                let v = self.eval(*e)?;
+                Ok(match kind {
+                    CastKind::IntToFloat => match v {
+                        Value::Int(n) => Value::Float(n as f64),
+                        _ => v,
+                    },
+                    CastKind::FloatToInt => match v {
+                        Value::Float(n) => Value::Int(n as i128),
+                        _ => v,
+                    },
+                    CastKind::Numeric => v,
+                })
+            }
             _ => Ok(Value::Null),
         }
     }
 
-    fn apply_closure(&self, expr: QExprId) -> Result<Value, PlanError> {
+    fn lookup(&self, binder: BinderId) -> Value {
+        self.bindings.get(&binder).cloned().unwrap_or(Value::Null)
+    }
+
+    fn apply_closure(&self, expr: QExprId, args: Vec<Value>) -> Result<Value, PlanError> {
         match self.plan.expr(expr) {
             QExpr::Closure { params, body, .. } => {
-                if params.len() == 1 {
-                    let ctx = self.with_row(self.row.clone());
-                    ctx.eval(*body)
-                } else {
-                    self.eval(*body)
-                }
+                let ctx = self.bind_many(params, args);
+                ctx.eval(*body)
             }
             _ => self.eval(expr),
         }
     }
 
-    fn with_row(&self, row: Value) -> ExecCtx<'a> {
-        ExecCtx { plan: self.plan, kernels: self.kernels, row }
+    fn bind_many(&self, binders: &[BinderId], values: Vec<Value>) -> ExecCtx<'a> {
+        let mut bindings = self.bindings.clone();
+        for (binder, value) in binders.iter().zip(values.into_iter()) {
+            bindings.insert(*binder, value);
+        }
+        ExecCtx { plan: self.plan, kernels: self.kernels, bindings }
     }
 
     fn sort_rows(&self, rows: &mut Vec<Value>, keys: &[OrderKey]) {
@@ -305,25 +320,21 @@ impl<'a> ExecCtx<'a> {
         rows: Vec<Value>,
         group_keys: &[QExprId],
         aggregates: &[crate::pir::operator::PhysicalAggregateOp],
-        _mode: &AggMode,
+        mode: &AggMode,
     ) -> Result<Value, PlanError> {
         if group_keys.is_empty() {
             // Scalar aggregate: one result row.
             let mut agg_values = Vec::new();
             for agg in aggregates {
-                let vals: Result<Vec<Value>, _> = rows.iter().map(|r| {
-                    let ctx = self.with_row(r.clone());
-                    ctx.apply_closure(agg.input_expr)
-                }).collect();
-                agg_values.push((Symbol::from(0), self.kernels.eval_aggregate(agg.class, vals?)));
+                let result = self.run_aggregate_full(&rows, agg, mode)?;
+                agg_values.push((Symbol::from(0), result));
             }
             Ok(Value::Record(agg_values))
         } else {
             // Grouped aggregate.
             let mut groups: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
             for row in rows {
-                let ctx = self.with_row(row.clone());
-                let key: Result<Vec<_>, _> = group_keys.iter().map(|k| ctx.apply_closure(*k)).collect();
+                let key: Result<Vec<_>, _> = group_keys.iter().map(|k| self.apply_closure(*k, vec![row.clone()])).collect();
                 let key = key?;
                 if let Some((_, rs)) = groups.iter_mut().find(|(gk, _)| {
                     gk.len() == key.len() && gk.iter().zip(&key).all(|(a, b)| value_eq(a, b))
@@ -341,17 +352,28 @@ impl<'a> ExecCtx<'a> {
                         fields.push((Symbol::from(i as u32 + 100), k[i].clone()));
                     }
                     for agg in aggregates {
-                        let vals: Result<Vec<Value>, _> = rs.iter().map(|r| {
-                            let ctx = self.with_row(r.clone());
-                            ctx.apply_closure(agg.input_expr)
-                        }).collect();
-                        fields.push((Symbol::from(0), self.kernels.eval_aggregate(agg.class, vals?)));
+                        let result = self.run_aggregate_full(&rs, agg, mode)?;
+                        fields.push((Symbol::from(0), result));
                     }
                     Ok(Value::Record(fields))
                 })
                 .collect();
             Ok(Value::Array(out?))
         }
+    }
+
+    fn run_aggregate_full(
+        &self,
+        rows: &[Value],
+        agg: &crate::pir::operator::PhysicalAggregateOp,
+        _mode: &AggMode,
+    ) -> Result<Value, PlanError> {
+        let mut acc = self.apply_closure(agg.init, vec![])?;
+        for row in rows {
+            let input_val = self.apply_closure(agg.input_expr, vec![row.clone()])?;
+            acc = self.apply_closure(agg.step, vec![acc, input_val])?;
+        }
+        self.apply_closure(agg.finish, vec![acc])
     }
 }
 
@@ -372,8 +394,8 @@ impl Value {
 }
 
 fn eval_key(plan: &PhysicalPlan, kernels: &KernelRegistry, row: &Value, key: &OrderKey) -> Value {
-    let ctx = ExecCtx { plan, kernels, row: row.clone() };
-    ctx.apply_closure(key.expr).unwrap_or(Value::Null)
+    let ctx = ExecCtx { plan, kernels, bindings: FxHashMap::default() };
+    ctx.apply_closure(key.expr, vec![row.clone()]).unwrap_or(Value::Null)
 }
 
 fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
@@ -384,5 +406,3 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         _ => std::cmp::Ordering::Equal,
     }
 }
-
-

@@ -274,12 +274,12 @@ fn subst_rec(
             }
         }
 
-        QExpr::Cast(e, ty) => {
+        QExpr::Cast(e, kind, ty) => {
             let e2 = subst_rec(plan, e, subst);
             if e2 == e {
                 expr
             } else {
-                plan.alloc_expr(QExpr::Cast(e2, ty))
+                plan.alloc_expr(QExpr::Cast(e2, kind, ty))
             }
         }
 
@@ -359,7 +359,7 @@ fn collect_free_binders(
 
         QExpr::Lit(_, _) | QExpr::Error(_) => {}
 
-        QExpr::Field(base, _, _) | QExpr::Cast(base, _) | QExpr::Unary(_, base, _) => {
+        QExpr::Field(base, _, _) | QExpr::Cast(base, _, _) | QExpr::Unary(_, base, _) => {
             collect_free_binders(plan, *base, bound, free);
         }
 

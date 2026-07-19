@@ -115,6 +115,7 @@ impl LogicalPlan {
         if let Some(in_props) = self.props.get(input) {
             props.bounded = in_props.bounded;
             props.volatility = in_props.volatility;
+            props.output_binder = in_props.output_binder;
         }
         self.alloc_operator(LirOp::OrderBy { input, keys }, props)
     }
@@ -159,6 +160,7 @@ impl LogicalPlan {
         if let Some(in_props) = self.props.get(input) {
             props.bounded = in_props.bounded;
             props.volatility = in_props.volatility;
+            props.output_binder = in_props.output_binder;
         }
         self.alloc_operator(LirOp::Slice { input, offset, limit }, props)
     }

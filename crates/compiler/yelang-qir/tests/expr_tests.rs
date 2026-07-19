@@ -42,6 +42,11 @@ fn aggregate_call_struct_builds() {
         class: AggregateClass::Distributive,
         input: QExprId(0),
         per_row: QExprId(1),
+        init: QExprId(2),
+        step: QExprId(3),
+        merge: QExprId(4),
+        finish: QExprId(5),
+        config: QExprId(6),
         acc_ty: ty(),
         out_ty: ty(),
     };

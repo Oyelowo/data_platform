@@ -46,6 +46,11 @@ fn scalar_distributive_aggregate_plan() {
         impl_def: yelang_arena::DefId::new(2),
         class: AggregateClass::Distributive,
         input_expr: QExprId(0),
+        init: QExprId(0),
+        step: QExprId(0),
+        merge: QExprId(0),
+        finish: QExprId(0),
+        config: QExprId(0),
         acc_ty: ty(),
         out_ty: ty(),
     };
@@ -74,6 +79,11 @@ fn dummy_aggregate(class: AggregateClass) -> AggregateOp {
         impl_def: yelang_arena::DefId::new(2),
         class,
         per_row: QExprId(0),
+        init: QExprId(0),
+        step: QExprId(0),
+        merge: QExprId(0),
+        finish: QExprId(0),
+        config: QExprId(0),
         acc_ty: ty(),
         out_ty: ty(),
     }

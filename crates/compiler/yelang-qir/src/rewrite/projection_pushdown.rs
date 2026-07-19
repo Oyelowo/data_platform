@@ -194,7 +194,7 @@ fn collect_expr_demand(
             collect_expr_demand(plan, *base, row_binder, demand);
             collect_expr_demand(plan, *idx, row_binder, demand);
         }
-        QExpr::Unary(_, e, _) | QExpr::Cast(e, _) => {
+        QExpr::Unary(_, e, _) | QExpr::Cast(e, _, _) => {
             collect_expr_demand(plan, *e, row_binder, demand);
         }
         QExpr::Call(_, args, _) => {
