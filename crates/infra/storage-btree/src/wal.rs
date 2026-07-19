@@ -6,6 +6,7 @@
 //! protocol.
 
 use parking_lot::Mutex as ParkingMutex;
+use storage_format::{read_u16_le, write_u16_le};
 
 use crate::error::{Error, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -823,7 +824,7 @@ fn put_u16(buf: &mut [u8], value: u16) -> Result<()> {
     if buf.len() < 2 {
         return Err(Error::Corruption("buffer too small for u16".into()));
     }
-    buf[0..2].copy_from_slice(&value.to_le_bytes());
+    write_u16_le(buf, value);
     Ok(())
 }
 
@@ -831,7 +832,7 @@ fn read_u16(buf: &[u8], off: usize) -> Result<u16> {
     if buf.len() < off + 2 {
         return Err(Error::Corruption("buffer too short for u16".into()));
     }
-    Ok(u16::from_le_bytes([buf[off], buf[off + 1]]))
+    Ok(read_u16_le(&buf[off..off + 2]))
 }
 
 fn encode_record_to_vec(record: &Record) -> Result<Vec<u8>> {

@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
+use storage_file::read_exact_at;
+use storage_format::Crc32c;
 
 use crate::format::{HEADER_SIZE, RecordHeader, padding_len};
 use crate::{Error, Result};
@@ -82,7 +84,7 @@ impl VolumeWriter {
         self.file.write_all(id)?;
 
         // Stream the payload, computing CRC and length.
-        let mut crc: u32 = 0;
+        let mut crc = Crc32c::new();
         let mut payload_len: u64 = 0;
         let mut buf = [0u8; 64 * 1024];
         loop {
@@ -91,7 +93,7 @@ impl VolumeWriter {
                 break;
             }
             self.file.write_all(&buf[..n])?;
-            crc = crc32c::crc32c_append(crc, &buf[..n]);
+            crc.update(&buf[..n]);
             payload_len += n as u64;
         }
 
@@ -106,7 +108,7 @@ impl VolumeWriter {
 
         // Seek back and write the real header.
         self.file.seek(SeekFrom::Start(offset))?;
-        let header = RecordHeader::new(id_len, payload_len, crc);
+        let header = RecordHeader::new(id_len, payload_len, crc.finalize());
         let mut header_buf = [0u8; HEADER_SIZE];
         header.encode(&mut header_buf);
         self.file.write_all(&header_buf)?;
@@ -169,7 +171,7 @@ impl VolumeReader {
     /// Returns the header and the total record size.
     pub fn read_header(&self, offset: u64) -> Result<(RecordHeader, u64)> {
         let mut header_buf = [0u8; HEADER_SIZE];
-        Self::read_exact_at(&self.file, offset, &mut header_buf)?;
+        read_exact_at(&self.file, offset, &mut header_buf)?;
         let header = RecordHeader::decode(&header_buf)?;
         Ok((header, header.record_size()))
     }
@@ -195,7 +197,7 @@ impl VolumeReader {
         }
 
         let mut record_buf = vec![0u8; record_size as usize];
-        Self::read_exact_at(&self.file, offset, &mut record_buf)?;
+        read_exact_at(&self.file, offset, &mut record_buf)?;
 
         let id_start = HEADER_SIZE;
         let id_end = id_start + header.id_len as usize;
@@ -205,7 +207,7 @@ impl VolumeReader {
         let id = Bytes::copy_from_slice(&record_buf[id_start..id_end]);
         let payload = Bytes::copy_from_slice(&record_buf[payload_start..payload_end]);
 
-        let actual_crc = crc32c::crc32c(&payload);
+        let actual_crc = storage_format::crc32c(&payload);
         if actual_crc != header.payload_crc {
             return Err(Error::CorruptRecord {
                 volume: self.number,
@@ -234,23 +236,6 @@ impl VolumeReader {
         }
     }
 
-    /// Read exactly `buf.len()` bytes at `offset` from `file`.
-    pub(crate) fn read_exact_at(file: &File, offset: u64, buf: &mut [u8]) -> Result<()> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::FileExt;
-            file.read_exact_at(buf, offset)?;
-        }
-        #[cfg(not(unix))]
-        {
-            // Fallback for non-Unix platforms: this is not production-tuned.
-            use std::io::Seek;
-            let mut file = file.try_clone()?;
-            file.seek(SeekFrom::Start(offset))?;
-            file.read_exact(buf)?;
-        }
-        Ok(())
-    }
 }
 
 /// Streaming reader for a single object's payload.
@@ -259,7 +244,7 @@ pub struct BlobPayloadReader {
     reader: Arc<VolumeReader>,
     offset: u64,
     remaining: u64,
-    crc: u32,
+    crc: Crc32c,
     expected_crc: u32,
     pending_verify: bool,
 }
@@ -281,7 +266,7 @@ impl BlobPayloadReader {
         // Verify the stored ID matches the requested ID.
         let id_offset = offset + HEADER_SIZE as u64;
         let mut stored_id = vec![0u8; header.id_len as usize];
-        VolumeReader::read_exact_at(&reader.file, id_offset, &mut stored_id)?;
+        read_exact_at(&reader.file, id_offset, &mut stored_id)?;
         if stored_id.as_slice() != expected_id {
             return Err(Error::CorruptRecord {
                 volume: reader.number,
@@ -310,7 +295,7 @@ impl BlobPayloadReader {
             reader,
             offset: payload_offset,
             remaining: header.payload_len,
-            crc: 0,
+            crc: Crc32c::new(),
             expected_crc: header.payload_crc,
             pending_verify: false,
         })
@@ -320,12 +305,12 @@ impl BlobPayloadReader {
 impl Read for BlobPayloadReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.pending_verify {
-            if self.crc != self.expected_crc {
+            if self.crc.finalize() != self.expected_crc {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!(
                         "payload crc mismatch: expected {:08x}, got {:08x}",
-                        self.expected_crc, self.crc
+                        self.expected_crc, self.crc.finalize()
                     ),
                 ));
             }
@@ -344,9 +329,9 @@ impl Read for BlobPayloadReader {
         }
 
         let to_read = std::cmp::min(buf.len() as u64, self.remaining) as usize;
-        VolumeReader::read_exact_at(&self.reader.file, self.offset, &mut buf[..to_read])
+        read_exact_at(&self.reader.file, self.offset, &mut buf[..to_read])
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e))?;
-        self.crc = crc32c::crc32c_append(self.crc, &buf[..to_read]);
+        self.crc.update(&buf[..to_read]);
         self.offset += to_read as u64;
         self.remaining -= to_read as u64;
         if self.remaining == 0 {
@@ -463,7 +448,7 @@ mod tests {
         // keeps the header checksum valid.
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[12..20].copy_from_slice(&(1u64 << 40).to_le_bytes());
-        let crc = crc32c::crc32c(&bytes[..HEADER_SIZE - 4]);
+        let crc = storage_format::crc32c(&bytes[..HEADER_SIZE - 4]);
         bytes[24..28].copy_from_slice(&crc.to_le_bytes());
         std::fs::write(&path, bytes).unwrap();
 
@@ -488,7 +473,7 @@ mod tests {
         // The record size overflows, which must be caught during header decode.
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[12..20].copy_from_slice(&u64::MAX.to_le_bytes());
-        let crc = crc32c::crc32c(&bytes[..HEADER_SIZE - 4]);
+        let crc = storage_format::crc32c(&bytes[..HEADER_SIZE - 4]);
         bytes[24..28].copy_from_slice(&crc.to_le_bytes());
         std::fs::write(&path, bytes).unwrap();
 

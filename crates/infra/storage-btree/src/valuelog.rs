@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::Mutex as ParkingMutex;
+use storage_format::{read_u32_le, write_u32_le};
 
 use crate::error::{Error, Result};
 use crate::io::{Boundary, OpenOptions, RealBackend, StorageBackend, StorageFile};
@@ -158,7 +159,7 @@ impl ValueLog {
             file.read_at(&mut len_buf, offset).map_err(Error::Io)?;
             self.backend
                 .corrupt_read(Boundary::ValueLogRead, &mut len_buf, offset)?;
-            let stored_len = u32::from_le_bytes(len_buf);
+            let stored_len = read_u32_le(&len_buf);
             if stored_len != len {
                 return Err(Error::Corruption(format!(
                     "value-log length mismatch at offset {offset}: expected {len}, got {stored_len}"
@@ -294,8 +295,10 @@ impl ValueLog {
             let mut write_offset: ValueOffset = 0;
             for (old_offset, len) in &sorted {
                 let value = self.read(*old_offset, *len)?;
+                let mut len_buf = [0u8; 4];
+                write_u32_le(&mut len_buf, value.len() as u32);
                 new_file
-                    .write_at(&(value.len() as u32).to_le_bytes(), write_offset)
+                    .write_at(&len_buf, write_offset)
                     .map_err(Error::Io)?;
                 write_offset += 4;
                 new_file.write_at(&value, write_offset).map_err(Error::Io)?;

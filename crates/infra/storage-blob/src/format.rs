@@ -1,5 +1,7 @@
 //! On-disk record format for volume files.
 
+use storage_format::crc32c;
+
 /// Magic number at the start of every record ("BLOB").
 pub const RECORD_MAGIC: u32 = 0x424C_4F42;
 
@@ -53,7 +55,7 @@ impl RecordHeader {
         };
         let mut buf = [0u8; HEADER_SIZE];
         header.encode_fixed(&mut buf);
-        header.header_crc = crc32c::crc32c(&buf[..HEADER_SIZE - 4]);
+        header.header_crc = crc32c(&buf[..HEADER_SIZE - 4]);
         header
     }
 
@@ -81,7 +83,7 @@ impl RecordHeader {
     /// Encode the header into a 28-byte buffer.
     pub fn encode(&self, buf: &mut [u8; HEADER_SIZE]) {
         self.encode_fixed(buf);
-        let crc = crc32c::crc32c(&buf[..HEADER_SIZE - 4]);
+        let crc = crc32c(&buf[..HEADER_SIZE - 4]);
         buf[24..28].copy_from_slice(&crc.to_le_bytes());
     }
 
@@ -109,7 +111,7 @@ impl RecordHeader {
         let payload_len = u64::from_le_bytes(buf[12..20].try_into().unwrap());
         let payload_crc = u32::from_le_bytes(buf[20..24].try_into().unwrap());
         let stored_header_crc = u32::from_le_bytes(buf[24..28].try_into().unwrap());
-        let computed_header_crc = crc32c::crc32c(&buf[..HEADER_SIZE - 4]);
+        let computed_header_crc = crc32c(&buf[..HEADER_SIZE - 4]);
         if stored_header_crc != computed_header_crc {
             return Err(crate::Error::CorruptRecord {
                 volume: 0,
@@ -213,7 +215,7 @@ mod tests {
         // Corrupt both payload_len to u64::MAX and the header checksum so the
         // header appears internally consistent, but the record size overflows.
         buf[12..20].copy_from_slice(&u64::MAX.to_le_bytes());
-        let crc = crc32c::crc32c(&buf[..HEADER_SIZE - 4]);
+        let crc = crc32c(&buf[..HEADER_SIZE - 4]);
         buf[24..28].copy_from_slice(&crc.to_le_bytes());
 
         let err = RecordHeader::decode(&buf).unwrap_err();

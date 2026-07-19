@@ -1696,9 +1696,10 @@ name = "storage-blob"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "crc32c",
  "dashmap",
  "lru",
+ "storage-file",
+ "storage-format",
  "storage-testkit",
  "storage-traits",
  "storage-wal",
@@ -1711,11 +1712,12 @@ name = "storage-btree"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "crc32c",
  "criterion",
  "loom",
  "parking_lot",
  "proptest",
+ "storage-file",
+ "storage-format",
  "storage-testkit",
  "storage-traits",
  "storage-wal",
@@ -1756,10 +1758,51 @@ dependencies = [
  "parquet",
  "serde",
  "serde_json",
+ "storage-file",
+ "storage-format",
  "storage-testkit",
  "storage-traits",
  "storage-wal",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "storage-compression"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "lz4",
+ "proptest",
+ "snap",
+ "thiserror",
+ "zstd",
+]
+
+[[package]]
+name = "storage-file"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "storage-filter"
+version = "0.1.0"
+dependencies = [
+ "bitvec",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
+name = "storage-format"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "crc32c",
+ "proptest",
  "thiserror",
 ]
 
@@ -1783,24 +1826,23 @@ name = "storage-kv"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "bitvec",
  "bytes",
- "crc32c",
  "crossbeam-channel",
  "libc",
- "lz4",
  "proptest",
  "proptest-state-machine",
  "serde",
  "serde_json",
- "snap",
+ "storage-compression",
+ "storage-file",
+ "storage-filter",
+ "storage-format",
  "storage-skipmap",
  "storage-testkit",
  "storage-traits",
  "storage-wal",
  "tempfile",
  "thiserror",
- "zstd",
 ]
 
 [[package]]
@@ -1814,6 +1856,13 @@ dependencies = [
  "storage-testkit",
  "storage-traits",
  "thiserror",
+]
+
+[[package]]
+name = "storage-metrics"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
 ]
 
 [[package]]
@@ -1856,6 +1905,7 @@ dependencies = [
  "crc32c",
  "crossbeam-channel",
  "fs2",
+ "storage-file",
  "tempfile",
  "thiserror",
 ]

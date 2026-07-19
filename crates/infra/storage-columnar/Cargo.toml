@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 storage-traits = { path = "../storage-traits" }
 storage-wal = { path = "../storage-wal" }
+storage-file = { path = "../storage-file" }
+storage-format = { path = "../storage-format" }
 arrow = "54"
 parquet = "54"
 arrow-schema = "54"

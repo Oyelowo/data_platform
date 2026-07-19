@@ -11,7 +11,7 @@ use std::alloc::{self, Layout};
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crc32c::crc32c;
+use storage_format::{crc32c, read_u16_le, read_u32_le, write_u16_le, write_u32_le};
 
 use crate::error::{Error, Result};
 use crate::slot::{
@@ -128,13 +128,13 @@ impl Header {
         if data.len() < HEADER_SIZE {
             return Err(Error::Corruption("page header truncated".into()));
         }
-        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        let magic = read_u32_le(&data[0..4]);
         if magic != PAGE_MAGIC {
             return Err(Error::Corruption(format!(
                 "page magic mismatch: expected {PAGE_MAGIC:#x}, got {magic:#x}"
             )));
         }
-        let version = u16::from_le_bytes([data[4], data[5]]);
+        let version = read_u16_le(&data[4..6]);
         if version != PAGE_FORMAT_VERSION {
             return Err(Error::Corruption(format!(
                 "unsupported page format version {version}"
@@ -143,13 +143,13 @@ impl Header {
         Ok(Self {
             magic,
             version,
-            flags: u16::from_le_bytes([data[6], data[7]]),
+            flags: read_u16_le(&data[6..8]),
             latch_word: 0,
             page_id: PageId::from_le_bytes([
                 data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15],
             ]),
-            slot_count: u16::from_le_bytes([data[16], data[17]]),
-            cell_start: u16::from_le_bytes([data[18], data[19]]),
+            slot_count: read_u16_le(&data[16..18]),
+            cell_start: read_u16_le(&data[18..20]),
             page_lsn: Lsn::from_le_bytes([
                 data[20], data[21], data[22], data[23], data[24], data[25], data[26], data[27],
             ]),
@@ -162,22 +162,22 @@ impl Header {
             leftmost_child: PageId::from_le_bytes([
                 data[44], data[45], data[46], data[47], data[48], data[49], data[50], data[51],
             ]),
-            checksum: u32::from_le_bytes([data[52], data[53], data[54], data[55]]),
+            checksum: read_u32_le(&data[52..56]),
         })
     }
 
     fn encode(&self, data: &mut [u8]) {
-        data[0..4].copy_from_slice(&self.magic.to_le_bytes());
-        data[4..6].copy_from_slice(&self.version.to_le_bytes());
-        data[6..8].copy_from_slice(&self.flags.to_le_bytes());
+        write_u32_le(&mut data[0..4], self.magic);
+        write_u16_le(&mut data[4..6], self.version);
+        write_u16_le(&mut data[6..8], self.flags);
         data[8..16].copy_from_slice(&self.page_id.to_le_bytes());
-        data[16..18].copy_from_slice(&self.slot_count.to_le_bytes());
-        data[18..20].copy_from_slice(&self.cell_start.to_le_bytes());
+        write_u16_le(&mut data[16..18], self.slot_count);
+        write_u16_le(&mut data[18..20], self.cell_start);
         data[20..28].copy_from_slice(&self.page_lsn.to_le_bytes());
         data[28..36].copy_from_slice(&self.prev_page_id.to_le_bytes());
         data[36..44].copy_from_slice(&self.next_page_id.to_le_bytes());
         data[44..52].copy_from_slice(&self.leftmost_child.to_le_bytes());
-        data[52..56].copy_from_slice(&self.checksum.to_le_bytes());
+        write_u32_le(&mut data[52..56], self.checksum);
     }
 }
 

@@ -20,7 +20,6 @@
 //!   doing any I/O.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -30,7 +29,6 @@ use crate::blob::{BlobRef, BlobStore};
 use crate::cache::BlockCaches;
 use crate::column_family::{ColumnFamily, ColumnFamilyHandle, ColumnFamilyId, ColumnFamilySet};
 use crate::compaction::pick_compaction;
-use crate::file::sync_dir;
 use crate::compaction_merge;
 use crate::cursor::LsmCursor;
 use crate::immutable::sstable_path;
@@ -50,22 +48,14 @@ use crate::{Error, Result, SequenceNumber};
 
 /// Atomically update the `CURRENT` pointer to name `manifest_name`.
 ///
-/// Writes a temporary file, fsyncs it, renames it over `CURRENT`, then fsyncs
-/// the database directory so the rename is durable.  This matches the standard
-/// LevelDB/RocksDB pattern for crash-safe metadata updates.
+/// Delegates to [`storage_file::atomic_write`] so the temporary file, rename,
+/// and directory fsync follow the shared durable-write pattern.
 pub(crate) fn set_current_file(db_path: impl AsRef<Path>, manifest_name: &str) -> Result<()> {
     let db_path = db_path.as_ref();
-    let tmp_path = db_path.join("CURRENT.tmp");
-    let final_path = db_path.join("CURRENT");
-
-    {
-        let mut file = std::fs::File::create(&tmp_path)?;
-        file.write_all(format!("{manifest_name}\n").as_bytes())?;
-        file.sync_all()?;
-    }
-
-    std::fs::rename(&tmp_path, &final_path)?;
-    sync_dir(db_path)?;
+    storage_file::atomic_write(
+        &db_path.join("CURRENT"),
+        format!("{manifest_name}\n").as_bytes(),
+    )?;
     Ok(())
 }
 

@@ -6,6 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use storage_file::atomic_write;
+
 use crate::manifest::Manifest;
 use crate::{Error, Result};
 
@@ -14,36 +16,21 @@ const SNAPSHOT_DIR: &str = "manifest-snapshot";
 
 /// Write a snapshot of `manifest` at `lsn` and update the `CURRENT` pointer.
 ///
-/// The snapshot is written to a temp file and atomically renamed so that a
-/// crash can never leave `CURRENT` pointing at a partially-written snapshot.
+/// The snapshot and `CURRENT` pointer are both written atomically using
+/// `storage_file::atomic_write`, which fsyncs the temporary file, renames it
+/// over the destination, and fsyncs the parent directory.
 pub fn write(path: &Path, manifest: &Manifest, lsn: u64) -> Result<PathBuf> {
     let snapshot_dir = path.join(SNAPSHOT_DIR);
     std::fs::create_dir_all(&snapshot_dir)?;
 
     let snapshot_name = format!("{:020}.snapshot", lsn);
     let snapshot_path = snapshot_dir.join(&snapshot_name);
-    let temp_path = snapshot_dir.join(format!(".{}.tmp", snapshot_name));
 
     let json = serde_json::to_vec(manifest)?;
-    std::fs::write(&temp_path, json)?;
-
-    let temp_file = std::fs::File::open(&temp_path)?;
-    temp_file.sync_all()?;
-    drop(temp_file);
-
-    std::fs::rename(&temp_path, &snapshot_path)?;
-    let snapshot_dir_file = std::fs::File::open(&snapshot_dir)?;
-    snapshot_dir_file.sync_all()?;
-    drop(snapshot_dir_file);
+    atomic_write(&snapshot_path, &json)?;
 
     let current_path = path.join(CURRENT_FILE);
-    std::fs::write(&current_path, &snapshot_name)?;
-    let current_file = std::fs::File::open(&current_path)?;
-    current_file.sync_all()?;
-    drop(current_file);
-    let table_dir = std::fs::File::open(path)?;
-    table_dir.sync_all()?;
-    drop(table_dir);
+    atomic_write(&current_path, snapshot_name.as_bytes())?;
 
     Ok(snapshot_path)
 }

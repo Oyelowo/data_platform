@@ -20,19 +20,23 @@
 //! length prefix) to at most 7/8 of its original size — RocksDB's 12.5%
 //! minimum-savings threshold.  Otherwise the raw block is stored with type
 //! `None`: the CPU cost of decompression is not worth a smaller saving.
+//!
+//! The concrete codecs are provided by the shared [`storage_compression`]
+//! crate; this module wraps them so that the on-disk [`CompressionType`]
+//! enum and the engine's error type stay local.
 
 use bytes::Bytes;
 
-use crate::sstable::format::{CompressionType, MAX_BLOCK_SIZE};
+use crate::sstable::format::CompressionType;
 use crate::{Error, Result};
+
+#[cfg(test)]
+use storage_compression::CompressionCodec as SharedCompressionCodec;
 
 /// Right-shift used for the 1/8 minimum-savings threshold: a block is stored
 /// compressed only when `stored + (original >> 3) < original`.
+#[cfg(test)]
 const MIN_SAVINGS_SHIFT: u32 = 3;
-
-/// Size of the little-endian uncompressed-length prefix used by the LZ4 and
-/// ZSTD payload layouts.
-const LEN_PREFIX_SIZE: usize = 4;
 
 /// A block compression codec.
 pub trait CompressionCodec: Send + Sync {
@@ -46,17 +50,15 @@ pub trait CompressionCodec: Send + Sync {
     fn encode(&self, input: &[u8]) -> Result<(Vec<u8>, CompressionType)>;
 
     /// Decompress stored bytes back into the original block.
+    #[allow(dead_code)]
     fn decode(&self, input: &[u8]) -> Result<Bytes>;
 }
 
 /// Return the codec for `ty`, or `None` for `CompressionType::None`.
 pub fn codec_for(ty: CompressionType) -> Option<Box<dyn CompressionCodec>> {
-    match ty {
-        CompressionType::None => None,
-        CompressionType::Lz4 => Some(Box::new(Lz4Codec)),
-        CompressionType::Zstd => Some(Box::new(ZstdCodec::default())),
-        CompressionType::Snappy => Some(Box::new(SnappyCodec)),
-    }
+    storage_compression::codec_for(to_shared_type(ty)).map(|codec| {
+        Box::new(SharedCodecAdapter(codec)) as Box<dyn CompressionCodec>
+    })
 }
 
 /// Decompress a stored block payload read from an SSTable.
@@ -64,170 +66,138 @@ pub fn codec_for(ty: CompressionType) -> Option<Box<dyn CompressionCodec>> {
 /// Takes ownership of the stored bytes so the `None` path is zero-copy: the
 /// already-allocated read buffer is returned as-is instead of being copied.
 pub fn decompress_block(ty: CompressionType, stored: Bytes) -> Result<Bytes> {
-    match ty {
-        CompressionType::None => Ok(stored),
-        CompressionType::Lz4 => Lz4Codec.decode(&stored),
-        CompressionType::Zstd => ZstdCodec::default().decode(&stored),
-        CompressionType::Snappy => SnappyCodec.decode(&stored),
-    }
+    storage_compression::decompress(to_shared_type(ty), stored).map_err(map_err)
 }
 
 /// Whether storing `stored` bytes instead of `original` bytes is worthwhile.
+#[cfg(test)]
 fn worth_storing_compressed(original: usize, stored: usize) -> bool {
     stored + (original >> MIN_SAVINGS_SHIFT) < original
 }
 
-/// Prepend the 4-byte little-endian uncompressed length to a codec payload.
-fn prepend_len(input_len: usize, mut payload: Vec<u8>) -> Vec<u8> {
-    let mut out = Vec::with_capacity(LEN_PREFIX_SIZE + payload.len());
-    out.extend_from_slice(&(input_len as u32).to_le_bytes());
-    out.append(&mut payload);
-    out
+fn map_err(e: storage_compression::Error) -> Error {
+    Error::Sstable(e.to_string())
 }
 
-/// Split a length-prefixed payload into (uncompressed length, codec payload),
-/// rejecting truncated prefixes and decompressed sizes above the format's
-/// block-size limit *before* any allocation is made.
-fn read_len_prefix(input: &[u8]) -> Result<(usize, &[u8])> {
-    if input.len() < LEN_PREFIX_SIZE {
-        return Err(Error::Sstable("compressed block too short".into()));
+fn to_shared_type(ty: CompressionType) -> storage_compression::CompressionCodecType {
+    match ty {
+        CompressionType::None => storage_compression::CompressionCodecType::None,
+        CompressionType::Lz4 => storage_compression::CompressionCodecType::Lz4,
+        CompressionType::Zstd => storage_compression::CompressionCodecType::Zstd,
+        CompressionType::Snappy => storage_compression::CompressionCodecType::Snappy,
     }
-    let len = u32::from_le_bytes(input[..LEN_PREFIX_SIZE].try_into().unwrap()) as usize;
-    check_decompressed_len(len)?;
-    Ok((len, &input[LEN_PREFIX_SIZE..]))
 }
 
-fn check_decompressed_len(len: usize) -> Result<()> {
-    if len as u64 > MAX_BLOCK_SIZE {
-        return Err(Error::Sstable(format!(
-            "decompressed block size {len} exceeds maximum {MAX_BLOCK_SIZE}"
-        )));
+fn from_shared_type(ty: storage_compression::CompressionCodecType) -> CompressionType {
+    match ty {
+        storage_compression::CompressionCodecType::None => CompressionType::None,
+        storage_compression::CompressionCodecType::Lz4 => CompressionType::Lz4,
+        storage_compression::CompressionCodecType::Zstd => CompressionType::Zstd,
+        storage_compression::CompressionCodecType::Snappy => CompressionType::Snappy,
     }
-    Ok(())
 }
 
-fn reject_oversized(input: &[u8]) -> Result<()> {
-    if input.len() > u32::MAX as usize {
-        return Err(Error::InvalidArgument(format!(
-            "block of {} bytes is too large to compress",
-            input.len()
-        )));
+struct SharedCodecAdapter(Box<dyn storage_compression::CompressionCodec>);
+
+impl CompressionCodec for SharedCodecAdapter {
+    fn ty(&self) -> CompressionType {
+        from_shared_type(self.0.ty())
     }
-    Ok(())
+
+    fn encode(&self, input: &[u8]) -> Result<(Vec<u8>, CompressionType)> {
+        let (encoded, ty) = self.0.encode(input).map_err(map_err)?;
+        Ok((encoded, from_shared_type(ty)))
+    }
+
+    fn decode(&self, input: &[u8]) -> Result<Bytes> {
+        self.0.decode(input).map_err(map_err)
+    }
 }
 
 /// LZ4 block codec (default acceleration).  The engine default: decompression
 /// speed matters on every read, and LZ4 is the fastest codec we support.
+#[cfg(test)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Lz4Codec;
 
+#[cfg(test)]
 impl CompressionCodec for Lz4Codec {
     fn ty(&self) -> CompressionType {
         CompressionType::Lz4
     }
 
     fn encode(&self, input: &[u8]) -> Result<(Vec<u8>, CompressionType)> {
-        reject_oversized(input)?;
-        let payload = lz4::block::compress(input, None, false)
-            .map_err(|e| Error::Sstable(format!("lz4 compress: {e}")))?;
-        if !worth_storing_compressed(input.len(), LEN_PREFIX_SIZE + payload.len()) {
-            return Ok((input.to_vec(), CompressionType::None));
-        }
-        Ok((prepend_len(input.len(), payload), CompressionType::Lz4))
+        let (encoded, ty) = storage_compression::codec::Lz4Codec
+            .encode(input)
+            .map_err(map_err)?;
+        Ok((encoded, from_shared_type(ty)))
     }
 
     fn decode(&self, input: &[u8]) -> Result<Bytes> {
-        let (len, payload) = read_len_prefix(input)?;
-        let out = lz4::block::decompress(payload, Some(len as i32))
-            .map_err(|e| Error::Sstable(format!("lz4 decompress: {e}")))?;
-        if out.len() != len {
-            return Err(Error::Sstable(format!(
-                "lz4 decompressed length {} does not match prefix {len}",
-                out.len()
-            )));
-        }
-        Ok(Bytes::from(out))
+        storage_compression::codec::Lz4Codec
+            .decode(input)
+            .map_err(map_err)
     }
 }
 
 /// ZSTD codec.  Used for the bottommost level, where blocks are read rarely
 /// and the better compression ratio pays for the slower decompression.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct ZstdCodec {
     /// Compression level; zstd's own default is 3.
     pub level: i32,
 }
 
+#[cfg(test)]
 impl Default for ZstdCodec {
     fn default() -> Self {
         Self { level: 3 }
     }
 }
 
+#[cfg(test)]
 impl CompressionCodec for ZstdCodec {
     fn ty(&self) -> CompressionType {
         CompressionType::Zstd
     }
 
     fn encode(&self, input: &[u8]) -> Result<(Vec<u8>, CompressionType)> {
-        reject_oversized(input)?;
-        let payload = zstd::bulk::compress(input, self.level)
-            .map_err(|e| Error::Sstable(format!("zstd compress: {e}")))?;
-        if !worth_storing_compressed(input.len(), LEN_PREFIX_SIZE + payload.len()) {
-            return Ok((input.to_vec(), CompressionType::None));
-        }
-        Ok((prepend_len(input.len(), payload), CompressionType::Zstd))
+        let (encoded, ty) = storage_compression::codec::ZstdCodec { level: self.level }
+            .encode(input)
+            .map_err(map_err)?;
+        Ok((encoded, from_shared_type(ty)))
     }
 
     fn decode(&self, input: &[u8]) -> Result<Bytes> {
-        let (len, payload) = read_len_prefix(input)?;
-        // `decompress` pre-allocates exactly `len` bytes and fails if the
-        // frame expands beyond it, so the allocation is always bounded by the
-        // checked prefix.  The level is irrelevant for decompression.
-        let out = zstd::bulk::decompress(payload, len)
-            .map_err(|e| Error::Sstable(format!("zstd decompress: {e}")))?;
-        if out.len() != len {
-            return Err(Error::Sstable(format!(
-                "zstd decompressed length {} does not match prefix {len}",
-                out.len()
-            )));
-        }
-        Ok(Bytes::from(out))
+        storage_compression::codec::ZstdCodec { level: self.level }
+            .decode(input)
+            .map_err(map_err)
     }
 }
 
 /// Snappy block codec (the classic LevelDB codec).
+#[cfg(test)]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SnappyCodec;
 
+#[cfg(test)]
 impl CompressionCodec for SnappyCodec {
     fn ty(&self) -> CompressionType {
         CompressionType::Snappy
     }
 
     fn encode(&self, input: &[u8]) -> Result<(Vec<u8>, CompressionType)> {
-        reject_oversized(input)?;
-        let payload = snap::raw::Encoder::new()
-            .compress_vec(input)
-            .map_err(|e| Error::Sstable(format!("snappy compress: {e}")))?;
-        if !worth_storing_compressed(input.len(), payload.len()) {
-            return Ok((input.to_vec(), CompressionType::None));
-        }
-        Ok((payload, CompressionType::Snappy))
+        let (encoded, ty) = storage_compression::codec::SnappyCodec
+            .encode(input)
+            .map_err(map_err)?;
+        Ok((encoded, from_shared_type(ty)))
     }
 
     fn decode(&self, input: &[u8]) -> Result<Bytes> {
-        // The raw snappy format embeds the uncompressed length in its header;
-        // check it before decoding so a corrupt header cannot cause an
-        // oversized allocation.
-        let len = snap::raw::decompress_len(input)
-            .map_err(|e| Error::Sstable(format!("snappy header: {e}")))?;
-        check_decompressed_len(len)?;
-        let out = snap::raw::Decoder::new()
-            .decompress_vec(input)
-            .map_err(|e| Error::Sstable(format!("snappy decompress: {e}")))?;
-        debug_assert_eq!(out.len(), len);
-        Ok(Bytes::from(out))
+        storage_compression::codec::SnappyCodec
+            .decode(input)
+            .map_err(map_err)
     }
 }
 

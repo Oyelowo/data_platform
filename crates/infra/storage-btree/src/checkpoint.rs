@@ -19,6 +19,8 @@ use crate::sync::Mutex as SyncMutex;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use storage_format::{crc32c, read_u32_le, read_u64_le, write_u32_le, write_u64_le};
+
 use crate::buffer::BufferPool;
 use crate::error::{Error, Result};
 use crate::io::{Boundary, OpenOptions, RealBackend, StorageBackend, StorageFile};
@@ -172,18 +174,28 @@ impl Meta {
         let freelist = self.allocator.snapshot().0;
         let next = self.allocator.snapshot().1;
         let mut buf = Vec::with_capacity(4 + 4 + 8 + 8 + 8 + 8 + 4 + freelist.len() * 8 + 4);
-        buf.extend_from_slice(&META_MAGIC.to_le_bytes());
-        buf.extend_from_slice(&META_VERSION.to_le_bytes());
-        buf.extend_from_slice(&self.root_page_id.to_le_bytes());
-        buf.extend_from_slice(&self.checkpoint_lsn.to_le_bytes());
-        buf.extend_from_slice(&self.first_undo_lsn.to_le_bytes());
-        buf.extend_from_slice(&next.to_le_bytes());
-        buf.extend_from_slice(&(freelist.len() as u32).to_le_bytes());
+        let mut off = 0;
+        buf.resize(4 + 4 + 8 + 8 + 8 + 8 + 4 + freelist.len() * 8 + 4, 0);
+        write_u32_le(&mut buf[off..off + 4], META_MAGIC);
+        off += 4;
+        write_u32_le(&mut buf[off..off + 4], META_VERSION);
+        off += 4;
+        write_u64_le(&mut buf[off..off + 8], self.root_page_id.get());
+        off += 8;
+        write_u64_le(&mut buf[off..off + 8], self.checkpoint_lsn.get());
+        off += 8;
+        write_u64_le(&mut buf[off..off + 8], self.first_undo_lsn.get());
+        off += 8;
+        write_u64_le(&mut buf[off..off + 8], next.get());
+        off += 8;
+        write_u32_le(&mut buf[off..off + 4], freelist.len() as u32);
+        off += 4;
         for id in freelist {
-            buf.extend_from_slice(&id.to_le_bytes());
+            write_u64_le(&mut buf[off..off + 8], id.get());
+            off += 8;
         }
-        let checksum = crc32c::crc32c(&buf);
-        buf.extend_from_slice(&checksum.to_le_bytes());
+        let checksum = crc32c(&buf[..off]);
+        write_u32_le(&mut buf[off..off + 4], checksum);
         buf
     }
 
@@ -191,13 +203,8 @@ impl Meta {
         if buf.len() < 44 {
             return Err(Error::Corruption("META file too short".into()));
         }
-        let stored_checksum = u32::from_le_bytes([
-            buf[buf.len() - 4],
-            buf[buf.len() - 3],
-            buf[buf.len() - 2],
-            buf[buf.len() - 1],
-        ]);
-        let computed = crc32c::crc32c(&buf[..buf.len() - 4]);
+        let stored_checksum = read_u32_le(&buf[buf.len() - 4..]);
+        let computed = crc32c(&buf[..buf.len() - 4]);
         if stored_checksum != computed {
             return Err(Error::Corruption("META checksum mismatch".into()));
         }
@@ -244,7 +251,7 @@ fn read_u32(buf: &[u8], off: &mut usize) -> Result<u32> {
     if buf.len() < *off + 4 {
         return Err(Error::Corruption("META u32 truncated".into()));
     }
-    let v = u32::from_le_bytes([buf[*off], buf[*off + 1], buf[*off + 2], buf[*off + 3]]);
+    let v = read_u32_le(&buf[*off..*off + 4]);
     *off += 4;
     Ok(v)
 }
@@ -253,16 +260,7 @@ fn read_u64(buf: &[u8], off: &mut usize) -> Result<u64> {
     if buf.len() < *off + 8 {
         return Err(Error::Corruption("META u64 truncated".into()));
     }
-    let v = u64::from_le_bytes([
-        buf[*off],
-        buf[*off + 1],
-        buf[*off + 2],
-        buf[*off + 3],
-        buf[*off + 4],
-        buf[*off + 5],
-        buf[*off + 6],
-        buf[*off + 7],
-    ]);
+    let v = read_u64_le(&buf[*off..*off + 8]);
     *off += 8;
     Ok(v)
 }

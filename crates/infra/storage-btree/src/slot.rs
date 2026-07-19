@@ -5,6 +5,8 @@
 //! directory gives the offset and length of each cell, so inserting or deleting
 //! a record only needs to shift slot pointers, not cell bytes.
 
+use storage_format::{read_u16_le, read_u32_le, read_u64_le, write_u16_le, write_u32_le, write_u64_le};
+
 use crate::error::{Error, Result};
 
 /// Size of one slot-directory entry in bytes: `offset: u16` + `len: u16`.
@@ -32,16 +34,16 @@ impl Slot {
     /// Encode a slot as 4 little-endian bytes.
     pub fn encode(&self) -> [u8; SLOT_SIZE] {
         let mut buf = [0u8; SLOT_SIZE];
-        buf[0..2].copy_from_slice(&self.offset.to_le_bytes());
-        buf[2..4].copy_from_slice(&self.len.to_le_bytes());
+        write_u16_le(&mut buf[0..2], self.offset);
+        write_u16_le(&mut buf[2..4], self.len);
         buf
     }
 
     /// Decode a slot from 4 little-endian bytes.
     pub fn decode(buf: &[u8]) -> Self {
         Self {
-            offset: u16::from_le_bytes([buf[0], buf[1]]),
-            len: u16::from_le_bytes([buf[2], buf[3]]),
+            offset: read_u16_le(buf),
+            len: read_u16_le(&buf[2..4]),
         }
     }
 
@@ -202,7 +204,7 @@ pub fn write_cell_with_mvcc(
     }
 
     let mut off = 0;
-    buf[off..off + 2].copy_from_slice(&(key.len() as u16).to_le_bytes());
+    write_u16_le(&mut buf[off..off + 2], key.len() as u16);
     off += 2;
     let kind_byte = value.tag() | mvcc.map_or(0, |_| VALUE_KIND_MVCC_FLAG);
     buf[off] = kind_byte;
@@ -222,15 +224,15 @@ pub fn write_cell_with_mvcc(
                     got: v.len(),
                 });
             }
-            buf[off..off + 4].copy_from_slice(&(v.len() as u32).to_le_bytes());
+            write_u32_le(&mut buf[off..off + 4], v.len() as u32);
             off += 4;
             buf[off..off + v.len()].copy_from_slice(v);
             off += v.len();
         }
         ValueKind::ValueLog { offset, len } => {
-            buf[off..off + 8].copy_from_slice(&offset.to_le_bytes());
+            write_u64_le(&mut buf[off..off + 8], *offset);
             off += 8;
-            buf[off..off + 4].copy_from_slice(&len.to_le_bytes());
+            write_u32_le(&mut buf[off..off + 4], *len);
             off += 4;
         }
         ValueKind::Tombstone => {}
@@ -248,7 +250,7 @@ pub fn parse_cell(buf: &[u8]) -> Result<Cell<'_>> {
     if buf.len() < 3 {
         return Err(Error::Corruption("cell too short for key length".into()));
     }
-    let key_len = u16::from_le_bytes([buf[0], buf[1]]) as usize;
+    let key_len = read_u16_le(buf) as usize;
     let kind_byte = buf[2];
     let has_mvcc = (kind_byte & VALUE_KIND_MVCC_FLAG) != 0;
     let kind = kind_byte & !VALUE_KIND_MVCC_FLAG;
@@ -270,8 +272,7 @@ pub fn parse_cell(buf: &[u8]) -> Result<Cell<'_>> {
             if buf.len() < off + 4 {
                 return Err(Error::Corruption("inline value length truncated".into()));
             }
-            let val_len =
-                u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]) as usize;
+            let val_len = read_u32_le(&buf[off..off + 4]) as usize;
             off += 4;
             if buf.len() < off + val_len {
                 return Err(Error::Corruption("inline value truncated".into()));
@@ -284,18 +285,8 @@ pub fn parse_cell(buf: &[u8]) -> Result<Cell<'_>> {
             if buf.len() < off + 12 {
                 return Err(Error::Corruption("value-log reference truncated".into()));
             }
-            let offset = u64::from_le_bytes([
-                buf[off],
-                buf[off + 1],
-                buf[off + 2],
-                buf[off + 3],
-                buf[off + 4],
-                buf[off + 5],
-                buf[off + 6],
-                buf[off + 7],
-            ]);
-            let len =
-                u32::from_le_bytes([buf[off + 8], buf[off + 9], buf[off + 10], buf[off + 11]]);
+            let offset = read_u64_le(&buf[off..off + 8]);
+            let len = read_u32_le(&buf[off + 8..off + 12]);
             off += 12;
             ValueKind::ValueLog { offset, len }
         }

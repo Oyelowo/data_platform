@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 
 use crate::committer::Committer;
-use crate::fs::sync_dir;
+use storage_file::sync_dir;
 use crate::reader::{WalIterator, WalReader};
 use crate::record::{Durability, Record, RecordType, RECORD_HEADER_SIZE};
 use crate::segment::{Segment, list_segments, segment_path};

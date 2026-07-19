@@ -29,13 +29,12 @@
 
 mod committer;
 mod fault;
-mod fs;
 mod reader;
 mod record;
 mod segment;
 mod wal;
 
-pub use fs::sync_dir;
+pub use storage_file::sync_dir;
 
 pub use fault::{FaultConfig, FaultInjector};
 pub use record::{Durability, RECORD_HEADER_SIZE, Record, RecordType};

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use storage_blob::{BlobStoreImpl, BlobStoreOptions};
+use storage_format::crc32c;
 use storage_traits::BlobStore;
 use tempfile::TempDir;
 
@@ -69,7 +70,7 @@ fn corrupted_header_length_returns_error() {
     bytes[12..20].copy_from_slice(&(1u64 << 40).to_le_bytes());
     // Recompute the header checksum so the header appears internally valid.
     let header_size = storage_blob::format::HEADER_SIZE;
-    let crc = crc32c::crc32c(&bytes[..header_size - 4]);
+    let crc = crc32c(&bytes[..header_size - 4]);
     bytes[header_size - 4..header_size].copy_from_slice(&crc.to_le_bytes());
     fs::write(&volume_path, bytes).unwrap();
 

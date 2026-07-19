@@ -111,7 +111,7 @@ impl Footer {
 
 /// Compute the CRC32C checksum for a byte slice.
 pub fn checksum(data: &[u8]) -> u32 {
-    crc32c::crc32c(data)
+    storage_format::crc32c(data)
 }
 
 #[cfg(test)]

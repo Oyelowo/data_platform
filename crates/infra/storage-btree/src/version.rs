@@ -6,6 +6,8 @@
 //! - `prev_version_lsn`: the WAL LSN of the record that holds the previous
 //!   version, so snapshot reads can walk backward in time.
 
+use storage_format::{read_u64_le, write_u64_le};
+
 use crate::error::Result;
 use crate::slot::{OwnedValue, ValueKind};
 use crate::txn::{NULL_TXN_ID, Timestamp, TxnId, TxnOracle};
@@ -47,9 +49,9 @@ impl MvccHeader {
                 "MVCC header buffer too small".into(),
             ));
         }
-        buf[0..8].copy_from_slice(&self.begin_ts.to_le_bytes());
-        buf[8..16].copy_from_slice(&self.end_ts.to_le_bytes());
-        buf[16..24].copy_from_slice(&self.prev_version_lsn.to_le_bytes());
+        write_u64_le(&mut buf[0..8], self.begin_ts.get());
+        write_u64_le(&mut buf[8..16], self.end_ts.get());
+        write_u64_le(&mut buf[16..24], self.prev_version_lsn.get());
         Ok(())
     }
 
@@ -61,15 +63,9 @@ impl MvccHeader {
             ));
         }
         Ok(Self {
-            begin_ts: TxnId::from_le_bytes([
-                buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
-            ]),
-            end_ts: TxnId::from_le_bytes([
-                buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15],
-            ]),
-            prev_version_lsn: Lsn::from_le_bytes([
-                buf[16], buf[17], buf[18], buf[19], buf[20], buf[21], buf[22], buf[23],
-            ]),
+            begin_ts: TxnId::new(read_u64_le(&buf[0..8])),
+            end_ts: TxnId::new(read_u64_le(&buf[8..16])),
+            prev_version_lsn: Lsn::new(read_u64_le(&buf[16..24])),
         })
     }
 }

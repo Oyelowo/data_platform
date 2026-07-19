@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::engine::LsmEngine;
+use storage_file::sync_dir;
 use crate::immutable::sstable_path;
 use crate::manifest::Manifest;
 use crate::version::FileMetaData;
@@ -367,24 +368,6 @@ fn copy_dir_recursive(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()
         } else {
             fs::copy(&src_path, &dst_path)?;
         }
-    }
-    Ok(())
-}
-
-/// Best-effort directory sync.
-fn sync_dir(dir: impl AsRef<Path>) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY)
-            .open(dir.as_ref())?;
-        file.sync_all()?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
     }
     Ok(())
 }

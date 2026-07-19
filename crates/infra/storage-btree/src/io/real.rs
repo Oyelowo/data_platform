@@ -9,6 +9,8 @@ use std::os::unix::fs::FileExt;
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
 
+use storage_file::sync_dir;
+
 use crate::io::{OpenOptions, StorageBackend, StorageFile};
 
 /// Production backend that delegates all operations to the operating system.
@@ -159,20 +161,4 @@ impl StorageFile for RealFile {
     }
 }
 
-fn sync_dir(path: &Path) -> IoResult<()> {
-    let dir = File::open(path)?;
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd;
-        // SAFETY: `dir` is a valid open directory fd.
-        let ret = unsafe { libc::fsync(dir.as_raw_fd()) };
-        if ret != 0 {
-            return Err(IoError::last_os_error());
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        dir.sync_all()?;
-    }
-    Ok(())
-}
+

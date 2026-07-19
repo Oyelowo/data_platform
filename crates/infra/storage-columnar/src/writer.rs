@@ -10,6 +10,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use storage_file::atomic_write;
 
 use crate::manifest::{ColumnStats, FileMeta, StatsValue};
 use crate::schema::TableSchema;
@@ -18,31 +19,25 @@ use crate::{ColumnarOptions, Result};
 
 /// Write a single `RecordBatch` to a Parquet file.
 ///
-/// The file is written to `temp_path`, fsynced, renamed to `final_path`, and
-/// the parent directory is fsynced.
+/// The batch is serialized into memory and then atomically written to
+/// `final_path` using `storage_file::atomic_write`, which fsyncs the temporary
+/// file, renames it over the destination, and fsyncs the parent directory.
+/// `temp_path` is kept in the signature for API compatibility but is ignored.
 pub fn write_batch(
-    temp_path: &Path,
+    _temp_path: &Path,
     final_path: &Path,
     partition: &str,
     options: &ColumnarOptions,
     schema: &TableSchema,
     batch: &RecordBatch,
 ) -> Result<FileMeta> {
-    let file = File::create(temp_path)?;
+    let mut buffer = Vec::new();
     let props = writer_properties(options);
-    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
+    let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props))?;
     writer.write(batch)?;
     let metadata = writer.close()?;
 
-    // Reopen the temp file to fsync it before the atomic rename.
-    let temp_file = File::open(temp_path)?;
-    temp_file.sync_all()?;
-    drop(temp_file);
-
-    std::fs::rename(temp_path, final_path)?;
-    if let Some(parent) = final_path.parent() {
-        sync_dir(parent)?;
-    }
+    atomic_write(final_path, &buffer)?;
 
     let row_count = metadata.num_rows as usize;
     let column_stats = read_column_stats(final_path, schema)?;
@@ -168,11 +163,4 @@ fn stats_min_max(
     }
 }
 
-pub(crate) fn sync_dir(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        let dir = File::open(path)?;
-        dir.sync_all()?;
-    }
-    Ok(())
-}
+

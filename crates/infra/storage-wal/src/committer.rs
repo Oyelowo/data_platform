@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 
 use crate::fault::{FaultConfig, FaultInjector};
-use crate::fs::sync_dir;
+use storage_file::sync_dir;
 use crate::record::{RECORD_HEADER_SIZE, Record};
 use crate::segment::Segment;
 use crate::{Error, Lsn, Result};

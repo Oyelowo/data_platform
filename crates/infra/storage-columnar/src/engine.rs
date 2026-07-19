@@ -24,7 +24,8 @@ use crate::reader;
 use crate::schema::TableSchema;
 use crate::snapshot;
 use crate::types::ColumnType;
-use crate::writer::{self, sync_dir};
+use crate::writer;
+use storage_file::sync_dir;
 use crate::{ColumnarOptions, Error, Result};
 
 const DEFAULT_PARTITION: &str = "__default";
@@ -219,7 +220,8 @@ impl Inner {
     }
 
     fn sync_table_dir(&self) -> Result<()> {
-        sync_dir(&self.path)
+        sync_dir(&self.path)?;
+        Ok(())
     }
 
     /// Return the number of live files in the manifest.

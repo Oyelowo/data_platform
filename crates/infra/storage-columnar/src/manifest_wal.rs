@@ -1,6 +1,6 @@
 //! Manifest delta records encoded for the underlying `storage_wal`.
 
-use bytes::{Buf, BufMut};
+use storage_format::primitive::{read_u64_le, write_u64_le};
 
 use crate::manifest::{FileMeta, Manifest};
 use crate::{Error, Result};
@@ -8,6 +8,12 @@ use crate::{Error, Result};
 const TAG_ADD_FILE: u8 = 1;
 const TAG_SET_SCHEMA: u8 = 2;
 const TAG_COMPACT: u8 = 3;
+
+fn append_u64_le(buf: &mut Vec<u8>, value: u64) {
+    let mut tmp = [0u8; 8];
+    write_u64_le(&mut tmp, value);
+    buf.extend_from_slice(&tmp);
+}
 
 /// A single manifest delta record.
 #[derive(Debug, Clone, PartialEq)]
@@ -37,31 +43,31 @@ impl ManifestRecord {
         match self {
             ManifestRecord::AddFile { file_meta } => {
                 let mut buf = Vec::new();
-                buf.put_u8(TAG_ADD_FILE);
+                buf.push(TAG_ADD_FILE);
                 let json =
                     serde_json::to_vec(file_meta).expect("FileMeta serialization cannot fail");
-                buf.put_u64_le(json.len() as u64);
+                append_u64_le(&mut buf, json.len() as u64);
                 buf.extend_from_slice(&json);
                 buf
             }
             ManifestRecord::SetSchema { schema_json } => {
                 let mut buf = Vec::new();
-                buf.put_u8(TAG_SET_SCHEMA);
+                buf.push(TAG_SET_SCHEMA);
                 let bytes = schema_json.as_bytes();
-                buf.put_u64_le(bytes.len() as u64);
+                append_u64_le(&mut buf, bytes.len() as u64);
                 buf.extend_from_slice(bytes);
                 buf
             }
             ManifestRecord::Compact { add, remove } => {
                 let mut buf = Vec::new();
-                buf.put_u8(TAG_COMPACT);
+                buf.push(TAG_COMPACT);
                 let payload = CompactPayload {
                     add: add.clone(),
                     remove: remove.clone(),
                 };
                 let json =
                     serde_json::to_vec(&payload).expect("CompactPayload serialization cannot fail");
-                buf.put_u64_le(json.len() as u64);
+                append_u64_le(&mut buf, json.len() as u64);
                 buf.extend_from_slice(&json);
                 buf
             }
@@ -76,16 +82,15 @@ impl ManifestRecord {
                 bytes.len()
             )));
         }
-        let mut cursor = bytes;
-        let tag = cursor.get_u8();
-        let len = cursor.get_u64_le() as usize;
-        if cursor.len() < len {
+        let tag = bytes[0];
+        let len = read_u64_le(&bytes[1..9]) as usize;
+        if bytes.len() - 9 < len {
             return Err(Error::ManifestWal(format!(
                 "payload length {len} exceeds remaining {} bytes",
-                cursor.len()
+                bytes.len() - 9
             )));
         }
-        let payload = &cursor[..len];
+        let payload = &bytes[9..9 + len];
         match tag {
             TAG_ADD_FILE => {
                 let file_meta = serde_json::from_slice(payload).map_err(|e| {
