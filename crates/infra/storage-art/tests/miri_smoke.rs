@@ -9,7 +9,10 @@ fn miri_crud_smoke() {
     map.insert(b"hello", b"world").unwrap();
     map.insert(b"foo", b"bar").unwrap();
     assert_eq!(map.get(b"hello"), Some(Bytes::from_static(b"world")));
-    assert_eq!(map.remove(b"foo").unwrap(), Some(Bytes::from_static(b"bar")));
+    assert_eq!(
+        map.remove(b"foo").unwrap(),
+        Some(Bytes::from_static(b"bar"))
+    );
     assert_eq!(map.get(b"foo"), None);
 
     let snapshot = map.snapshot().unwrap();

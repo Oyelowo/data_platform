@@ -1,14 +1,14 @@
 //! ART `Node48` layout: 17..=48 children using a 256-byte key index.
 
-use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 
 use crate::keys::truncate_prefix;
 use crate::latch::VersionLatch;
 use crate::node::Node;
+use crate::nodes::InnerNode;
 use crate::nodes::node16::Node16;
 use crate::nodes::node256::Node256;
-use crate::nodes::InnerNode;
 
 /// Inner node that can hold up to forty-eight children.
 #[derive(Debug)]

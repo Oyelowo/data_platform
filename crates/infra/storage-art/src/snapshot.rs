@@ -74,7 +74,12 @@ pub fn decode(bytes: &[u8]) -> Result<ArtMap> {
     }
     let body_len = buf.len() - 4;
     let body = &buf[..body_len];
-    let stored_crc = u32::from_le_bytes([buf[body_len], buf[body_len + 1], buf[body_len + 2], buf[body_len + 3]]);
+    let stored_crc = u32::from_le_bytes([
+        buf[body_len],
+        buf[body_len + 1],
+        buf[body_len + 2],
+        buf[body_len + 3],
+    ]);
     if crc32c(body) != stored_crc {
         return Err(Error::Corruption("snapshot crc mismatch".into()));
     }

@@ -1,13 +1,13 @@
 //! ART `Node256` layout: 49..=256 children using a direct 256-element array.
 
-use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
 
 use crate::keys::truncate_prefix;
 use crate::latch::VersionLatch;
 use crate::node::Node;
-use crate::nodes::node48::Node48;
 use crate::nodes::InnerNode;
+use crate::nodes::node48::Node48;
 
 /// Inner node that can hold up to 256 children.
 #[derive(Debug)]
@@ -75,7 +75,8 @@ impl Node256 {
 
     /// Replace an existing child.
     pub fn replace(&self, byte: u8, child: Arc<Node>) -> Option<Arc<Node>> {
-        let old = self.children[byte as usize].swap(crate::node::arc_to_ptr(child), Ordering::Relaxed);
+        let old =
+            self.children[byte as usize].swap(crate::node::arc_to_ptr(child), Ordering::Relaxed);
         unsafe { crate::node::take_ptr(old) }
     }
 

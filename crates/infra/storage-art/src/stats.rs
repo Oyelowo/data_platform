@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use storage_traits::EngineStats;
 
 use crate::map::ArtMap;
-use crate::node::{ptr_to_arc, NodeType};
+use crate::node::{NodeType, ptr_to_arc};
 
 /// Compute engine statistics for an `ArtMap`.
 pub fn engine_stats(map: &ArtMap) -> EngineStats {
@@ -24,7 +24,6 @@ pub fn engine_stats(map: &ArtMap) -> EngineStats {
 
 /// Return `(node_count, max_depth)` for the tree.
 fn walk_tree(map: &ArtMap) -> (u64, u64) {
-
     let root_ptr = map.root_ptr();
     if root_ptr.is_null() {
         return (0, 0);

@@ -90,7 +90,14 @@ mod tests {
         let keys: Vec<_> = ArtCursor::range(&map, None, None)
             .map(|r| r.unwrap().0)
             .collect();
-        assert_eq!(keys, vec![Bytes::from_static(b"a"), Bytes::from_static(b"b"), Bytes::from_static(b"c")]);
+        assert_eq!(
+            keys,
+            vec![
+                Bytes::from_static(b"a"),
+                Bytes::from_static(b"b"),
+                Bytes::from_static(b"c")
+            ]
+        );
     }
 
     #[test]
@@ -102,7 +109,13 @@ mod tests {
         let keys: Vec<_> = ArtCursor::prefix(&map, b"prefix:")
             .map(|r| r.unwrap().0)
             .collect();
-        assert_eq!(keys, vec![Bytes::from_static(b"prefix:one"), Bytes::from_static(b"prefix:two")]);
+        assert_eq!(
+            keys,
+            vec![
+                Bytes::from_static(b"prefix:one"),
+                Bytes::from_static(b"prefix:two")
+            ]
+        );
     }
 
     #[test]

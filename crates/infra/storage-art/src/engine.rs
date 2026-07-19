@@ -51,7 +51,10 @@ impl Transaction for ArtTransaction {
         }
         ArtMap::check_key_static(key)?;
         ArtMap::check_value_static(value)?;
-        self.local.insert(Bytes::copy_from_slice(key), Some(Bytes::copy_from_slice(value)));
+        self.local.insert(
+            Bytes::copy_from_slice(key),
+            Some(Bytes::copy_from_slice(value)),
+        );
         Ok(())
     }
 
@@ -193,6 +196,11 @@ fn map_error(e: crate::error::Error) -> Error {
             got: limit,
         },
         crate::error::Error::Corruption(msg) => Error::Corruption(msg),
+        crate::error::Error::Io(io) => Error::Io(io),
+        crate::error::Error::Wal(wal) => {
+            Error::Io(std::io::Error::other(format!("wal error: {wal}")))
+        }
+        crate::error::Error::InvalidArgument(msg) => Error::Corruption(msg),
     }
 }
 

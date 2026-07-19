@@ -6,10 +6,10 @@
 //! atomically while writers mutate the node under its version latch.
 
 pub mod leaf;
-pub mod node4;
 pub mod node16;
-pub mod node48;
 pub mod node256;
+pub mod node4;
+pub mod node48;
 
 pub use leaf::Leaf;
 pub use node4::Node4;

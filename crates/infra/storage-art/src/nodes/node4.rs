@@ -1,13 +1,13 @@
 //! ART `Node4` layout: up to four children stored in sorted key order.
 
-use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 
 use crate::keys::truncate_prefix;
 use crate::latch::VersionLatch;
 use crate::node::Node;
-use crate::nodes::node16::Node16;
 use crate::nodes::InnerNode;
+use crate::nodes::node16::Node16;
 
 /// Inner node that can hold up to four children.
 #[derive(Debug)]

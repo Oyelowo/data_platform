@@ -5,11 +5,11 @@
 //! `AtomicPtr<Node>` backed by `Arc<Node>` reference counts so that readers can
 //! load child pointers atomically while writers mutate under version latches.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::latch::VersionLatch;
-use crate::nodes::{InnerNode, Leaf, Node16, Node256, Node4, Node48};
+use crate::nodes::{InnerNode, Leaf, Node4, Node16, Node48, Node256};
 
 /// The maximum key length supported by the default configuration.
 pub const MAX_KEY_LEN: usize = 2048;
@@ -322,7 +322,6 @@ impl Node {
             Node::Leaf(leaf) => Node::Leaf(Leaf::new(leaf.key.clone(), leaf.value.clone())),
         }
     }
-
 }
 
 /// Convert an `Arc<Node>` into a raw pointer for storage in an `AtomicPtr`.

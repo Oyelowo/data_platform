@@ -5,16 +5,16 @@
 //! that restart on version changes; writes use lock coupling (parent latch held
 //! while installing or replacing a child pointer).
 
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::keys::{common_prefix_len, match_prefix, truncate_prefix};
-use crate::node::{arc_to_ptr, drop_ptr, ptr_to_arc, Node};
-use crate::nodes::node4::Node4;
+use crate::node::{Node, arc_to_ptr, drop_ptr, ptr_to_arc};
 use crate::nodes::InnerNode;
+use crate::nodes::node4::Node4;
 use crate::options::ArtMapOptions;
 use crate::snapshot;
 
@@ -167,7 +167,9 @@ impl ArtMap {
                     return Err(());
                 }
                 return Ok(leaf_opt.and_then(|leaf_arc| {
-                    leaf_arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value()))
+                    leaf_arc
+                        .as_leaf()
+                        .map(|l| Bytes::copy_from_slice(l.value()))
                 }));
             }
 
@@ -220,7 +222,10 @@ impl ArtMap {
                 None => continue,
             };
             let root_guard = RawWriteGuard::lock(root);
-            if !std::ptr::eq(self.root.load(Ordering::Acquire), Arc::as_ptr(root_guard.arc())) {
+            if !std::ptr::eq(
+                self.root.load(Ordering::Acquire),
+                Arc::as_ptr(root_guard.arc()),
+            ) {
                 drop(root_guard);
                 continue;
             }
@@ -251,7 +256,10 @@ impl ArtMap {
 
         loop {
             if prev.is_none()
-                && !std::ptr::eq(self.root.load(Ordering::Acquire), Arc::as_ptr(current.arc()))
+                && !std::ptr::eq(
+                    self.root.load(Ordering::Acquire),
+                    Arc::as_ptr(current.arc()),
+                )
             {
                 return Err(());
             }
@@ -285,9 +293,9 @@ impl ArtMap {
 
             if depth == key.len() {
                 let old = node.inner_leaf();
-                let old_value = old.as_ref().and_then(|arc| {
-                    arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value()))
-                });
+                let old_value = old
+                    .as_ref()
+                    .and_then(|arc| arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value())));
                 let existed = old.is_some();
                 node.set_inner_leaf(new_leaf);
                 drop(old);
@@ -322,9 +330,9 @@ impl ArtMap {
                 let leaf = child_node.as_leaf().ok_or(())?;
                 if leaf.key() == key {
                     let old = current.node().replace_child(byte, new_leaf);
-                    let old_value = old.as_ref().and_then(|arc| {
-                        arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value()))
-                    });
+                    let old_value = old
+                        .as_ref()
+                        .and_then(|arc| arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value())));
                     drop(child_guard);
                     drop(old);
                     drop(current);
@@ -354,9 +362,9 @@ impl ArtMap {
 
             if depth + child_prefix.len() == key.len() {
                 let old = child_node.inner_leaf();
-                let old_value = old.as_ref().and_then(|arc| {
-                    arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value()))
-                });
+                let old_value = old
+                    .as_ref()
+                    .and_then(|arc| arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value())));
                 let existed = old.is_some();
                 child_node.set_inner_leaf(new_leaf);
                 drop(child_guard);
@@ -391,7 +399,9 @@ impl ArtMap {
 
         let inner = Node4::new(common.into());
         let old_subtree = node.clone_with_prefix(old_suffix.into());
-        inner.add_child(old_byte, Arc::new(old_subtree)).map_err(|_| ())?;
+        inner
+            .add_child(old_byte, Arc::new(old_subtree))
+            .map_err(|_| ())?;
 
         if let Some(b) = new_byte {
             inner.add_child(b, new_leaf).map_err(|_| ())?;
@@ -488,7 +498,10 @@ impl ArtMap {
                 None => continue,
             };
             let root_guard = RawWriteGuard::lock(root);
-            if !std::ptr::eq(self.root.load(Ordering::Acquire), Arc::as_ptr(root_guard.arc())) {
+            if !std::ptr::eq(
+                self.root.load(Ordering::Acquire),
+                Arc::as_ptr(root_guard.arc()),
+            ) {
                 drop(root_guard);
                 continue;
             }
@@ -515,7 +528,10 @@ impl ArtMap {
 
         loop {
             if prev.is_none()
-                && !std::ptr::eq(self.root.load(Ordering::Acquire), Arc::as_ptr(current.arc()))
+                && !std::ptr::eq(
+                    self.root.load(Ordering::Acquire),
+                    Arc::as_ptr(current.arc()),
+                )
             {
                 return Err(());
             }
@@ -545,9 +561,9 @@ impl ArtMap {
 
             if depth == key.len() {
                 let old = node.take_inner_leaf();
-                let value = old.as_ref().and_then(|arc| {
-                    arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value()))
-                });
+                let value = old
+                    .as_ref()
+                    .and_then(|arc| arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value())));
                 let removed = old.is_some();
                 drop(old);
 
@@ -578,9 +594,9 @@ impl ArtMap {
                 let leaf = child_node.as_leaf().ok_or(())?;
                 if leaf.key() == key {
                     let old = current.node().remove_child(byte);
-                    let value = old.as_ref().and_then(|arc| {
-                        arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value()))
-                    });
+                    let value = old
+                        .as_ref()
+                        .and_then(|arc| arc.as_leaf().map(|l| Bytes::copy_from_slice(l.value())));
                     drop(child_guard);
                     drop(old);
 
@@ -633,7 +649,12 @@ impl ArtMap {
             (None, None) => {
                 let old_ptr = Arc::as_ptr(current.arc()) as *mut Node;
                 self.root
-                    .compare_exchange(old_ptr, std::ptr::null_mut(), Ordering::Release, Ordering::Relaxed)
+                    .compare_exchange(
+                        old_ptr,
+                        std::ptr::null_mut(),
+                        Ordering::Release,
+                        Ordering::Relaxed,
+                    )
                     .map_err(|_| ())?;
                 // Drop the guard first so `write_unlock` runs on a live node,
                 // then consume the tree reference that was removed from the
@@ -742,7 +763,10 @@ mod tests {
     fn insert_overwrites() {
         let map = ArtMap::new(ArtMapOptions::default());
         map.insert(b"a", b"1").unwrap();
-        assert_eq!(map.insert(b"a", b"2").unwrap(), Some(Bytes::from_static(b"1")));
+        assert_eq!(
+            map.insert(b"a", b"2").unwrap(),
+            Some(Bytes::from_static(b"1"))
+        );
         assert_eq!(map.get(b"a"), Some(Bytes::from_static(b"2")));
     }
 

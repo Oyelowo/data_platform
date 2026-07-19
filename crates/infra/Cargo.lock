@@ -1886,10 +1886,12 @@ dependencies = [
  "bytes",
  "loom",
  "proptest",
+ "storage-file",
  "storage-format",
  "storage-memory",
  "storage-testkit",
  "storage-traits",
+ "storage-wal",
  "tempfile",
  "thiserror",
 ]

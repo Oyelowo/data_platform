@@ -1,14 +1,14 @@
 //! ART `Node16` layout: 5..=16 children stored in sorted key order.
 
-use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 
 use crate::keys::truncate_prefix;
 use crate::latch::VersionLatch;
 use crate::node::Node;
+use crate::nodes::InnerNode;
 use crate::nodes::node4::Node4;
 use crate::nodes::node48::Node48;
-use crate::nodes::InnerNode;
 
 /// Inner node that can hold up to sixteen children.
 #[derive(Debug)]
