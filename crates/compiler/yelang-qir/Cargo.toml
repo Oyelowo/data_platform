@@ -11,6 +11,7 @@ yelang-arena = { path = "../yelang-arena" }
 yelang-hir = { path = "../yelang-hir" }
 yelang-ty = { path = "../yelang-ty" }
 yelang-tycheck = { path = "../yelang-tycheck" }
+yelang-resolve = { path = "../yelang-resolve" }
 yelang-interner = { path = "../yelang-interner" }
 yelang-lexer = { path = "../yelang-lexer" }
 thiserror.workspace = true
@@ -18,3 +19,4 @@ thiserror.workspace = true
 [dev-dependencies]
 insta.workspace = true
 rstest.workspace = true
+yelang-ast = { path = "../yelang-ast" }

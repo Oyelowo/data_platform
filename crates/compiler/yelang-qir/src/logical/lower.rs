@@ -4,74 +4,155 @@
 //! which trait/method each HIR call resolved to. There is no method-name
 //! pattern matching.
 
-use yelang_hir::ids::{BodyId, DefId, QueryId};
+use yelang_arena::{DefId, FxHashMap};
+use yelang_hir::ids::{BodyId, ExprId, PatId, QueryId};
+use yelang_resolve::lang_items::LangItem;
 use yelang_tycheck::tcx::TyCtxt;
-use yelang_tycheck::typeck_results::TypeckResults;
+use yelang_tycheck::typeck_results::{MethodResolution, TypeckResults};
 
 use crate::errors::LoweringError;
-use crate::ids::LirId;
+use crate::expr::AggregateClass;
+use crate::ids::{BinderId, LirId};
 use crate::logical::plan::LogicalPlan;
+use crate::logical::queryable::QueryableMethod;
 
 /// Context shared while lowering a single function body.
 pub struct LoweringCtxt<'a> {
     pub tcx: &'a TyCtxt,
     pub body_id: BodyId,
     pub results: &'a TypeckResults,
+    pub lang_traits: LangTraits,
+    /// Maps an aggregate marker type or sugar method `DefId` to its
+    /// `AggregateClass`. This is a pragmatic stand-in until the compiler can
+    /// evaluate `Aggregate::classify()` directly from the trait impl.
+    pub aggregate_classes: FxHashMap<DefId, AggregateClass>,
+    /// Maps a `Queryable` trait method `DefId` to the operator it lowers to.
+    pub queryable_methods: FxHashMap<DefId, QueryableMethod>,
+    /// Binder scope stack mapping HIR pattern ids to pipeline binder ids.
+    binder_scopes: Vec<FxHashMap<PatId, BinderId>>,
 }
 
 impl<'a> LoweringCtxt<'a> {
     pub fn new(tcx: &'a TyCtxt, body_id: BodyId, results: &'a TypeckResults) -> Self {
-        Self { tcx, body_id, results }
+        Self {
+            tcx,
+            body_id,
+            results,
+            lang_traits: LangTraits::load(tcx),
+            aggregate_classes: FxHashMap::default(),
+            queryable_methods: FxHashMap::default(),
+            binder_scopes: vec![FxHashMap::default()],
+        }
+    }
+
+    pub fn with_aggregate_class(mut self, def_id: DefId, class: AggregateClass) -> Self {
+        self.aggregate_classes.insert(def_id, class);
+        self
+    }
+
+    pub fn with_queryable_method(mut self, def_id: DefId, method: QueryableMethod) -> Self {
+        self.queryable_methods.insert(def_id, method);
+        self
     }
 
     pub fn krate(&self) -> &yelang_hir::crate_data::Crate {
         self.tcx.crate_hir()
     }
+
+    /// Push a new binder scope.
+    pub fn push_binder_scope(&mut self) {
+        self.binder_scopes.push(FxHashMap::default());
+    }
+
+    /// Pop the innermost binder scope.
+    pub fn pop_binder_scope(&mut self) {
+        self.binder_scopes.pop();
+    }
+
+    /// Register a HIR pattern as a pipeline binder.
+    pub fn insert_binder(&mut self, pat_id: PatId, binder: BinderId) {
+        if let Some(scope) = self.binder_scopes.last_mut() {
+            scope.insert(pat_id, binder);
+        }
+    }
+
+    /// Look up the pipeline binder for a HIR local pattern.
+    pub fn lookup_binder(&self, pat_id: PatId) -> Option<BinderId> {
+        for scope in self.binder_scopes.iter().rev() {
+            if let Some(&binder) = scope.get(&pat_id) {
+                return Some(binder);
+            }
+        }
+        None
+    }
+
+    /// Look up the aggregate class for a marker/method def, if registered.
+    pub fn aggregate_class(&self, def_id: DefId) -> Option<AggregateClass> {
+        self.aggregate_classes.get(&def_id).copied()
+    }
+
+    /// Look up the queryable operator kind for a method def, if registered.
+    pub fn queryable_method(&self, def_id: DefId) -> Option<QueryableMethod> {
+        self.queryable_methods.get(&def_id).copied()
+    }
 }
 
 /// Lower a typed HIR query into a logical plan.
+///
+/// This is the main entry point for Phase I. The physical planner and executor
+/// consume the returned `LogicalPlan`.
 pub fn lower_query(
     plan: &mut LogicalPlan,
-    ctx: &LoweringCtxt<'_>,
+    ctx: &mut LoweringCtxt<'_>,
     query_id: QueryId,
 ) -> Result<LirId, LoweringError> {
-    let query = ctx.krate().query(query_id).ok_or(LoweringError::UnsupportedClause)?;
-    super::lower_query::lower_query(plan, ctx, query)
+    let query = ctx
+        .krate()
+        .query(query_id)
+        .cloned()
+        .ok_or(LoweringError::UnsupportedClause)?;
+    super::lower_query::lower_query(plan, ctx, &query)
 }
 
 /// Lower an arbitrary HIR expression that appears in query context.
 pub fn lower_expr(
     plan: &mut LogicalPlan,
-    ctx: &LoweringCtxt<'_>,
+    ctx: &mut LoweringCtxt<'_>,
     expr_id: yelang_hir::ids::ExprId,
 ) -> Result<crate::ids::QExprId, LoweringError> {
     super::lower_expr::lower_hir_expr(plan, ctx, expr_id)
 }
 
 /// Resolve a method call to its trait/method DefIds.
-pub fn resolve_method(
-    ctx: &LoweringCtxt<'_>,
-    _expr_id: yelang_hir::ids::ExprId,
-) -> Option<MethodRes> {
-    // TODO: wire up once TypeckResults stores method resolution.
-    let _ = ctx;
-    None
+pub fn resolve_method(ctx: &LoweringCtxt<'_>, expr_id: ExprId) -> Option<MethodRes> {
+    ctx.results.method_resolution(expr_id).map(|res| MethodRes::from_resolution(res))
 }
 
 /// Check whether a method resolution is through a given lang-item trait.
-pub fn is_lang_trait(_ctx: &LoweringCtxt<'_>, _trait_def: DefId, _lang: &str) -> bool {
-    // TODO: wire up once lang items are exposed on Crate.
-    false
+pub fn is_lang_trait(ctx: &LoweringCtxt<'_>, trait_def: DefId, lang: LangItem) -> bool {
+    ctx.tcx.lang_item(lang) == Some(trait_def)
 }
 
 /// Minimal method-resolution fact used by lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MethodRes {
     pub trait_def_id: Option<DefId>,
-    pub method_def_id: DefId,
+    pub method_def_id: Option<DefId>,
+    pub impl_def_id: Option<DefId>,
+}
+
+impl MethodRes {
+    pub fn from_resolution(res: &MethodResolution) -> Self {
+        Self {
+            trait_def_id: res.trait_def_id,
+            method_def_id: res.method_def_id,
+            impl_def_id: res.impl_def_id,
+        }
+    }
 }
 
 /// Return the lang-item trait names we care about.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct LangTraits {
     pub iterator: Option<DefId>,
     pub into_iter: Option<DefId>,
@@ -80,13 +161,12 @@ pub struct LangTraits {
 }
 
 impl LangTraits {
-    pub fn load(_ctx: &LoweringCtxt<'_>) -> Self {
-        // TODO: read from ctx.tcx.lang_items once the API is stable.
+    pub fn load(tcx: &TyCtxt) -> Self {
         Self {
-            iterator: None,
-            into_iter: None,
-            queryable: None,
-            aggregate: None,
+            iterator: tcx.lang_item(LangItem::Iterator),
+            into_iter: tcx.lang_item(LangItem::IntoIterator),
+            queryable: tcx.lang_item(LangItem::Queryable),
+            aggregate: tcx.lang_item(LangItem::Aggregate),
         }
     }
 }

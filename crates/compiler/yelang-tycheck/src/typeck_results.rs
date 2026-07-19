@@ -6,6 +6,23 @@ use yelang_ty::ty::TyId;
 
 use crate::autoderef::Adjustment;
 
+/// The resolved origin of a method call.
+///
+/// This is recorded for every `Expr::MethodCall` so that later phases (QIR
+/// lowering, codegen) can dispatch by `DefId` instead of by method name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MethodResolution {
+    /// The trait the method came from, if any. `None` for inherent or builtin
+    /// methods.
+    pub trait_def_id: Option<DefId>,
+    /// The method item's `DefId`, if known. Builtin intercepts may leave this
+    /// `None` when no real item exists yet.
+    pub method_def_id: Option<DefId>,
+    /// The impl block the method was defined in, if any. `None` for trait
+    /// methods whose impl is selected later by the trait solver.
+    pub impl_def_id: Option<DefId>,
+}
+
 /// The result of type-checking a function body.
 ///
 /// Maps HIR node IDs to their inferred types.
@@ -19,6 +36,8 @@ pub struct TypeckResults {
     pub local_types: FxHashMap<PatId, TyId>,
     /// Receiver adjustments discovered for each method-call expression.
     pub expr_adjustments: FxHashMap<ExprId, Vec<Adjustment>>,
+    /// Method-call resolutions keyed by the method-call expression id.
+    pub method_resolutions: FxHashMap<ExprId, MethodResolution>,
     /// The function's definition id.
     pub def_id: DefId,
 }
@@ -30,8 +49,23 @@ impl TypeckResults {
             pat_types: FxHashMap::new(),
             local_types: FxHashMap::new(),
             expr_adjustments: FxHashMap::new(),
+            method_resolutions: FxHashMap::new(),
             def_id,
         }
+    }
+
+    /// Record the resolved origin of a method call.
+    pub fn record_method_resolution(
+        &mut self,
+        expr_id: ExprId,
+        resolution: MethodResolution,
+    ) {
+        self.method_resolutions.insert(expr_id, resolution);
+    }
+
+    /// Look up the resolved origin of a method call.
+    pub fn method_resolution(&self, expr_id: ExprId) -> Option<&MethodResolution> {
+        self.method_resolutions.get(&expr_id)
     }
 
     pub fn expr_ty(&self, expr_id: ExprId) -> Option<TyId> {

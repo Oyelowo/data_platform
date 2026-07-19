@@ -870,9 +870,11 @@ dependencies = [
  "rstest",
  "thiserror",
  "yelang-arena",
+ "yelang-ast",
  "yelang-hir",
  "yelang-interner",
  "yelang-lexer",
+ "yelang-resolve",
  "yelang-ty",
  "yelang-tycheck",
 ]

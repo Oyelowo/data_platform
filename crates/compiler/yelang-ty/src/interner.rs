@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 
 use rustc_hash::FxHashMap;
-use yelang_arena::{ConstId, IndexVec, TyId};
+use yelang_arena::{ConstId, Idx, IndexVec, TyId};
 
 use crate::generic::GenericArg;
 use crate::list::List;
@@ -111,6 +111,11 @@ impl Interner {
             canonical_var_kinds: RefCell::new(FxHashMap::default()),
             canonical_var_values: RefCell::new(FxHashMap::default()),
         }
+    }
+
+    /// Check whether a `TyId` has been interned.
+    pub fn has_ty(&self, id: TyId) -> bool {
+        id.index() < self.types.borrow().len()
     }
 
     /// Look up a `Ty` by ID.

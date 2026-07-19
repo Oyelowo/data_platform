@@ -17,11 +17,20 @@ pub struct LogicalPlan {
     pub props: LirArena<LogicalProps>,
     pub exprs: QExprArena<QExpr>,
     pub root: Option<LirId>,
+    /// Monotonic counter for synthetic binder ids used in operator pipelines.
+    next_binder: u32,
 }
 
 impl LogicalPlan {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Allocate a fresh `BinderId` for use in per-row expressions.
+    pub fn fresh_binder(&mut self) -> crate::ids::BinderId {
+        let id = crate::ids::BinderId(self.next_binder);
+        self.next_binder = self.next_binder.checked_add(1).expect("binder id overflow");
+        id
     }
 
     pub fn alloc_operator(&mut self, op: LirOp, props: LogicalProps) -> LirId {
@@ -122,13 +131,36 @@ impl LogicalPlan {
                 return Err(LoweringError::SliceOnUnordered);
             }
         }
+        Ok(self.slice_unchecked(input, offset, limit, out_ty, true))
+    }
+
+    /// Slice without requiring an ordered input. Used for `take`/`skip` on
+    /// general queryable pipelines where deterministic ordering is not assumed.
+    pub fn slice_unordered(
+        &mut self,
+        input: LirId,
+        offset: QExprId,
+        limit: Option<QExprId>,
+        out_ty: TyId,
+    ) -> LirId {
+        self.slice_unchecked(input, offset, limit, out_ty, false)
+    }
+
+    fn slice_unchecked(
+        &mut self,
+        input: LirId,
+        offset: QExprId,
+        limit: Option<QExprId>,
+        out_ty: TyId,
+        ordered: bool,
+    ) -> LirId {
         let mut props = LogicalProps::new(out_ty);
-        props.ordered = true;
+        props.ordered = ordered;
         if let Some(in_props) = self.props.get(input) {
             props.bounded = in_props.bounded;
             props.volatility = in_props.volatility;
         }
-        Ok(self.alloc_operator(LirOp::Slice { input, offset, limit }, props))
+        self.alloc_operator(LirOp::Slice { input, offset, limit }, props)
     }
 
     pub fn distinct(&mut self, input: LirId, by: Option<Vec<QExprId>>, out_ty: TyId) -> LirId {

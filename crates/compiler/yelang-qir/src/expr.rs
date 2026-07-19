@@ -75,6 +75,12 @@ pub enum QExpr {
     },
     /// Coerce a value to another type.
     Cast(QExprId, TyId),
+    /// A subplan fragment embedded in an expression.
+    ///
+    /// Produced when a method call on `Queryable`/`Aggregate`/`Iterator` is
+    /// lowered to a logical operator. The surrounding expression can consume
+    /// it as a collection or scalar value.
+    Subplan(crate::ids::LirId, TyId),
     /// Error expression (used when lowering fails partially).
     Error(TyId),
 }
@@ -101,6 +107,7 @@ impl QExpr {
             | QExpr::AggregateCall(_, ty)
             | QExpr::WindowCall { ty, .. }
             | QExpr::Cast(_, ty)
+            | QExpr::Subplan(_, ty)
             | QExpr::Error(ty) => *ty,
         }
     }

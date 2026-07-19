@@ -16,6 +16,7 @@ use yelang_ty::ty::{Ty, TyId};
 
 use crate::check::{check_closure_with_expected, check_expr, expr_span};
 use crate::fn_ctxt::FnCtxt;
+use crate::typeck_results::MethodResolution;
 
 /// If `func` is the prelude `len` or `count` function, type-check the call as a
 /// builtin and return the result type. Returns `None` when the call is not an
@@ -79,6 +80,14 @@ fn try_check_is_empty(
     }
     let receiver_ty = check_expr(fcx, receiver);
     fcx.expect_array(expr_span(fcx, receiver), receiver_ty);
+    fcx.results.record_method_resolution(
+        receiver,
+        MethodResolution {
+            trait_def_id: None,
+            method_def_id: None,
+            impl_def_id: None,
+        },
+    );
     Some(fcx.mk_bool())
 }
 
@@ -157,6 +166,14 @@ fn try_check_any_all(
         }
     }
 
+    fcx.results.record_method_resolution(
+        receiver,
+        MethodResolution {
+            trait_def_id: None,
+            method_def_id: None,
+            impl_def_id: None,
+        },
+    );
     Some(fcx.mk_bool())
 }
 

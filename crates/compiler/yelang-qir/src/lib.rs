@@ -37,8 +37,8 @@ pub fn lower_query(
     results: &TypeckResults,
 ) -> QirResult<LogicalPlan> {
     let mut plan = LogicalPlan::empty();
-    let ctx = LoweringCtxt::new(tcx, body_id, results);
-    logical::lower::lower_query(&mut plan, &ctx, query_id)?;
+    let mut ctx = LoweringCtxt::new(tcx, body_id, results);
+    logical::lower::lower_query(&mut plan, &mut ctx, query_id)?;
     Ok(plan)
 }
 

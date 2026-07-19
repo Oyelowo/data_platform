@@ -31,6 +31,7 @@ use crate::check::check_expr;
 use crate::coerce::Coerce;
 use crate::fn_ctxt::FnCtxt;
 use crate::tcx::{ImplDefId, ImplItemDefData, TraitItemDefData};
+use crate::typeck_results::MethodResolution;
 
 /// Where a method candidate came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +277,25 @@ fn confirm_and_record(
     fcx.results
         .expr_adjustments
         .insert(receiver, pick.receiver_adjustments.clone());
+
+    let resolution = match pick.candidate.source {
+        CandidateSource::Inherent { impl_id, item_def_id } => MethodResolution {
+            trait_def_id: None,
+            method_def_id: Some(item_def_id),
+            impl_def_id: Some(fcx.tcx.impl_def(impl_id).def_id),
+        },
+        CandidateSource::Trait {
+            trait_def_id,
+            item_def_id,
+            ..
+        } => MethodResolution {
+            trait_def_id: Some(trait_def_id),
+            method_def_id: Some(item_def_id),
+            impl_def_id: None,
+        },
+    };
+    fcx.results.record_method_resolution(receiver, resolution);
+
     output
 }
 
