@@ -68,6 +68,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
     /// Uses the `DefId`s pre-allocated during def collection so that uses of a
     /// generic parameter name resolve to a real definition.
     fn resolve_generic_params(&mut self, params: &[yelang_ast::GenericParam]) {
+        // First pass: introduce all parameter names into scope so bounds can
+        // reference any parameter in the list (including themselves, which is
+        // allowed for bounds like `T: PartialEq<T>`).
         for param in params {
             let (name, span, ns) = match param {
                 yelang_ast::GenericParam::Type(tp) => {
@@ -97,11 +100,23 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 }
             }
         }
+
+        // Second pass: resolve inline bounds on type parameters.
+        for param in params {
+            if let yelang_ast::GenericParam::Type(tp) = param {
+                for bound in &tp.bounds {
+                    self.resolve_trait_bound(bound);
+                }
+            }
+        }
     }
 
     fn resolve_fn(&mut self, func: &FnDef) {
         self.push_rib(RibKind::Fn);
         self.resolve_generic_params(&func.generics.params);
+        if let Some(where_clause) = &func.generics.where_clause {
+            self.resolve_where_clause(where_clause);
+        }
         // Add function parameters to value scope.
         for param in &func.sig.params {
             self.resolve_param(param);
@@ -171,6 +186,10 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         for item in &t.items {
             if let yelang_ast::TraitItemKind::Method(m) = &item.item {
                 self.push_rib(RibKind::Fn);
+                self.resolve_generic_params(&m.generics.params);
+                if let Some(where_clause) = &m.generics.where_clause {
+                    self.resolve_where_clause(where_clause);
+                }
                 for param in &m.sig.params {
                     self.resolve_param(param);
                 }
@@ -672,6 +691,9 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         match &ty.kind {
             TypeKind::Named(path) => {
                 self.resolve_type_path(path);
+                // Generic arguments inside path segments (e.g. `MapIter<Self, T, U>`)
+                // are not resolved by `resolve_type_path`, so walk them explicitly.
+                self.resolve_path_generic_args(path);
             }
             TypeKind::Tuple(tys) => {
                 for t in tys {
@@ -740,8 +762,134 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             },
             TypeKind::ImplTrait(path) | TypeKind::DynTrait(path) => {
                 self.resolve_type_path(path);
+                self.resolve_path_generic_args(path);
             }
             TypeKind::Error => {}
+        }
+    }
+
+    /// Recursively resolve generic arguments appearing inside a path's segments.
+    ///
+    /// `resolve_type_path` only resolves the path spine; type arguments such as
+    /// `Self` in `MapIter<Self, T, U>` need their own resolution pass.
+    ///
+    /// The surface parser cannot distinguish const-generic arguments from type
+    /// arguments in angle brackets (`Vector<T, N>` parses `N` as a type), so we
+    /// first try the value namespace for single-segment path arguments. If they
+    /// resolve to a const/generic value, we accept them without emitting a type
+    /// resolution error.
+    fn resolve_path_generic_args(&mut self, path: &Path) {
+        for segment in &path.segments {
+            if let Some(yelang_ast::GenericArgs::AngleBracketed(args)) = &segment.args {
+                for arg in &args.args {
+                    match arg {
+                        yelang_ast::AngleBracketedArg::Type(ty) => {
+                            if !self.try_resolve_generic_arg_as_value(ty) {
+                                self.resolve_type(ty);
+                            }
+                        }
+                        yelang_ast::AngleBracketedArg::Const(expr) => self.resolve_expr(expr),
+                        yelang_ast::AngleBracketedArg::AssociatedType { ty, .. } => {
+                            self.resolve_type(ty)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Try to resolve a generic argument that the parser classified as a type as
+    /// a value (e.g. a const generic parameter). Returns true if it succeeded.
+    fn try_resolve_generic_arg_as_value(&self, ty: &Type) -> bool {
+        let TypeKind::Named(path) = &ty.kind else { return false };
+        if path.segments.len() != 1 {
+            return false;
+        }
+        let seg = &path.segments[0];
+        if seg.args.is_some() {
+            return false;
+        }
+        self.resolver
+            .resolve_name(Namespace::Value, seg.ident.symbol, seg.ident.span())
+            .is_some()
+    }
+
+    fn resolve_where_clause(&mut self, where_clause: &yelang_ast::WhereClause) {
+        for predicate in &where_clause.predicates {
+            match predicate {
+                yelang_ast::WherePredicate::TraitBound { ty, bounds } => {
+                    self.resolve_type(ty);
+                    for bound in bounds {
+                        self.resolve_trait_bound(bound);
+                    }
+                }
+                yelang_ast::WherePredicate::TypeEq { lhs, rhs } => {
+                    self.resolve_type(lhs);
+                    self.resolve_type(rhs);
+                }
+                yelang_ast::WherePredicate::ForAll { params, predicate, .. } => {
+                    self.push_rib(RibKind::Opaque);
+                    for param in &params.params {
+                        match param {
+                            yelang_ast::TypeBinderParam::Type(tp) => {
+                                self.add_type_binding(tp.name.symbol, tp.name.span);
+                                for bound in &tp.bounds {
+                                    self.resolve_trait_bound(bound);
+                                }
+                            }
+                            yelang_ast::TypeBinderParam::Const(c) => {
+                                self.resolve_type(&c.ty);
+                                self.add_value_binding(c.name.symbol, c.name.span);
+                            }
+                        }
+                    }
+                    self.resolve_where_clause(&yelang_ast::WhereClause {
+                        predicates: vec![*predicate.clone()],
+                        span: where_clause.span,
+                    });
+                    self.pop_rib();
+                }
+            }
+        }
+    }
+
+    fn resolve_trait_bound(&mut self, bound: &yelang_ast::TraitBound) {
+        if let Some(binder) = &bound.binder {
+            self.push_rib(RibKind::Opaque);
+            for param in &binder.params {
+                match param {
+                    yelang_ast::TypeBinderParam::Type(tp) => {
+                        self.add_type_binding(tp.name.symbol, tp.name.span);
+                        for b in &tp.bounds {
+                            self.resolve_trait_bound(b);
+                        }
+                    }
+                    yelang_ast::TypeBinderParam::Const(c) => {
+                        self.resolve_type(&c.ty);
+                        self.add_value_binding(c.name.symbol, c.name.span);
+                    }
+                }
+            }
+        }
+
+        self.resolve_type_path(&bound.path);
+        self.resolve_path_generic_args(&bound.path);
+
+        // Parenthesized `Fn(A, B) -> C` arguments on the bound path are stored
+        // on the final segment and need separate resolution.
+        if let Some(last) = bound.path.segments.last() {
+            if let Some(yelang_ast::GenericArgs::Parenthesized(p)) = &last.args {
+                for ty in &p.ins {
+                    self.resolve_type(ty);
+                }
+                if let Some(out) = &p.out {
+                    self.resolve_type(out);
+                }
+            }
+        }
+
+        if bound.binder.is_some() {
+            self.pop_rib();
         }
     }
 

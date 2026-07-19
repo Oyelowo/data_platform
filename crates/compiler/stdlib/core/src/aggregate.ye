@@ -1,0 +1,76 @@
+// Yelang user-defined aggregate protocol.
+//
+// Any type implementing `Aggregate` can be used with `Queryable::aggregate`.
+// The planner decides how to execute the aggregate in parallel based solely on
+// the value returned by `class()`.
+//
+// The trait uses explicit type parameters rather than associated types so that
+// accumulator and output types are visible to the query pipeline without
+// requiring associated-type projection in the bootstrap compiler.
+
+@lang("aggregate")
+trait Aggregate<In, Acc, Out> {
+    fn init() -> Acc;
+    fn step(acc: Acc, item: In) -> Acc;
+    fn merge(a: Acc, b: Acc) -> Acc;
+    fn finish(acc: Acc) -> Out;
+    fn class() -> AggregateClass;
+}
+
+// Aggregate classification: the only thing the planner reads from the trait.
+enum AggregateClass {
+    Distributive,
+    Algebraic,
+    Holistic,
+}
+
+// Built-in aggregate markers.
+struct Sum;
+struct Count;
+struct Avg;
+
+// Accumulator types.
+struct SumAcc<T> { value: T }
+struct CountAcc { count: usize }
+struct AvgAcc<T> { sum: T, count: usize }
+
+// Sum over i32: distributive.
+impl Aggregate<i32, SumAcc<i32>, i32> for Sum {
+    fn init() -> SumAcc<i32> { SumAcc { value: 0 } }
+    fn step(acc: SumAcc<i32>, item: i32) -> SumAcc<i32> {
+        SumAcc { value: acc.value + item }
+    }
+    fn merge(a: SumAcc<i32>, b: SumAcc<i32>) -> SumAcc<i32> {
+        SumAcc { value: a.value + b.value }
+    }
+    fn finish(acc: SumAcc<i32>) -> i32 { acc.value }
+    fn class() -> AggregateClass { AggregateClass::Distributive }
+}
+
+// Count over any element type: distributive.
+impl<T> Aggregate<T, CountAcc, usize> for Count {
+    fn init() -> CountAcc { CountAcc { count: 0 } }
+    fn step(acc: CountAcc, item: T) -> CountAcc {
+        CountAcc { count: acc.count + 1 }
+    }
+    fn merge(a: CountAcc, b: CountAcc) -> CountAcc {
+        CountAcc { count: a.count + b.count }
+    }
+    fn finish(acc: CountAcc) -> usize { acc.count }
+    fn class() -> AggregateClass { AggregateClass::Distributive }
+}
+
+// Average over i32: algebraic (fixed-size intermediate).
+impl Aggregate<i32, AvgAcc<i32>, f64> for Avg {
+    fn init() -> AvgAcc<i32> { AvgAcc { sum: 0, count: 0 } }
+    fn step(acc: AvgAcc<i32>, item: i32) -> AvgAcc<i32> {
+        AvgAcc { sum: acc.sum + item, count: acc.count + 1 }
+    }
+    fn merge(a: AvgAcc<i32>, b: AvgAcc<i32>) -> AvgAcc<i32> {
+        AvgAcc { sum: a.sum + b.sum, count: a.count + b.count }
+    }
+    fn finish(acc: AvgAcc<i32>) -> f64 {
+        acc.sum as f64 / acc.count as f64
+    }
+    fn class() -> AggregateClass { AggregateClass::Algebraic }
+}

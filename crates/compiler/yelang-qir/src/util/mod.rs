@@ -5,4 +5,5 @@ pub mod arena;
 pub mod equivalence;
 pub mod graph;
 pub mod print;
+pub mod subst;
 pub mod visitor;

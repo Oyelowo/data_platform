@@ -38,7 +38,9 @@ pub fn lower_query(
 ) -> QirResult<LogicalPlan> {
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(tcx, body_id, results);
+    ctx.populate_stdlib_tables()?;
     logical::lower::lower_query(&mut plan, &mut ctx, query_id)?;
+    rewrite::apply_rewrites(&mut plan)?;
     Ok(plan)
 }
 

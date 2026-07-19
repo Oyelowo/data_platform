@@ -1,0 +1,14 @@
+// Yelang core standard library.
+//
+// This module is loaded as a prelude into every crate. It defines the lang-item
+// traits that the compiler recognizes, plus the built-in aggregate markers.
+
+pub mod iter;
+pub mod query;
+pub mod aggregate;
+
+// Re-export the query and aggregate traits so user code can say `Queryable[T]`
+// without importing.
+pub use iter::{Iterator, IntoIterator};
+pub use query::{Queryable, Seq, Group};
+pub use aggregate::{Aggregate, AggregateClass, Sum, Count, Avg};

@@ -162,18 +162,8 @@ impl Prelude {
             Namespace::Type,
             Some(LangItem::OrdTrait),
         );
-        add(
-            "Iterator",
-            DefKind::Trait,
-            Namespace::Type,
-            Some(LangItem::Iterator),
-        );
-        add(
-            "IntoIterator",
-            DefKind::Trait,
-            Namespace::Type,
-            Some(LangItem::IntoIterator),
-        );
+        // Iterator/IntoIterator are defined in stdlib/core/src/iter.ye with @lang
+        // attributes, so they are not injected here.
         add(
             "Send",
             DefKind::Trait,

@@ -58,13 +58,19 @@ pub fn type_check_crate(tcx: &mut TyCtxt) -> Vec<Diagnostic> {
             check_body(&mut fcx, body_id);
         }
 
+        // Clone results and errors so we can drop `fcx` before mutating `tcx`.
+        let results = fcx.results.clone();
+        let errors = fcx.errors.clone();
+
+        tcx.typeck_results.insert(def_id, results.clone());
+
         // Convert FnCtxt errors into diagnostics.
-        for (span, err) in &fcx.errors {
+        for (span, err) in &errors {
             all_diagnostics.push(Diagnostic::from_type_error(*span, err, tcx));
         }
 
         // Report any unresolved inference variables as errors.
-        for (&expr_id, &ty) in &fcx.results.expr_types {
+        for (&expr_id, &ty) in &results.expr_types {
             if matches!(tcx.interner().ty(ty), Ty::Infer(_)) {
                 let span = tcx.crate_hir().expr_span(expr_id);
                 all_diagnostics.push(Diagnostic {

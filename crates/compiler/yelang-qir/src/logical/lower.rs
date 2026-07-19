@@ -86,9 +86,24 @@ impl<'a> LoweringCtxt<'a> {
         None
     }
 
+    /// Populate the `queryable_methods` and `aggregate_classes` tables by
+    /// introspecting the real `Queryable` and `Aggregate` lang-item definitions
+    /// loaded from `stdlib/core/src/*.ye`.
+    pub fn populate_stdlib_tables(&mut self) -> Result<(), crate::errors::LoweringError> {
+        let (methods, classes) = crate::logical::stdlib::build_tables(self.tcx)?;
+        // Manual overrides (used by unit tests) take precedence.
+        for (k, v) in methods {
+            self.queryable_methods.entry(k).or_insert(v);
+        }
+        for (k, v) in classes {
+            self.aggregate_classes.entry(k).or_insert(v);
+        }
+        Ok(())
+    }
+
     /// Look up the aggregate class for a marker/method def, if registered.
     pub fn aggregate_class(&self, def_id: DefId) -> Option<AggregateClass> {
-        self.aggregate_classes.get(&def_id).copied()
+        crate::logical::stdlib::aggregate_class(self.tcx, &self.aggregate_classes, def_id)
     }
 
     /// Look up the queryable operator kind for a method def, if registered.

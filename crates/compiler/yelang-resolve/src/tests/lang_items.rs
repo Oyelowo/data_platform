@@ -175,8 +175,6 @@ fn prelude_lang_items_are_registered() {
         LangItem::PartialEq,
         LangItem::PartialOrd,
         LangItem::OrdTrait,
-        LangItem::Iterator,
-        LangItem::IntoIterator,
         LangItem::Send,
         LangItem::Sync,
         LangItem::Sized,

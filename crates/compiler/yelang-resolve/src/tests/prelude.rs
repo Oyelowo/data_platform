@@ -18,7 +18,7 @@ fn prelude_option_type_resolves_in_root() {
 #[test]
 fn prelude_result_type_resolves_in_root() {
     let src = r#"
-        fn main() { let x: Result<i32, string>; }
+        fn main() { let x: Result<i32, String>; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
@@ -76,13 +76,17 @@ fn prelude_trait_clone_resolves() {
 }
 
 #[test]
-fn prelude_trait_iterator_resolves() {
+fn prelude_trait_iterator_is_not_in_prelude() {
+    // Iterator is defined in stdlib/core/src/iter.ye, not injected as prelude.
     let src = r#"
         fn main() { let x: Iterator; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+    assert!(
+        !resolved.errors.is_empty(),
+        "Iterator should not resolve without the stdlib loaded"
+    );
 }
 
 #[test]
@@ -273,7 +277,7 @@ fn prelude_trait_as_type_bound_resolves() {
 fn prelude_items_do_not_conflict_with_each_other() {
     // Using multiple prelude items in one program should work.
     let src = r#"
-        fn foo() -> Option<Result<Vec<String>, string>> { None }
+        fn foo() -> Option<Result<Vec<String>, String>> { None }
         fn main() {}
     "#;
     let (program, interner) = parse_program(src);
@@ -342,11 +346,15 @@ fn prelude_partial_ord_ord_traits_resolve() {
 }
 
 #[test]
-fn prelude_into_iterator_trait_resolves() {
+fn prelude_into_iterator_trait_is_not_in_prelude() {
+    // IntoIterator is defined in stdlib/core/src/iter.ye, not injected as prelude.
     let src = r#"
         fn main() { let x: IntoIterator; }
     "#;
     let (program, interner) = parse_program(src);
     let resolved = resolve_crate(&program, &interner);
-    assert!(resolved.errors.is_empty(), "errors: {:?}", resolved.errors);
+    assert!(
+        !resolved.errors.is_empty(),
+        "IntoIterator should not resolve without the stdlib loaded"
+    );
 }

@@ -56,6 +56,8 @@ pub struct TyCtxt {
     pub impl_assoc_items_cache: FxHashMap<DefId, Box<[AssocItemInfo]>>,
     /// Precomputed solver views of ADT field types.
     pub adt_field_tys_cache: FxHashMap<DefId, Box<[TyId]>>,
+    /// Per-function-body type-checking results, populated by `type_check_crate`.
+    pub typeck_results: iv::SecondaryMap<DefId, crate::typeck_results::TypeckResults>,
     /// `Deref` trait lang item, if registered.
     pub deref_trait: Option<DefId>,
     /// `Deref::Target` associated-type lang item, if registered.
@@ -92,6 +94,7 @@ impl TyCtxt {
             trait_assoc_items_cache: FxHashMap::default(),
             impl_assoc_items_cache: FxHashMap::default(),
             adt_field_tys_cache: FxHashMap::default(),
+            typeck_results: iv::SecondaryMap::new(),
             deref_trait: None,
             deref_target: None,
             string_interner,

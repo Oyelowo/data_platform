@@ -13,6 +13,7 @@ pub mod plan;
 pub mod props;
 pub mod queryable;
 pub mod shape;
+pub mod stdlib;
 
 pub use operator::{
     AggregateOp, ConstructKind, EdgeDirection, JoinKind, LirOp, ScanSource, SetOpKind,

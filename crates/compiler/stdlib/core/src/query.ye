@@ -1,0 +1,36 @@
+// Yelang lazy query pipeline trait.
+//
+// `Queryable` is the optimizable, backend-agnostic pipeline interface. The
+// compiler recognizes the trait via `@lang("queryable")` and lowers calls to
+// its methods into QIR logical operators.
+//
+// NOTE: the bootstrap compiler does not yet support method-level generics in
+// trait bodies, so the methods here are *declarations* only. User code reaches
+// the query pipeline through the dedicated `select` syntax, not through these
+// method calls. Once method-level generics are fully supported, these methods
+// will become the canonical surface API.
+
+@lang("queryable")
+trait Queryable<T> {
+    fn filter(self, pred: fn(T) -> bool) -> Self;
+    fn map<U>(self, f: fn(T) -> U) -> Queryable<U>;
+    fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U>;
+    fn order_by<K>(self, key: fn(T) -> K) -> Seq<T>;
+    fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>>;
+    fn distinct(self) -> Self;
+    fn take(self, n: usize) -> Self;
+    fn skip(self, n: usize) -> Self;
+
+    // Core aggregation hook. Explicit `Acc`/`Out` parameters avoid associated
+    // types in the bootstrap pipeline.
+    fn aggregate<A, Acc, Out>(self, agg: A) -> Out
+    where
+        A: Aggregate<T, Acc, Out>;
+}
+
+// Result type of `order_by`. A `Seq` is an ordered collection; logical `Slice`
+// requires a `Seq` input.
+struct Seq<T> { inner: Queryable<T> }
+
+// Result type of `group_by`. Each row is `{ key: K, items: Queryable<T> }`.
+struct Group<K, T> { key: K, items: Queryable<T> }
