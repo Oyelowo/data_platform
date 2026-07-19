@@ -505,8 +505,24 @@ pub fn walk_query<'hir, V: Visitor<'hir>>(
                     }
                 }
             }
+            for link in &select.links {
+                walk_select_link_node(visitor, &link.start);
+                for segment in &link.segments {
+                    walk_select_link_edge(visitor, &segment.edge);
+                    walk_select_link_node(visitor, &segment.target);
+                }
+            }
+            for for_mods in &select.post_links_for {
+                walk_node_modifiers(visitor, &for_mods.modifiers);
+            }
             if let Some(where_clause) = select.where_clause {
                 visitor.visit_expr_by_id(where_clause);
+            }
+            if let Some(group_by) = &select.group_by {
+                for key in &group_by.keys {
+                    visitor.visit_expr_by_id(key.expr);
+                }
+                visitor.visit_pat_by_id(group_by.into_binder);
             }
             for part in &select.order_by {
                 visitor.visit_expr_by_id(part.expr);
@@ -528,6 +544,56 @@ pub fn walk_query<'hir, V: Visitor<'hir>>(
         | QueryKind::Unlink(_) => {
             // Mutation queries are walked by the type checker; the generic visitor
             // will gain full traversal once the HIR query structs are expanded.
+        }
+    }
+}
+
+fn walk_node_modifiers<'hir, V: Visitor<'hir>>(
+    visitor: &mut V,
+    modifiers: &'hir crate::hir::query::NodeModifiers,
+) {
+    if let Some(filter) = modifiers.filter {
+        visitor.visit_expr_by_id(filter);
+    }
+    for part in &modifiers.order_by {
+        visitor.visit_expr_by_id(part.expr);
+    }
+    if let Some(range) = &modifiers.range {
+        if let Some(start) = range.start {
+            visitor.visit_expr_by_id(start);
+        }
+        if let Some(end) = range.end {
+            visitor.visit_expr_by_id(end);
+        }
+    }
+}
+
+fn walk_select_link_node<'hir, V: Visitor<'hir>>(
+    visitor: &mut V,
+    node: &'hir crate::hir::query::SelectLinkNode,
+) {
+    visitor.visit_pat_by_id(node.binder);
+    if let Some(ty) = node.elem_ty {
+        visitor.visit_ty_by_id(ty);
+    }
+    walk_node_modifiers(visitor, &node.modifiers);
+}
+
+fn walk_select_link_edge<'hir, V: Visitor<'hir>>(
+    visitor: &mut V,
+    edge: &'hir crate::hir::query::SelectLinkEdge,
+) {
+    visitor.visit_pat_by_id(edge.binder);
+    if let Some(ty) = edge.elem_ty {
+        visitor.visit_ty_by_id(ty);
+    }
+    walk_node_modifiers(visitor, &edge.modifiers);
+    if let Some(hops) = &edge.hops {
+        if let Some(start) = hops.start {
+            visitor.visit_expr_by_id(start);
+        }
+        if let Some(end) = hops.end {
+            visitor.visit_expr_by_id(end);
         }
     }
 }

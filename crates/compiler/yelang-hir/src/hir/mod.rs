@@ -26,5 +26,9 @@ pub use core::{
 };
 pub use expr::{ComprehensionKind, ComprehensionVar, DocumentProjection, Expr, GeneratorKind};
 pub use pat::{BindingMode, FieldPat, Pat};
-pub use query::{FromNode, OrderByPart, Query, QueryKind, QueryRange, SelectQuery};
+pub use query::{
+    ForRootModifiers, FromNode, GroupByClause, GroupByKey, LinksMatchKind, OrderByPart, Query,
+    QueryKind, QueryRange, SelectLinkEdge, SelectLinkNode, SelectLinkPath, SelectLinkSegment,
+    SelectQuery,
+};
 pub use ty::{AnonField, Const, ConstKind, GenericArg, Ty, UtilityKind};

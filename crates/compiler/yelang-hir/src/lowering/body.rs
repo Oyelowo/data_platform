@@ -1,11 +1,10 @@
 //! Lowering of AST blocks into HIR `Body` values.
 
 use yelang_ast::{BlockExpr, Expr as AstExpr, Param as AstParam};
-use yelang_lexer::Span;
 
 use crate::hir::body::Body;
 use crate::hir::core::Expr;
-use crate::ids::{BodyId, HirTyId};
+use crate::ids::BodyId;
 use crate::lowering::LoweringContext;
 
 /// Lower a `BlockExpr` into a standalone `Body` and register it in the crate.

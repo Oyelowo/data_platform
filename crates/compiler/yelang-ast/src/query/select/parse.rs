@@ -165,30 +165,8 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for SelectQ {
                 });
             }
 
-            let mut matches: Vec<usize> = Vec::new();
-            for (idx, f) in from.iter().enumerate() {
-                if f.var.as_ref().is_some_and(|v| v.symbol == target.symbol) {
-                    matches.push(idx);
-                }
-            }
-
-            match matches.as_slice() {
-                [] => {
-                    return Err(yelang_lexer::TokenError::CustomError {
-                        msg: "unknown `for` target root; expected a FROM root label".to_string(),
-                        span: target.span,
-                    });
-                }
-                [_single] => {}
-                _many => {
-                    return Err(yelang_lexer::TokenError::CustomError {
-                        msg: "ambiguous `for` target root; multiple FROM sources share this label"
-                            .to_string(),
-                        span: target.span,
-                    });
-                }
-            }
-
+            // The target is validated during type-checking so that diagnostics
+            // are produced through the same pipeline as other query errors.
             post_links_for.push(ForRootModifiers { target, modifiers });
         }
 
@@ -523,6 +501,10 @@ impl ParseTokenStream<crate::tokenizer::TokenKind> for LinkSegment {
         };
 
         edge.direction = direction;
+
+        // The target node is preceded by the same direction arrow (e.g.
+        // `->[edge]->(target)` or `<-[edge]<-(target)`).
+        let _target_direction = stream.parse::<EdgeDirection>()?;
 
         let target = if stream
             .peek()

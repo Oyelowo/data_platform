@@ -5,6 +5,7 @@ use yelang_ast::{
     MemberAccess, MethodCallExpr, ModKind, Param, Path, Pattern, PatternKind, Program, Stmt,
     StmtKind, Type, TypeKind,
 };
+use yelang_ast::query::{GroupByClause, LinkPath, LinkSegment};
 use yelang_interner::Symbol;
 use yelang_lexer::Span;
 
@@ -823,27 +824,27 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                     if let Some(ty) = &node.ty {
                         self.resolve_type(ty);
                     }
-                    if let Some(filter) = &node.modifiers.filter {
-                        self.resolve_expr(filter);
-                    }
-                    if let Some(order) = &node.modifiers.order {
-                        for part in order {
-                            self.resolve_expr(&part.field);
-                        }
-                    }
-                    if let Some(range) = &node.modifiers.range {
-                        if let Some(start) = &range.start {
-                            self.resolve_expr(start);
-                        }
-                        if let Some(end) = &range.end {
-                            self.resolve_expr(end);
-                        }
-                    }
+                    self.resolve_node_modifiers(&node.modifiers);
+                }
+
+                // `links` traversals introduce edge/target binders and labels.
+                for path in &select.links {
+                    self.resolve_select_link_path(path);
+                }
+
+                // Per-root tail modifiers in multi-root SELECT.
+                for root_mods in &select.post_links_for {
+                    self.resolve_node_modifiers(&root_mods.modifiers);
                 }
 
                 if let Some(where_clause) = &select.where_clause {
                     self.resolve_expr(where_clause);
                 }
+
+                if let Some(group_by) = &select.group_by {
+                    self.resolve_group_by(group_by, query.span);
+                }
+
                 if let Some(order) = &select.order_by {
                     for part in order {
                         self.resolve_expr(&part.field);
@@ -951,6 +952,76 @@ impl<'a, 'b> LateResolver<'a, 'b> {
                 }
             }
         }
+    }
+
+    fn resolve_node_modifiers(&mut self, modifiers: &yelang_ast::query::Modifiers) {
+        if let Some(filter) = &modifiers.filter {
+            self.resolve_expr(filter);
+        }
+        if let Some(order) = &modifiers.order {
+            for part in order {
+                self.resolve_expr(&part.field);
+            }
+        }
+        if let Some(range) = &modifiers.range {
+            if let Some(start) = &range.start {
+                self.resolve_expr(start);
+            }
+            if let Some(end) = &range.end {
+                self.resolve_expr(end);
+            }
+        }
+    }
+
+    fn resolve_select_link_path(&mut self, path: &LinkPath) {
+        // The start node is a reference to an already-bound label; its modifiers
+        // may reference upstream binders.
+        self.resolve_node_modifiers(&path.start.modifiers);
+
+        for segment in &path.segments {
+            self.resolve_select_link_segment(segment);
+        }
+    }
+
+    fn resolve_select_link_segment(&mut self, segment: &LinkSegment) {
+        let edge = &segment.edge;
+        let target = &segment.target;
+
+        // Edge binder is visible inside the edge modifiers.
+        if let Some(bind) = &edge.bind {
+            self.add_value_binding(bind.symbol, bind.span);
+        }
+        if let Some(ty) = &edge.ty {
+            self.resolve_type(ty);
+        }
+        self.resolve_node_modifiers(&edge.modifiers);
+
+        // Target binder and label are visible for the rest of the path and for
+        // later sibling paths / the projection.
+        let target_span = target
+            .var
+            .as_ref()
+            .map(|i| i.span)
+            .or_else(|| target.bind.as_ref().map(|i| i.span))
+            .unwrap_or_default();
+        if let Some(bind) = &target.bind {
+            self.add_value_binding(bind.symbol, bind.span);
+        }
+        if let Some(var) = &target.var {
+            self.add_value_binding(var.symbol, target_span);
+        }
+        if let Some(ty) = &target.ty {
+            self.resolve_type(ty);
+        }
+        self.resolve_node_modifiers(&target.modifiers);
+    }
+
+    fn resolve_group_by(&mut self, group_by: &GroupByClause, span: Span) {
+        for key in &group_by.keys {
+            self.resolve_expr(&key.expr);
+        }
+        // The `into <label>` name becomes a value binding for the projection.
+        self.add_value_binding(group_by.into.symbol, span);
     }
 
     fn resolve_create_update_header(
@@ -1244,6 +1315,17 @@ fn split_outermost_selector(expr: &Expr) -> Option<(&Expr, yelang_ast::Ident, &y
                 kind: ExprKind::Call(CallExpr {
                     callee: Box::new(callee_suffix),
                     args: call.args.clone(),
+                }),
+                span: expr.span,
+            };
+            Some((source, binder, selector, suffix))
+        }
+        ExprKind::DocumentAccess(access) => {
+            let (source, binder, selector, base_suffix) = split_outermost_selector(access.base())?;
+            let suffix = Expr {
+                kind: ExprKind::DocumentAccess(yelang_ast::DocumentAccess {
+                    base: Box::new(base_suffix),
+                    object: access.object().clone(),
                 }),
                 span: expr.span,
             };

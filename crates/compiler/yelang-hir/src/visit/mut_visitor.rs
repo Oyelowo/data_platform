@@ -479,8 +479,24 @@ pub fn visit_query_mut<V: MutVisitor + ?Sized>(
                     }
                 }
             }
+            for link in &mut select.links {
+                visit_select_link_node_mut(v, crate_hir, &mut link.start);
+                for segment in &mut link.segments {
+                    visit_select_link_edge_mut(v, crate_hir, &mut segment.edge);
+                    visit_select_link_node_mut(v, crate_hir, &mut segment.target);
+                }
+            }
+            for for_mods in &mut select.post_links_for {
+                visit_node_modifiers_mut(v, crate_hir, &mut for_mods.modifiers);
+            }
             if let Some(where_clause) = select.where_clause {
                 visit_expr_id_mut(v, crate_hir, where_clause);
+            }
+            if let Some(group_by) = &mut select.group_by {
+                for key in &mut group_by.keys {
+                    visit_expr_id_mut(v, crate_hir, key.expr);
+                }
+                visit_pat_id_mut(v, crate_hir, group_by.into_binder);
             }
             for part in &mut select.order_by {
                 visit_expr_id_mut(v, crate_hir, part.expr);
@@ -501,6 +517,59 @@ pub fn visit_query_mut<V: MutVisitor + ?Sized>(
         | QueryKind::Link(_)
         | QueryKind::Unlink(_) => {
             // Expanded once mutation query HIR structs are defined.
+        }
+    }
+}
+
+fn visit_node_modifiers_mut<V: MutVisitor + ?Sized>(
+    v: &mut V,
+    crate_hir: &mut Crate,
+    modifiers: &mut crate::hir::query::NodeModifiers,
+) {
+    if let Some(filter) = modifiers.filter {
+        visit_expr_id_mut(v, crate_hir, filter);
+    }
+    for part in &mut modifiers.order_by {
+        visit_expr_id_mut(v, crate_hir, part.expr);
+    }
+    if let Some(range) = &mut modifiers.range {
+        if let Some(start) = range.start {
+            visit_expr_id_mut(v, crate_hir, start);
+        }
+        if let Some(end) = range.end {
+            visit_expr_id_mut(v, crate_hir, end);
+        }
+    }
+}
+
+fn visit_select_link_node_mut<V: MutVisitor + ?Sized>(
+    v: &mut V,
+    crate_hir: &mut Crate,
+    node: &mut crate::hir::query::SelectLinkNode,
+) {
+    visit_pat_id_mut(v, crate_hir, node.binder);
+    if let Some(ty) = node.elem_ty {
+        visit_ty_id_mut(v, crate_hir, ty);
+    }
+    visit_node_modifiers_mut(v, crate_hir, &mut node.modifiers);
+}
+
+fn visit_select_link_edge_mut<V: MutVisitor + ?Sized>(
+    v: &mut V,
+    crate_hir: &mut Crate,
+    edge: &mut crate::hir::query::SelectLinkEdge,
+) {
+    visit_pat_id_mut(v, crate_hir, edge.binder);
+    if let Some(ty) = edge.elem_ty {
+        visit_ty_id_mut(v, crate_hir, ty);
+    }
+    visit_node_modifiers_mut(v, crate_hir, &mut edge.modifiers);
+    if let Some(hops) = &mut edge.hops {
+        if let Some(start) = hops.start {
+            visit_expr_id_mut(v, crate_hir, start);
+        }
+        if let Some(end) = hops.end {
+            visit_expr_id_mut(v, crate_hir, end);
         }
     }
 }

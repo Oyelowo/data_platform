@@ -31,14 +31,26 @@ pub enum QueryKind {
     Unlink(UnlinkQuery),
 }
 
-/// A single-root `select` query.
+/// A `select` query (single- or multi-root).
 #[derive(Debug, Clone)]
 pub struct SelectQuery {
     pub projection: ExprId,
     pub from: Vec<FromNode>,
+    pub links_match_kind: LinksMatchKind,
+    pub links: Vec<SelectLinkPath>,
+    pub post_links_for: Vec<ForRootModifiers>,
     pub where_clause: Option<ExprId>,
+    pub group_by: Option<GroupByClause>,
     pub order_by: Vec<OrderByPart>,
     pub range: Option<QueryRange>,
+}
+
+/// Whether `links` traversals are required to match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinksMatchKind {
+    #[default]
+    Optional,
+    Required,
 }
 
 /// A single source in the `from` list.
@@ -46,6 +58,9 @@ pub struct SelectQuery {
 pub struct FromNode {
     /// The collection expression, e.g. `users`.
     pub source: ExprId,
+    /// The source label (e.g. `users` in `from users@u:User`). Used by
+    /// `links` paths to anchor traversals from this root.
+    pub label: yelang_interner::Symbol,
     /// Binding for the current element, e.g. `u`.
     pub binder: PatId,
     /// Optional `: User` element type annotation.
@@ -248,4 +263,66 @@ pub struct NodeModifiers {
     pub filter: Option<ExprId>,
     pub order_by: Vec<OrderByPart>,
     pub range: Option<QueryRange>,
+}
+
+/// A `links` path inside a `select` query.
+#[derive(Debug, Clone)]
+pub struct SelectLinkPath {
+    pub start: SelectLinkNode,
+    pub segments: Vec<SelectLinkSegment>,
+}
+
+/// One segment of a `links` path: `(upstream)->[edge]->(target)`.
+#[derive(Debug, Clone)]
+pub struct SelectLinkSegment {
+    pub direction: yelang_ast::query::EdgeDirection,
+    pub edge: SelectLinkEdge,
+    pub target: SelectLinkNode,
+}
+
+/// A node inside a `select ... links ...` path.
+///
+/// The start node is usually a reference to an existing root or intermediate
+/// label; segment targets are declarations that introduce a new binder and
+/// element type.
+#[derive(Debug, Clone)]
+pub struct SelectLinkNode {
+    pub var: yelang_ast::Ident,
+    pub binder: PatId,
+    pub elem_ty: Option<HirTyId>,
+    pub modifiers: NodeModifiers,
+}
+
+/// An edge inside a `select ... links ...` path.
+#[derive(Debug, Clone)]
+pub struct SelectLinkEdge {
+    pub var: yelang_ast::Ident,
+    pub binder: PatId,
+    pub elem_ty: Option<HirTyId>,
+    pub hops: Option<QueryRange>,
+    pub modifiers: NodeModifiers,
+    pub direction: yelang_ast::query::EdgeDirection,
+}
+
+/// A `group by { ... } into <label>` clause.
+#[derive(Debug, Clone)]
+pub struct GroupByClause {
+    pub keys: Vec<GroupByKey>,
+    pub into: yelang_ast::Ident,
+    pub into_binder: PatId,
+}
+
+/// A single key in a `group by { ... }` object.
+#[derive(Debug, Clone)]
+pub struct GroupByKey {
+    pub name: Option<yelang_ast::Ident>,
+    pub expr: ExprId,
+}
+
+/// Per-root tail modifiers in a multi-root `select`:
+/// `for <root> { where ... order by ... range ... }`.
+#[derive(Debug, Clone)]
+pub struct ForRootModifiers {
+    pub target: yelang_ast::Ident,
+    pub modifiers: NodeModifiers,
 }

@@ -566,6 +566,7 @@ pub fn fold_query_id(
                 .into_iter()
                 .map(|from| crate::hir::query::FromNode {
                     source: fold_expr_id(f, crate_hir, from.source),
+                    label: from.label,
                     binder: fold_pat_id(f, crate_hir, from.binder),
                     elem_ty: from.elem_ty.map(|t| fold_ty_id(f, crate_hir, t)),
                     filter: from.filter.map(|e| fold_expr_id(f, crate_hir, e)),
@@ -584,7 +585,44 @@ pub fn fold_query_id(
                     }),
                 })
                 .collect(),
+            links_match_kind: select.links_match_kind,
+            links: select
+                .links
+                .into_iter()
+                .map(|link| crate::hir::query::SelectLinkPath {
+                    start: fold_select_link_node(f, crate_hir, link.start),
+                    segments: link
+                        .segments
+                        .into_iter()
+                        .map(|segment| crate::hir::query::SelectLinkSegment {
+                            direction: segment.direction,
+                            edge: fold_select_link_edge(f, crate_hir, segment.edge),
+                            target: fold_select_link_node(f, crate_hir, segment.target),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            post_links_for: select
+                .post_links_for
+                .into_iter()
+                .map(|for_mods| crate::hir::query::ForRootModifiers {
+                    target: for_mods.target,
+                    modifiers: fold_node_modifiers(f, crate_hir, for_mods.modifiers),
+                })
+                .collect(),
             where_clause: select.where_clause.map(|e| fold_expr_id(f, crate_hir, e)),
+            group_by: select.group_by.map(|group_by| crate::hir::query::GroupByClause {
+                keys: group_by
+                    .keys
+                    .into_iter()
+                    .map(|key| crate::hir::query::GroupByKey {
+                        name: key.name,
+                        expr: fold_expr_id(f, crate_hir, key.expr),
+                    })
+                    .collect(),
+                into: group_by.into,
+                into_binder: fold_pat_id(f, crate_hir, group_by.into_binder),
+            }),
             order_by: select
                 .order_by
                 .into_iter()
@@ -611,6 +649,61 @@ pub fn fold_query_id(
     };
     let span = crate_hir.query_spans.get(query_id).copied().unwrap_or_default();
     crate_hir.alloc_query(crate::hir::query::Query { kind: folded_kind }, span)
+}
+
+fn fold_node_modifiers(
+    f: &mut impl Folder,
+    crate_hir: &mut Crate,
+    modifiers: crate::hir::query::NodeModifiers,
+) -> crate::hir::query::NodeModifiers {
+    crate::hir::query::NodeModifiers {
+        filter: modifiers.filter.map(|e| fold_expr_id(f, crate_hir, e)),
+        order_by: modifiers
+            .order_by
+            .into_iter()
+            .map(|part| crate::hir::query::OrderByPart {
+                expr: fold_expr_id(f, crate_hir, part.expr),
+                direction: part.direction,
+            })
+            .collect(),
+        range: modifiers.range.map(|range| crate::hir::query::QueryRange {
+            start: range.start.map(|e| fold_expr_id(f, crate_hir, e)),
+            end: range.end.map(|e| fold_expr_id(f, crate_hir, e)),
+            inclusive: range.inclusive,
+        }),
+    }
+}
+
+fn fold_select_link_node(
+    f: &mut impl Folder,
+    crate_hir: &mut Crate,
+    node: crate::hir::query::SelectLinkNode,
+) -> crate::hir::query::SelectLinkNode {
+    crate::hir::query::SelectLinkNode {
+        var: node.var,
+        binder: fold_pat_id(f, crate_hir, node.binder),
+        elem_ty: node.elem_ty.map(|t| fold_ty_id(f, crate_hir, t)),
+        modifiers: fold_node_modifiers(f, crate_hir, node.modifiers),
+    }
+}
+
+fn fold_select_link_edge(
+    f: &mut impl Folder,
+    crate_hir: &mut Crate,
+    edge: crate::hir::query::SelectLinkEdge,
+) -> crate::hir::query::SelectLinkEdge {
+    crate::hir::query::SelectLinkEdge {
+        var: edge.var,
+        binder: fold_pat_id(f, crate_hir, edge.binder),
+        elem_ty: edge.elem_ty.map(|t| fold_ty_id(f, crate_hir, t)),
+        hops: edge.hops.map(|range| crate::hir::query::QueryRange {
+            start: range.start.map(|e| fold_expr_id(f, crate_hir, e)),
+            end: range.end.map(|e| fold_expr_id(f, crate_hir, e)),
+            inclusive: range.inclusive,
+        }),
+        modifiers: fold_node_modifiers(f, crate_hir, edge.modifiers),
+        direction: edge.direction,
+    }
 }
 
 pub fn walk_stmt(f: &mut impl Folder, crate_hir: &mut Crate, stmt: Stmt) -> Stmt {

@@ -9,9 +9,9 @@ use yelang_hir::hir::core::{Arm, Block, Expr, FieldExpr, Stmt};
 use yelang_hir::hir::ty::Ty as HirTy;
 use yelang_hir::hir::expr::ComprehensionKind;
 use yelang_hir::hir::query::{
-    ConflictAction, CreateData, CreateLinkPath, CreateNode, CreateQuery, CreateEdge, DeleteQuery,
-    LinkQuery, Query, QueryKind, SelectQuery, Setter, SetterOp, UnlinkPath, UnlinkQuery,
-    UpdateMutation, UpdateQuery, UpsertQuery,
+    CreateData, CreateLinkPath, CreateNode, CreateQuery, CreateEdge, DeleteQuery, LinkQuery,
+    QueryKind, SelectQuery, Setter, SetterOp, UnlinkPath, UnlinkQuery, UpdateMutation, UpdateQuery,
+    UpsertQuery,
 };
 use yelang_hir::ids::{BodyId, ExprId, HirTyId, PatId, StmtId};
 use yelang_hir::res::Res;
@@ -243,18 +243,10 @@ fn check_query(
         .clone();
     match &query.kind {
         QueryKind::Select(select) => {
-            if select.from.len() != 1 {
-                fcx.report_type_error(
-                    span,
-                    TypeError::Custom(
-                        "multi-root `from` is not yet supported; use a single root".to_string(),
-                    ),
-                );
-                return fcx.mk_error();
-            }
-
             fcx.push_scope();
+            fcx.push_query_scope();
             let result = check_select_query(fcx, span, select);
+            fcx.pop_query_scope();
             fcx.pop_scope();
             result
         }
@@ -302,37 +294,21 @@ fn check_select_query(
     span: yelang_lexer::Span,
     select: &SelectQuery,
 ) -> TyId {
+    // Process each `from` root, introducing its element binder and registering
+    // the root label for `links` anchoring.
     for from in &select.from {
-        let source_ty = check_expr(fcx, from.source);
+        check_from_node(fcx, span, from);
+    }
 
-        let elem_ty = if let Some(elem_ty_id) = from.elem_ty {
-            let annotated = lower_hir_ty_id(fcx, elem_ty_id);
-            let expected_source = fcx.mk_array_ty(annotated);
-            fcx.demand_eq(span, expected_source, source_ty);
-            annotated
-        } else {
-            fcx.expect_array(span, source_ty)
-        };
+    // Process `links` traversals. Each path materializes virtual nested arrays
+    // onto upstream element types.
+    for path in &select.links {
+        check_select_link_path(fcx, span, path);
+    }
 
-        check_pat(fcx, from.binder, elem_ty);
-
-        if let Some(filter) = from.filter {
-            let filter_ty = check_expr(fcx, filter);
-            fcx.demand_eq(span, fcx.mk_bool(), filter_ty);
-        }
-
-        for part in &from.order_by {
-            check_expr(fcx, part.expr);
-        }
-
-        if let Some(range) = &from.range {
-            if let Some(start) = range.start {
-                check_expr(fcx, start);
-            }
-            if let Some(end) = range.end {
-                check_expr(fcx, end);
-            }
-        }
+    // Apply per-root tail modifiers after links have run.
+    for root_mods in &select.post_links_for {
+        check_for_root_modifiers(fcx, span, root_mods);
     }
 
     if let Some(where_clause) = select.where_clause {
@@ -353,7 +329,228 @@ fn check_select_query(
         }
     }
 
+    if let Some(group_by) = &select.group_by {
+        check_group_by(fcx, span, group_by);
+    }
+
     check_expr(fcx, select.projection)
+}
+
+fn check_from_node(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, from: &yelang_hir::hir::query::FromNode) {
+    let source_ty = check_expr(fcx, from.source);
+
+    let elem_ty = if let Some(elem_ty_id) = from.elem_ty {
+        let annotated = lower_hir_ty_id(fcx, elem_ty_id);
+        let expected_source = fcx.mk_array_ty(annotated);
+        fcx.demand_eq(span, expected_source, source_ty);
+        annotated
+    } else {
+        fcx.expect_array(span, source_ty)
+    };
+
+    check_pat(fcx, from.binder, elem_ty);
+
+    // Register the root label so later `links` paths can anchor from it.
+    fcx.register_root_label(from.label, from.binder);
+
+    // Record the first root's element type for `group by` member typing.
+    if let Some(scope) = fcx.query_scopes.last_mut() {
+        if scope.root_element_ty.is_none() {
+            scope.root_element_ty = Some(elem_ty);
+        }
+    }
+
+    if let Some(filter) = from.filter {
+        let filter_ty = check_expr(fcx, filter);
+        fcx.demand_eq(span, fcx.mk_bool(), filter_ty);
+    }
+
+    for part in &from.order_by {
+        check_expr(fcx, part.expr);
+    }
+
+    if let Some(range) = &from.range {
+        if let Some(start) = range.start {
+            check_expr(fcx, start);
+        }
+        if let Some(end) = range.end {
+            check_expr(fcx, end);
+        }
+    }
+}
+
+fn check_select_link_path(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    path: &yelang_hir::hir::query::SelectLinkPath,
+) {
+    // Resolve the start label to an existing binder in the query scope.
+    let mut current_binder = match fcx.lookup_label_binder(path.start.var.symbol) {
+        Some(binder) => binder,
+        None => {
+            fcx.report_type_error(
+                span,
+                TypeError::Custom(format!(
+                    "links path starts from unknown label `{}`",
+                    fcx.tcx.resolve_symbol(path.start.var.symbol).unwrap_or("?")
+                )),
+            );
+            return;
+        }
+    };
+
+    check_node_modifiers(fcx, span, &path.start.modifiers);
+
+    for segment in &path.segments {
+        current_binder = check_select_link_segment(fcx, span, current_binder, segment);
+    }
+}
+
+fn check_select_link_segment(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    upstream_binder: PatId,
+    segment: &yelang_hir::hir::query::SelectLinkSegment,
+) -> PatId {
+    let upstream_ty = fcx
+        .lookup_local(upstream_binder)
+        .unwrap_or_else(|| fcx.mk_error());
+    let upstream_elem_ty = resolve_to_element_type(fcx, upstream_ty);
+
+    // Edge element type: explicit annotation if given, otherwise a fresh variable.
+    let edge_elem_ty = segment
+        .edge
+        .elem_ty
+        .map(|t| lower_hir_ty_id(fcx, t))
+        .unwrap_or_else(|| fcx.new_ty_var());
+    let edge_array_ty = fcx.mk_array_ty(edge_elem_ty);
+
+    // Register the virtual field on the upstream binder/element type.
+    fcx.register_binder_virtual_field(upstream_binder, segment.edge.var.symbol, edge_array_ty);
+    fcx.register_type_virtual_field(upstream_elem_ty, segment.edge.var.symbol, edge_array_ty);
+
+    check_pat(fcx, segment.edge.binder, edge_elem_ty);
+    check_node_modifiers(fcx, span, &segment.edge.modifiers);
+
+    // The edge label names the edge collection associated with the upstream
+    // element; register it so later sibling paths can anchor from it.
+    fcx.register_root_label(segment.edge.var.symbol, segment.edge.binder);
+
+    // Target element type: explicit annotation if given, otherwise a fresh variable.
+    let target_elem_ty = segment
+        .target
+        .elem_ty
+        .map(|t| lower_hir_ty_id(fcx, t))
+        .unwrap_or_else(|| fcx.new_ty_var());
+    let target_array_ty = fcx.mk_array_ty(target_elem_ty);
+
+    // Register the virtual field on the edge element type.
+    fcx.register_binder_virtual_field(segment.edge.binder, segment.target.var.symbol, target_array_ty);
+    fcx.register_type_virtual_field(edge_elem_ty, segment.target.var.symbol, target_array_ty);
+
+    check_pat(fcx, segment.target.binder, target_elem_ty);
+    check_node_modifiers(fcx, span, &segment.target.modifiers);
+
+    // The target label names the target-node collection; register it for anchoring.
+    fcx.register_root_label(segment.target.var.symbol, segment.target.binder);
+
+    // The target binder becomes the upstream binder for the next segment.
+    segment.target.binder
+}
+
+/// If `ty` is an array/slice, return its element type; otherwise return the
+/// type itself (it is already an element type).
+fn resolve_to_element_type(fcx: &mut FnCtxt<'_>, ty: TyId) -> TyId {
+    let interner = fcx.tcx.interner();
+    match interner.ty(ty) {
+        Ty::Adt(adt, args) => {
+            if fcx.tcx.lang_item(yelang_resolve::lang_items::LangItem::Array)
+                == Some(adt.def_id)
+            {
+                args.iter()
+                    .next()
+                    .map(|a| a.expect_type())
+                    .unwrap_or_else(|| fcx.mk_error())
+            } else {
+                ty
+            }
+        }
+        Ty::Slice(elem) | Ty::Array(elem, _) => elem,
+        _ => ty,
+    }
+}
+
+fn check_for_root_modifiers(
+    fcx: &mut FnCtxt<'_>,
+    span: yelang_lexer::Span,
+    root_mods: &yelang_hir::hir::query::ForRootModifiers,
+) {
+    if fcx.lookup_label_binder(root_mods.target.symbol).is_none() {
+        fcx.report_type_error(
+            span,
+            TypeError::Custom(format!(
+                "`for` block references unknown root label `{}`",
+                fcx.tcx.resolve_symbol(root_mods.target.symbol).unwrap_or("?")
+            )),
+        );
+        return;
+    }
+
+    // The modifiers apply to the root collection; the filter may reference the
+    // element binder.
+    check_node_modifiers(fcx, span, &root_mods.modifiers);
+}
+
+fn check_group_by(
+    fcx: &mut FnCtxt<'_>,
+    _span: yelang_lexer::Span,
+    group_by: &yelang_hir::hir::query::GroupByClause,
+) {
+    let mut key_fields = Vec::new();
+    for key in &group_by.keys {
+        let ty = check_expr(fcx, key.expr);
+        let name = key.name.map(|n| n.symbol).unwrap_or_else(|| {
+            // If no explicit name is given, use a fresh anonymous symbol.
+            yelang_interner::Symbol::from(0u32)
+        });
+        key_fields.push(yelang_ty::ty::AnonField { name, ty });
+    }
+
+    let key_fields = fcx.tcx.interner().mk_anon_struct_fields(&key_fields);
+    let key_struct = yelang_ty::ty::AnonStructDef { fields: key_fields };
+    let key_struct_ty = fcx.mk_ty(Ty::AnonStruct(key_struct));
+
+    let members_ty = fcx
+        .query_scopes
+        .last()
+        .and_then(|scope| scope.root_element_ty)
+        .unwrap_or_else(|| fcx.new_ty_var());
+    let members_array_ty = fcx.mk_array_ty(members_ty);
+
+    let key_symbol = fcx
+        .tcx
+        .intern_symbol("key")
+        .unwrap_or_else(|| yelang_interner::Symbol::from(1u32));
+    let members_symbol = fcx
+        .tcx
+        .intern_symbol("members")
+        .unwrap_or_else(|| yelang_interner::Symbol::from(2u32));
+    let group_fields = fcx.tcx.interner().mk_anon_struct_fields(&[
+        yelang_ty::ty::AnonField {
+            name: key_symbol,
+            ty: key_struct_ty,
+        },
+        yelang_ty::ty::AnonField {
+            name: members_symbol,
+            ty: members_array_ty,
+        },
+    ]);
+    let group_element_ty = fcx.mk_ty(Ty::AnonStruct(yelang_ty::ty::AnonStructDef {
+        fields: group_fields,
+    }));
+    let groups_array_ty = fcx.mk_array_ty(group_element_ty);
+
+    check_pat(fcx, group_by.into_binder, groups_array_ty);
 }
 
 fn check_create_query(
@@ -572,7 +769,7 @@ fn check_create_node(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, node: &Crea
     check_node_modifiers(fcx, span, &node.modifiers);
 }
 
-fn check_create_edge(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, edge: &CreateEdge) {
+fn check_create_edge(fcx: &mut FnCtxt<'_>, _span: yelang_lexer::Span, edge: &CreateEdge) {
     let table_ty = lower_hir_ty_id(fcx, edge.table);
     check_pat(fcx, edge.binder, table_ty);
     for (_, expr) in &edge.data {
@@ -1008,9 +1205,10 @@ fn check_method_call(
 fn check_field(fcx: &mut FnCtxt<'_>, expr: ExprId, field: &yelang_ast::Ident) -> TyId {
     let expr_span = expr_span(fcx, expr);
     let expr_ty = check_expr(fcx, expr);
-    let steps = crate::autoderef::probe_deref_steps(fcx, expr_ty);
 
-    for (probe_ty, adjustments) in steps {
+    // First try real fields, following deref chains.
+    let steps = crate::autoderef::probe_deref_steps(fcx, expr_ty);
+    for (probe_ty, adjustments) in steps.clone() {
         if let Some(field_ty) = lookup_field(fcx, probe_ty, field) {
             // Commit to this deref chain. Built-in deref steps need no extra
             // work; user-defined `Deref` steps must be proven as obligations.
@@ -1026,6 +1224,13 @@ fn check_field(fcx: &mut FnCtxt<'_>, expr: ExprId, field: &yelang_ast::Ident) ->
         }
     }
 
+    // Fall back to query virtual fields. Virtual fields are attached to the
+    // element type of a query binder, so we do not apply deref adjustments.
+    let resolved_ty = fcx.resolve_ty(expr_ty);
+    if let Some(field_ty) = lookup_virtual_field(fcx, expr, resolved_ty, field) {
+        return field_ty;
+    }
+
     fcx.report_type_error(
         expr_span,
         TypeError::NoSuchField {
@@ -1034,6 +1239,28 @@ fn check_field(fcx: &mut FnCtxt<'_>, expr: ExprId, field: &yelang_ast::Ident) ->
         },
     );
     fcx.mk_error()
+}
+
+/// Look up a virtual field introduced by a `links` traversal.
+fn lookup_virtual_field(
+    fcx: &FnCtxt<'_>,
+    expr: ExprId,
+    elem_ty: TyId,
+    field: &yelang_ast::Ident,
+) -> Option<TyId> {
+    let hir = fcx.tcx.crate_hir();
+    let expr_node = hir.expr(expr)?;
+    if let Expr::Path { res: Res::Local { pat_id } } = expr_node {
+        fcx.lookup_virtual_field(*pat_id, elem_ty, field.symbol)
+    } else {
+        // For non-local bases, only type-level virtual fields apply.
+        fcx.query_scopes.iter().rev().find_map(|scope| {
+            scope
+                .type_virtual_fields
+                .get(&elem_ty)
+                .and_then(|fields| fields.get(&field.symbol).copied())
+        })
+    }
 }
 
 /// Look up a named field in a type (without considering deref).

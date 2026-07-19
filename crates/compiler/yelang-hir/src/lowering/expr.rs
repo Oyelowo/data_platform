@@ -13,9 +13,11 @@ use crate::hir::expr::{ComprehensionKind, ComprehensionVar, DocumentProjection, 
 use crate::hir::query::{
     ConflictAction as HirConflictAction, ConflictClause as HirConflictClause, CreateData,
     CreateEdge as HirCreateEdge, CreateLinkPath as HirCreateLinkPath, CreateNode as HirCreateNode,
-    CreateQuery as HirCreateQuery, DeleteQuery as HirDeleteQuery, FromNode, LinkEdge as HirLinkEdge,
-    LinkNode as HirLinkNode, LinkQuery as HirLinkQuery, NodeModifiers, OrderByPart, Query,
-    QueryKind, QueryRange, SelectQuery, Setter as HirSetter, SetterOp, UnlinkPath as HirUnlinkPath,
+    CreateQuery as HirCreateQuery, DeleteQuery as HirDeleteQuery, ForRootModifiers, FromNode,
+    GroupByClause, GroupByKey, LinkEdge as HirLinkEdge, LinkNode as HirLinkNode,
+    LinkQuery as HirLinkQuery, LinksMatchKind, NodeModifiers, OrderByPart, Query, QueryKind,
+    QueryRange, SelectLinkEdge, SelectLinkNode, SelectLinkPath, SelectLinkSegment, SelectQuery,
+    Setter as HirSetter, SetterOp, UnlinkPath as HirUnlinkPath,
     UnlinkPathSegment as HirUnlinkPathSegment, UnlinkQuery as HirUnlinkQuery, UpdateMutation,
     UpdateQuery as HirUpdateQuery, UpsertQuery as HirUpsertQuery,
 };
@@ -117,13 +119,14 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             );
         }
         AstExprKind::ArrayAccess(access) => {
-            if let Some((source, binder, selector)) = try_extract_selector(access) {
+            if let Some((source, binder, flatten, filter)) = try_extract_selector(access) {
                 return lower_selector(
                     ctx,
                     span,
                     source,
                     binder,
-                    selector,
+                    flatten,
+                    filter,
                     |ctx, binder_pat| {
                         ctx.crate_hir.alloc_expr(
                             Expr::Path {
@@ -251,27 +254,38 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
             Expr::Object { fields }
         }
         AstExprKind::DocumentAccess(doc) => {
-            let projection = doc
-                .fields()
-                .iter()
-                .map(|f| match f {
-                    yelang_ast::DocumentField::KeyOnly(ko) => DocumentProjection::Field {
-                        name: ko.key,
-                        value: None,
-                    },
-                    yelang_ast::DocumentField::KeyVal(kv) => DocumentProjection::Field {
-                        name: kv.key,
-                        value: Some(lower_expr(ctx, &kv.value)),
-                    },
-                    yelang_ast::DocumentField::Spread(s) => {
-                        DocumentProjection::Spread(lower_expr(ctx, &s.expr))
-                    }
-                })
-                .collect();
-            Expr::DocumentAccess {
-                base: lower_expr(ctx, doc.base()),
-                projection,
-            }
+            let object = doc.object().clone();
+            return lower_with_selector_base(
+                ctx,
+                span,
+                doc.base(),
+                Box::new(move |ctx, base_id| {
+                    let projection = object
+                        .fields()
+                        .iter()
+                        .map(|f| match f {
+                            yelang_ast::DocumentField::KeyOnly(ko) => DocumentProjection::Field {
+                                name: ko.key,
+                                value: None,
+                            },
+                            yelang_ast::DocumentField::KeyVal(kv) => DocumentProjection::Field {
+                                name: kv.key,
+                                value: Some(lower_expr(ctx, &kv.value)),
+                            },
+                            yelang_ast::DocumentField::Spread(s) => {
+                                DocumentProjection::Spread(lower_expr(ctx, &s.expr))
+                            }
+                        })
+                        .collect();
+                    ctx.crate_hir.alloc_expr(
+                        Expr::DocumentAccess {
+                            base: base_id,
+                            projection,
+                        },
+                        span,
+                    )
+                }),
+            );
         }
         AstExprKind::BindAt(_bind) => {
             ctx.error(LoweringError::UnsupportedAst {
@@ -882,84 +896,30 @@ fn lower_select_query(
     span: Span,
     query: &yelang_ast::query::SelectQ,
 ) -> ExprId {
-    if query.from.len() != 1 {
-        ctx.error(LoweringError::UnsupportedAst {
-            kind: "multi-root `from` in query expressions".to_string(),
-            span,
-        });
+    let from_nodes: Vec<FromNode> = query
+        .from
+        .iter()
+        .map(|from| lower_from_node(ctx, span, from))
+        .collect();
+
+    if from_nodes.iter().any(|n| matches!(ctx.crate_hir.expr(n.source), Some(Expr::Err))) {
+        // An error was already reported by `lower_from_node`.
         return ctx.crate_hir.alloc_expr(Expr::Err, span);
     }
 
-    if !query.links.is_empty() {
-        ctx.error(LoweringError::UnsupportedAst {
-            kind: "`links` clause in query expressions".to_string(),
-            span,
-        });
-        return ctx.crate_hir.alloc_expr(Expr::Err, span);
-    }
+    let links = query
+        .links
+        .iter()
+        .map(|path| lower_select_link_path(ctx, path))
+        .collect();
 
-    if query.group_by.is_some() {
-        ctx.error(LoweringError::UnsupportedAst {
-            kind: "`group by` in query expressions".to_string(),
-            span,
-        });
-        return ctx.crate_hir.alloc_expr(Expr::Err, span);
-    }
+    let post_links_for = query
+        .post_links_for
+        .iter()
+        .map(|for_mods| lower_for_root_modifiers(ctx, for_mods))
+        .collect();
 
-    if !query.post_links_for.is_empty() {
-        ctx.error(LoweringError::UnsupportedAst {
-            kind: "`for <root> { ... }` modifiers in query expressions".to_string(),
-            span,
-        });
-        return ctx.crate_hir.alloc_expr(Expr::Err, span);
-    }
-
-    let from = &query.from[0];
-    let source = match &from.var {
-        Some(ident) => ast_path_expr(*ident),
-        None => {
-            ctx.error(LoweringError::UnsupportedAst {
-                kind: "`from` source without a collection name".to_string(),
-                span,
-            });
-            return ctx.crate_hir.alloc_expr(Expr::Err, span);
-        }
-    };
-
-    let source_id = lower_expr(ctx, &source);
-    let source_id = auto_call_fn_source(ctx, source_id);
-
-    let binder = match from.bind {
-        Some(ident) => ident,
-        None => {
-            ctx.error(LoweringError::UnsupportedAst {
-                kind: "`from` source without an element binder (`@name`)".to_string(),
-                span,
-            });
-            return ctx.crate_hir.alloc_expr(Expr::Err, span);
-        }
-    };
-    let binder_pat = crate::lowering::pat::alloc_binding_pat(ctx, binder);
-
-    let elem_ty = from.ty.as_ref().map(|ty| crate::lowering::ty::lower_ty(ctx, ty));
-
-    let filter = from.modifiers.filter.as_ref().map(|e| lower_expr(ctx, e));
-    let mut order_by = Vec::new();
-    if let Some(parts) = &from.modifiers.order {
-        for part in parts {
-            order_by.push(lower_order_by_part(ctx, part));
-        }
-    }
-    let range = from.modifiers.range.as_ref().map(|r| lower_query_range(ctx, r));
-
-    let from_node = FromNode {
-        source: source_id,
-        binder: binder_pat,
-        elem_ty,
-        filter,
-        order_by,
-        range,
-    };
+    let group_by = query.group_by.as_ref().map(|gb| lower_group_by_clause(ctx, gb));
 
     let where_clause = query.where_clause.as_ref().map(|e| lower_expr(ctx, e));
     let mut order_by = Vec::new();
@@ -974,8 +934,15 @@ fn lower_select_query(
 
     let select = SelectQuery {
         projection,
-        from: vec![from_node],
+        from: from_nodes,
+        links_match_kind: match query.links_match_kind {
+            yelang_ast::query::LinksMatchKind::Optional => LinksMatchKind::Optional,
+            yelang_ast::query::LinksMatchKind::Required => LinksMatchKind::Required,
+        },
+        links,
+        post_links_for,
         where_clause,
+        group_by,
         order_by,
         range,
     };
@@ -984,6 +951,182 @@ fn lower_select_query(
         .crate_hir
         .alloc_query(Query { kind: QueryKind::Select(select) }, span);
     ctx.crate_hir.alloc_expr(Expr::Query(query_id), span)
+}
+
+fn lower_from_node(ctx: &mut LoweringContext, span: Span, from: &yelang_ast::query::FromNode) -> FromNode {
+    let source = match &from.var {
+        Some(ident) => ast_path_expr(*ident),
+        None => {
+            ctx.error(LoweringError::UnsupportedAst {
+                kind: "`from` source without a collection name".to_string(),
+                span,
+            });
+            return FromNode {
+                source: ctx.crate_hir.alloc_expr(Expr::Err, span),
+                label: yelang_interner::Symbol::from(0u32),
+                binder: ctx.crate_hir.alloc_pat(crate::hir::pat::Pat::Err, span),
+                elem_ty: None,
+                filter: None,
+                order_by: vec![],
+                range: None,
+            };
+        }
+    };
+
+    let source_id = lower_expr(ctx, &source);
+    let source_id = auto_call_fn_source(ctx, source_id);
+
+    let binder = match from.bind {
+        Some(ident) => ident,
+        None => {
+            ctx.error(LoweringError::UnsupportedAst {
+                kind: "`from` source without an element binder (`@name`)".to_string(),
+                span,
+            });
+            return FromNode {
+                source: source_id,
+                label: yelang_interner::Symbol::from(0u32),
+                binder: ctx.crate_hir.alloc_pat(crate::hir::pat::Pat::Err, span),
+                elem_ty: None,
+                filter: None,
+                order_by: vec![],
+                range: None,
+            };
+        }
+    };
+    let binder_pat = crate::lowering::pat::alloc_binding_pat(ctx, binder);
+
+    let elem_ty = from.ty.as_ref().map(|ty| crate::lowering::ty::lower_ty(ctx, ty));
+    let filter = from.modifiers.filter.as_ref().map(|e| lower_expr(ctx, e));
+    let mut order_by = Vec::new();
+    if let Some(parts) = &from.modifiers.order {
+        for part in parts {
+            order_by.push(lower_order_by_part(ctx, part));
+        }
+    }
+    let range = from.modifiers.range.as_ref().map(|r| lower_query_range(ctx, r));
+
+    FromNode {
+        source: source_id,
+        label: from.var.unwrap_or(binder).symbol,
+        binder: binder_pat,
+        elem_ty,
+        filter,
+        order_by,
+        range,
+    }
+}
+
+fn lower_select_link_path(
+    ctx: &mut LoweringContext,
+    path: &yelang_ast::query::LinkPath,
+) -> SelectLinkPath {
+    let start = SelectLinkNode {
+        var: path.start.var.unwrap_or_else(|| {
+            ctx.error(LoweringError::UnsupportedAst {
+                kind: "`links` path start node without a label".to_string(),
+                span: Span::default(),
+            });
+            yelang_ast::Ident::new(yelang_interner::Symbol::from(0), Span::default())
+        }),
+        binder: path
+            .start
+            .bind
+            .map(|b| crate::lowering::pat::alloc_binding_pat(ctx, b))
+            .unwrap_or_else(|| ctx.crate_hir.alloc_pat(crate::hir::pat::Pat::Err, Span::default())),
+        elem_ty: path.start.ty.as_ref().map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
+        modifiers: lower_node_modifiers(ctx, &path.start.modifiers),
+    };
+
+    let segments = path
+        .segments
+        .iter()
+        .map(|seg| {
+            let edge = SelectLinkEdge {
+                var: seg.edge.var.unwrap_or_else(|| {
+                    ctx.error(LoweringError::UnsupportedAst {
+                        kind: "`links` edge without a label".to_string(),
+                        span: Span::default(),
+                    });
+                    yelang_ast::Ident::new(yelang_interner::Symbol::from(0), Span::default())
+                }),
+                binder: seg
+                    .edge
+                    .bind
+                    .map(|b| crate::lowering::pat::alloc_binding_pat(ctx, b))
+                    .unwrap_or_else(|| {
+                        ctx.crate_hir.alloc_pat(crate::hir::pat::Pat::Err, Span::default())
+                    }),
+                elem_ty: seg.edge.ty.as_ref().map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
+                hops: seg.edge.hops.as_ref().map(|h| lower_hop_range(ctx, h)),
+                modifiers: lower_node_modifiers(ctx, &seg.edge.modifiers),
+                direction: seg.edge.direction,
+            };
+            let target = SelectLinkNode {
+                var: seg.target.var.unwrap_or_else(|| {
+                    ctx.error(LoweringError::UnsupportedAst {
+                        kind: "`links` target node without a label".to_string(),
+                        span: Span::default(),
+                    });
+                    yelang_ast::Ident::new(yelang_interner::Symbol::from(0), Span::default())
+                }),
+                binder: seg
+                    .target
+                    .bind
+                    .map(|b| crate::lowering::pat::alloc_binding_pat(ctx, b))
+                    .unwrap_or_else(|| {
+                        ctx.crate_hir.alloc_pat(crate::hir::pat::Pat::Err, Span::default())
+                    }),
+                elem_ty: seg.target.ty.as_ref().map(|ty| crate::lowering::ty::lower_ty(ctx, ty)),
+                modifiers: lower_node_modifiers(ctx, &seg.target.modifiers),
+            };
+            SelectLinkSegment {
+                direction: seg.edge.direction,
+                edge,
+                target,
+            }
+        })
+        .collect();
+
+    SelectLinkPath { start, segments }
+}
+
+fn lower_hop_range(ctx: &mut LoweringContext, range: &yelang_ast::query::HopRange) -> QueryRange {
+    QueryRange {
+        start: range.start.as_ref().map(|e| lower_expr(ctx, e)),
+        end: range.end.as_ref().map(|e| lower_expr(ctx, e)),
+        inclusive: range.inclusive,
+    }
+}
+
+fn lower_for_root_modifiers(
+    ctx: &mut LoweringContext,
+    for_mods: &yelang_ast::query::ForRootModifiers,
+) -> ForRootModifiers {
+    ForRootModifiers {
+        target: for_mods.target,
+        modifiers: lower_node_modifiers(ctx, &for_mods.modifiers),
+    }
+}
+
+fn lower_group_by_clause(
+    ctx: &mut LoweringContext,
+    clause: &yelang_ast::query::GroupByClause,
+) -> GroupByClause {
+    let keys = clause
+        .keys
+        .iter()
+        .map(|key| GroupByKey {
+            name: key.name,
+            expr: lower_expr(ctx, &key.expr),
+        })
+        .collect();
+    let into_binder = crate::lowering::pat::alloc_binding_pat(ctx, clause.into);
+    GroupByClause {
+        keys,
+        into: clause.into,
+        into_binder,
+    }
 }
 
 fn lower_query(
@@ -1008,7 +1151,7 @@ fn lower_query(
 
 fn lower_create_query(
     ctx: &mut LoweringContext,
-    span: Span,
+    _span: Span,
     create: &yelang_ast::query::CreateQ,
 ) -> Query {
     ctx.push_scope();
@@ -1396,21 +1539,43 @@ fn lower_query_range(ctx: &mut LoweringContext, range: &yelang_ast::query::Range
     }
 }
 
-/// If `expr` is a binder-bearing selector (`base@binder[*]` or
-/// `base@binder[where ...]`), return the source expression, the binder
-/// identifier, and the selector index.
+/// Extract a selector chain starting with a `base@binder` binding.
+///
+/// Handles chained bracket operations on the same binder, e.g.
+/// `base@binder[*]`, `base@binder[where ...]`, or `base@binder[where ...][**]`.
+/// Returns the source expression, the binder identifier, the total flatten
+/// depth, and an optional filter expression.
 fn try_extract_selector<'a>(
     access: &'a yelang_ast::ArrayAccess,
-) -> Option<(&'a AstExpr, yelang_ast::Ident, &'a yelang_ast::ArrayIndex)> {
+) -> Option<(&'a AstExpr, yelang_ast::Ident, usize, Option<&'a AstExpr>)> {
     if let AstExprKind::BindAt(bind) = &access.base().kind {
         match access.index() {
-            yelang_ast::ArrayIndex::Stars { .. } | yelang_ast::ArrayIndex::Filter(_) => {
-                return Some((bind.base.as_ref(), bind.at, access.index()));
+            yelang_ast::ArrayIndex::Stars { stars } => {
+                return Some((bind.base.as_ref(), bind.at, stars.saturating_sub(1), None));
             }
-            _ => {}
+            yelang_ast::ArrayIndex::Filter(cond) => {
+                return Some((bind.base.as_ref(), bind.at, 0, Some(cond.as_ref())));
+            }
+            _ => return None,
         }
     }
-    None
+
+    // Recurse through chained bracket operations that share the same binder.
+    if let AstExprKind::ArrayAccess(inner_access) = &access.base().kind {
+        let (source, binder, mut flatten, filter) = try_extract_selector(inner_access)?;
+        match access.index() {
+            yelang_ast::ArrayIndex::Stars { stars } => {
+                flatten += stars.saturating_sub(1);
+                Some((source, binder, flatten, filter))
+            }
+            yelang_ast::ArrayIndex::Filter(cond) if filter.is_none() => {
+                Some((source, binder, flatten, Some(cond.as_ref())))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    }
 }
 
 /// Type-erased suffix builder used by [`lower_with_selector_base`] to avoid
@@ -1478,8 +1643,8 @@ fn lower_with_selector_base(
             );
         }
         AstExprKind::ArrayAccess(access) => {
-            if let Some((source, binder, selector)) = try_extract_selector(access) {
-                return lower_selector(ctx, span, source, binder, selector, move |ctx, binder_pat| {
+            if let Some((source, binder, flatten, filter)) = try_extract_selector(access) {
+                return lower_selector(ctx, span, source, binder, flatten, filter, move |ctx, binder_pat| {
                     let binder_ref = ctx.crate_hir.alloc_expr(
                         Expr::Path {
                             res: Res::Local { pat_id: binder_pat },
@@ -1489,6 +1654,41 @@ fn lower_with_selector_base(
                     build_suffix(ctx, binder_ref)
                 });
             }
+        }
+        AstExprKind::DocumentAccess(doc) => {
+            let object = doc.object().clone();
+            return lower_with_selector_base(
+                ctx,
+                span,
+                doc.base(),
+                Box::new(move |ctx, base_id| {
+                    let projection = object
+                        .fields()
+                        .iter()
+                        .map(|f| match f {
+                            yelang_ast::DocumentField::KeyOnly(ko) => DocumentProjection::Field {
+                                name: ko.key,
+                                value: None,
+                            },
+                            yelang_ast::DocumentField::KeyVal(kv) => DocumentProjection::Field {
+                                name: kv.key,
+                                value: Some(lower_expr(ctx, &kv.value)),
+                            },
+                            yelang_ast::DocumentField::Spread(s) => {
+                                DocumentProjection::Spread(lower_expr(ctx, &s.expr))
+                            }
+                        })
+                        .collect();
+                    let doc_id = ctx.crate_hir.alloc_expr(
+                        Expr::DocumentAccess {
+                            base: base_id,
+                            projection,
+                        },
+                        span,
+                    );
+                    build_suffix(ctx, doc_id)
+                }),
+            );
         }
         _ => {}
     }
@@ -1529,13 +1729,15 @@ fn auto_call_fn_source(ctx: &mut LoweringContext, source_id: ExprId) -> ExprId {
     )
 }
 
-/// Lower a single binder-bearing selector into a `Comprehension`.
+/// Lower a binder-bearing selector (possibly with a filter and flatten depth)
+/// into a `Comprehension`.
 fn lower_selector<F>(
     ctx: &mut LoweringContext,
     span: Span,
     source: &AstExpr,
     binder: yelang_ast::Ident,
-    selector: &yelang_ast::ArrayIndex,
+    flatten: usize,
+    filter: Option<&AstExpr>,
     build_suffix: F,
 ) -> ExprId
 where
@@ -1548,21 +1750,7 @@ where
     ctx.push_scope();
     let suffix_id = build_suffix(ctx, binder_pat);
 
-    let (condition, flatten) = match selector {
-        yelang_ast::ArrayIndex::Stars { stars } => (None, stars.saturating_sub(1)),
-        yelang_ast::ArrayIndex::Filter(cond) => {
-            let cond_id = lower_expr(ctx, cond);
-            (Some(cond_id), 0)
-        }
-        _ => {
-            ctx.error(LoweringError::UnsupportedAst {
-                kind: "only `[*]`, `[**]`, and `[where ...]` selectors are lowered".to_string(),
-                span,
-            });
-            ctx.pop_scope();
-            return ctx.crate_hir.alloc_expr(Expr::Err, span);
-        }
-    };
+    let condition = filter.map(|cond| lower_expr(ctx, cond));
     ctx.pop_scope();
 
     let kind = Expr::Comprehension {

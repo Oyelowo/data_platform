@@ -792,3 +792,274 @@ fn main() -> i32 {
     let (_tcx, diagnostics) = type_check_src(src);
     assert_error_contains(&diagnostics, "type mismatch");
 }
+
+// -----------------------------------------------------------------------------
+// `select` links traversal and virtual nested fields
+// -----------------------------------------------------------------------------
+
+#[test]
+fn select_links_single_hop_forward() {
+    let src = r#"
+struct User { id: i32 }
+struct Writes { date: i32 }
+struct Book { title: str }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, titles: u.writes@w[*].books@b[**].title }
+    from users@u:User
+    links (users)->[writes@w:Writes]->(books@b:Book)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links single-hop forward");
+}
+
+#[test]
+fn select_links_multi_hop() {
+    let src = r#"
+struct User { id: i32 }
+struct Writes { date: i32 }
+struct Book { id: i32 }
+struct Cites { score: i32 }
+struct Cited { title: str }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, cited: u.writes@w[*].books@b[**].cites@c[**].cited@cb[**].title }
+    from users@u:User
+    links (users)->[writes@w:Writes]->(books@b:Book)->[cites@c:Cites]->(cited@cb:Cited)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links multi-hop");
+}
+
+#[test]
+fn select_links_continuation_from_intermediate() {
+    let src = r#"
+struct User { id: i32 }
+struct Likes { since: i32 }
+struct Food { id: i32 }
+struct EatenBy { when: i32 }
+struct OtherUser { name: str }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, names: u.likes@l[*].foods@f[**].eaten_by@eb[**].other_users@ou[**].name }
+    from users@u:User
+    links
+        (users)->[likes@l:Likes]->(foods@f:Food),
+        (foods)<-[eaten_by@eb:EatenBy]<-(other_users@ou:OtherUser)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links continuation");
+}
+
+#[test]
+fn select_links_backward_direction() {
+    let src = r#"
+struct Book { id: i32 }
+struct Writes { date: i32 }
+struct User { name: str }
+fn main() -> _ {
+    select books@b[*].{ id: b.id, authors: b.written_by@w[*].users@u[**].name }
+    from books@b:Book
+    links (books)<-[written_by@w:Writes]<-(users@u:User)
+}
+fn books() -> [Book] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links backward");
+}
+
+#[test]
+fn select_links_bidirectional() {
+    let src = r#"
+struct User { id: i32 }
+struct Friends { since: i32 }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, pal_ids: u.friends@f[*].pals@p[**].id }
+    from users@u:User
+    links (users)<->[friends@f:Friends]<->(pals@p:User)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links bidirectional");
+}
+
+#[test]
+fn select_links_with_filters() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+struct Writes { date: i32 }
+struct Book { title: str, year: i32 }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, titles: u.writes@w[where w.date > 2020].books@b[where b.year > 2000][**].title }
+    from users@u:User
+    links (users where u.age > 18)->[writes@w:Writes]->(books@b:Book)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links filters");
+}
+
+#[test]
+fn select_links_required_match_syntax() {
+    let src = r#"
+struct User { id: i32 }
+struct Writes { date: i32 }
+struct Book { title: str }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, titles: u.writes@w[*].books@b[**].title }
+    from users@u:User
+    links inner (users)->[writes@w:Writes]->(books@b:Book)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links required match");
+}
+
+#[test]
+fn select_links_unknown_anchor_is_reported() {
+    let src = r#"
+struct User { id: i32 }
+struct Writes { date: i32 }
+struct Book { title: str }
+fn main() -> _ {
+    select 1
+    from users@u:User
+    links (books)->[writes@w:Writes]->(books@b:Book)
+}
+fn users() -> [User] { [] }
+fn books() -> [Book] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "unknown label");
+}
+
+// -----------------------------------------------------------------------------
+// Multi-root `from` and per-root `for <root> { ... }` modifiers
+// -----------------------------------------------------------------------------
+
+#[test]
+fn select_multi_root_with_for_blocks() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+struct Book { id: i32, genre: str }
+fn main() -> _ {
+    select { users: users@u[*].id, books: books@b[*].id }
+    from users@u:User, books@b:Book
+    for users { where u.age > 18 order by u.id asc range ..10 }
+    for books { where b.genre == 'Tech' order by b.id desc range ..5 }
+}
+fn users() -> [User] { [] }
+fn books() -> [Book] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select multi-root for blocks");
+}
+
+#[test]
+fn select_multi_root_unknown_for_target_is_reported() {
+    let src = r#"
+struct User { id: i32 }
+struct Book { id: i32 }
+fn main() -> _ {
+    select { users: users@u[*].id, books: books@b[*].id }
+    from users@u:User, books@b:Book
+    for items { where u.id > 0 }
+}
+fn users() -> [User] { [] }
+fn books() -> [Book] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_error_contains(&diagnostics, "unknown root label");
+}
+
+// -----------------------------------------------------------------------------
+// `group by`
+// -----------------------------------------------------------------------------
+
+#[test]
+fn select_group_by_single_key() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> _ {
+    select groups@g[*].key.age
+    from users@u:User
+    group by { age: u.age } into groups
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select group by single key");
+}
+
+#[test]
+fn select_group_by_composite_keys() {
+    let src = r#"
+struct User { id: i32, age: i32, city: str }
+fn main() -> _ {
+    select groups@g[*].{ age: g.key.age, city: g.key.city }
+    from users@u:User
+    group by { age: u.age, city: u.city } into groups
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select group by composite keys");
+}
+
+#[test]
+fn select_group_by_with_links() {
+    let src = r#"
+struct User { id: i32 }
+struct Writes { date: i32 }
+struct Book { genre: str }
+fn main() -> _ {
+    select groups@g[*].key.genre
+    from users@u:User
+    links (users)->[writes@w:Writes]->(books@b:Book)
+    group by { genre: u.writes@w[*].books@b[**].genre } into groups
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select group by with links");
+}
+
+// -----------------------------------------------------------------------------
+// Return-type inference for query expressions
+// -----------------------------------------------------------------------------
+
+#[test]
+fn select_query_return_type_inferred() {
+    let src = r#"
+struct User { id: i32, age: i32 }
+fn main() -> _ {
+    select users@u[*].id from users@u:User
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select query inferred return");
+}
+
+#[test]
+fn select_links_query_return_type_inferred() {
+    let src = r#"
+struct User { id: i32 }
+struct Writes { date: i32 }
+struct Book { title: str }
+fn main() -> _ {
+    select users@u[*].{ id: u.id, titles: u.writes@w[*].books@b[**].title }
+    from users@u:User
+    links (users)->[writes@w:Writes]->(books@b:Book)
+}
+fn users() -> [User] { [] }
+"#;
+    let (_tcx, diagnostics) = type_check_src(src);
+    assert_no_errors_named(&diagnostics, "select links inferred return");
+}

@@ -8,6 +8,7 @@ use yelang_arena::{DefId, FxHashMap};
 use yelang_ast::Label;
 use yelang_hir::Crate as HirCrate;
 use yelang_hir::ids::{ExprId, PatId};
+use yelang_interner::Symbol;
 use yelang_infer::error::TypeError;
 use yelang_lexer::Span;
 use yelang_ty::canonical::{CanonicalResponse, CanonicalVarValue};
@@ -65,6 +66,28 @@ pub struct UnprovenObligation {
     pub status: ObligationStatus,
 }
 
+/// Scope state for a single query expression.
+///
+/// Tracks root labels, the binders they introduce, and virtual nested fields
+/// created by `links` traversals. Virtual fields can be attached either to a
+/// specific binder (used while the element is still an inference variable) or
+/// to a resolved element type (used once the element type is known).
+#[derive(Debug, Clone, Default)]
+pub struct QueryScope {
+    /// Maps a root/traversal label (e.g. `users` in `from users@u:User`) to the
+    /// element binder introduced for that root.
+    pub label_to_binder: FxHashMap<Symbol, PatId>,
+    /// Virtual fields attached to a binder. Used when the binder's element type
+    /// is not yet known or when the field should shadow any type-level field.
+    pub binder_virtual_fields: FxHashMap<PatId, FxHashMap<Symbol, TyId>>,
+    /// Virtual fields attached to an element type. This is the normal case once
+    /// a link traversal has established the element type of an upstream binder.
+    pub type_virtual_fields: FxHashMap<TyId, FxHashMap<Symbol, TyId>>,
+    /// Element type of the first `from` root. Used to build the `members` field
+    /// of a `group by` result.
+    pub root_element_ty: Option<TyId>,
+}
+
 /// The function body type-checking context.
 pub struct FnCtxt<'a> {
     /// The global type context: interner, item tables, and HIR reference.
@@ -90,6 +113,8 @@ pub struct FnCtxt<'a> {
     pub obligations: Vec<Predicate>,
     /// Type errors discovered while checking this body.
     pub errors: Vec<(Span, TypeError)>,
+    /// Stack of active query scopes. Only the topmost scope is active.
+    pub query_scopes: Vec<QueryScope>,
 }
 
 impl<'a> FnCtxt<'a> {
@@ -106,6 +131,7 @@ impl<'a> FnCtxt<'a> {
             param_env: tcx.param_env(def_id),
             obligations: Vec::new(),
             errors: Vec::new(),
+            query_scopes: Vec::new(),
         }
     }
 
@@ -611,6 +637,72 @@ impl<'a> FnCtxt<'a> {
             }
         }
         None
+    }
+
+    // -----------------------------------------------------------------------
+    // Query scope management
+    // -----------------------------------------------------------------------
+
+    pub fn push_query_scope(&mut self) {
+        self.query_scopes.push(QueryScope::default());
+    }
+
+    pub fn pop_query_scope(&mut self) {
+        self.query_scopes.pop();
+    }
+
+    /// Register a root label and the element binder it introduces.
+    pub fn register_root_label(&mut self, label: Symbol, binder: PatId) {
+        if let Some(scope) = self.query_scopes.last_mut() {
+            scope.label_to_binder.insert(label, binder);
+        }
+    }
+
+    /// Look up the element binder for a root/traversal label in the current
+    /// query scope.
+    pub fn lookup_label_binder(&self, label: Symbol) -> Option<PatId> {
+        self.query_scopes
+            .last()
+            .and_then(|scope| scope.label_to_binder.get(&label).copied())
+    }
+
+    /// Register a virtual field on a binder. Used when the binder's element
+    /// type is not yet known.
+    pub fn register_binder_virtual_field(&mut self, binder: PatId, field: Symbol, ty: TyId) {
+        if let Some(scope) = self.query_scopes.last_mut() {
+            scope
+                .binder_virtual_fields
+                .entry(binder)
+                .or_default()
+                .insert(field, ty);
+        }
+    }
+
+    /// Register a virtual field on an element type.
+    pub fn register_type_virtual_field(&mut self, elem_ty: TyId, field: Symbol, ty: TyId) {
+        if let Some(scope) = self.query_scopes.last_mut() {
+            scope
+                .type_virtual_fields
+                .entry(elem_ty)
+                .or_default()
+            .insert(field, ty);
+        }
+    }
+
+    /// Look up a virtual field on a binder or its element type.
+    pub fn lookup_virtual_field(&self, binder: PatId, elem_ty: TyId, field: Symbol) -> Option<TyId> {
+        self.query_scopes.iter().rev().find_map(|scope| {
+            scope
+                .binder_virtual_fields
+                .get(&binder)
+                .and_then(|fields| fields.get(&field).copied())
+                .or_else(|| {
+                    scope
+                        .type_virtual_fields
+                        .get(&elem_ty)
+                        .and_then(|fields| fields.get(&field).copied())
+                })
+        })
     }
 
     // -----------------------------------------------------------------------

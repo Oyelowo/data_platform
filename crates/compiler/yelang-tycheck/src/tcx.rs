@@ -103,6 +103,11 @@ impl TyCtxt {
         self.string_interner.as_ref().map(|i| i.resolve(&symbol))
     }
 
+    /// Intern a string and return its `Symbol` if a string interner was supplied.
+    pub fn intern_symbol(&self, s: &str) -> Option<yelang_interner::Symbol> {
+        self.string_interner.as_ref().map(|i| i.intern(s))
+    }
+
     /// Set the string interner used for diagnostic symbol resolution.
     pub fn set_string_interner(&mut self, string_interner: StringInterner) {
         self.string_interner = Some(string_interner);
