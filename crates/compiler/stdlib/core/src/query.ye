@@ -80,14 +80,13 @@ trait Queryable<T> {
 
 // Placeholder impl for the built-in `Array<T>` type.  The QIR lowering intercepts
 // calls to these methods and emits logical operators; the bodies are never
-// executed as written.  The bodies are kept type-correct so that closure return
-// types and generic parameters can be inferred.
+// executed as written.
 impl<T> Queryable<T> for Array<T> {
     fn filter(self, pred: fn(T) -> bool) -> Self { self }
-    fn map<U>(self, f: fn(T) -> U) -> Queryable<U> { loop {} }
-    fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U> { loop {} }
-    fn order_by<K>(self, key: fn(T) -> K) -> Seq<T> { loop {} }
-    fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>> { loop {} }
+    fn map<U>(self, f: fn(T) -> U) -> Queryable<U> { self }
+    fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U> { self }
+    fn order_by<K>(self, key: fn(T) -> K) -> Seq<T> { Seq { inner: self } }
+    fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>> { self }
     fn distinct(self) -> Self { self }
     fn take(self, n: usize) -> Self { self }
     fn skip(self, n: usize) -> Self { self }
@@ -107,5 +106,5 @@ impl<T> Queryable<T> for Array<T> {
 // requires a `Seq` input.
 struct Seq<T> { inner: Queryable<T> }
 
-// Result type of `group_by`. Each row is `{ key: K, members: Queryable<T> }`.
-struct Group<K, T> { key: K, members: Queryable<T> }
+// Result type of `group_by`. Each row is `{ key: K, items: Queryable<T> }`.
+struct Group<K, T> { key: K, items: Queryable<T> }

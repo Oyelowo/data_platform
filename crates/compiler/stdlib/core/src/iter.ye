@@ -12,15 +12,22 @@ trait Iterator<T> {
     // State-passing next. Returns (new iterator state, element) or None.
     fn next(self) -> Option<(Self, T)>;
 
-    // Folds are the only built-in combinator on the low-level Iterator trait.
-    // Lazy transformations (map, filter, take, skip) live on `Queryable` so the
-    // query optimizer can rewrite pipelines into physical plans. Keeping those
-    // names off `Iterator` avoids method-resolution ambiguity between
-    // `Iterator::map/filter` and `Queryable::map/filter` for `Array<T>`.
+    // Default combinators are ordinary default methods.
+    fn map<U>(self, f: fn(T) -> U) -> MapIter<Self, T, U>;
+    fn filter(self, pred: fn(T) -> bool) -> FilterIter<Self, T>;
     fn fold<U>(self, init: U, f: fn(U, T) -> U) -> U;
+    fn take(self, n: usize) -> TakeIter<Self, T>;
+    fn skip(self, n: usize) -> SkipIter<Self, T>;
 }
 
 @lang("into_iterator")
 trait IntoIterator<T> {
     fn into_iter(self) -> Iterator<T>;
 }
+
+// Placeholder iterator adapter types. The compiler does not need to know these
+// exist; they are ordinary stdlib types.
+struct MapIter<I, T, U> { inner: I, f: fn(T) -> U }
+struct FilterIter<I, T> { inner: I, pred: fn(T) -> bool }
+struct TakeIter<I, T> { inner: I, n: usize }
+struct SkipIter<I, T> { inner: I, n: usize }
