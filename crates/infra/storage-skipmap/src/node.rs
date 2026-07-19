@@ -1,9 +1,10 @@
 //! Node layout and low-level helpers for the lock-free skip-map.
 
 use crossbeam_epoch::{Atomic, Guard, Shared};
-use std::sync::atomic::Ordering;
+use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Tag bit used to mark a node as logically deleted.
+/// Tag bit used to mark a node's level-0 next pointer as logically deleted.
 pub const MARK_TAG: usize = 1;
 
 /// A skip-map node.
@@ -15,9 +16,17 @@ pub struct Node<K, V> {
     /// The entry key. `None` only for the sentinel head node.
     pub key: Option<K>,
     /// The entry value. `None` only for the sentinel head node.
-    pub value: Option<V>,
+    ///
+    /// A per-node mutex protects value mutations. The tower of next pointers
+    /// remains lock-free, so structural updates (insert/remove) proceed without
+    /// blocking on sibling nodes.
+    pub value: Option<Mutex<V>>,
     /// Tower of next pointers. Index 0 is the ground-level linked list.
     pub next: Vec<Atomic<Node<K, V>>>,
+    /// Set to `true` once the node has been logically removed. Only the thread
+    /// that flips this flag from `false` to `true` may mark, unlink, and retire
+    /// the node, preventing double-retire races between replace and remove.
+    pub removed: AtomicBool,
 }
 
 impl<K, V> Node<K, V> {
@@ -30,8 +39,9 @@ impl<K, V> Node<K, V> {
         }
         Node {
             key: Some(key),
-            value: Some(value),
+            value: Some(Mutex::new(value)),
             next,
+            removed: AtomicBool::new(false),
         }
     }
 
@@ -46,6 +56,7 @@ impl<K, V> Node<K, V> {
             key: None,
             value: None,
             next,
+            removed: AtomicBool::new(false),
         }
     }
 
@@ -84,10 +95,21 @@ impl<K, V> Node<K, V> {
         self.key.as_ref().expect("head node has no key")
     }
 
-    /// Reference to the value, panicking if this is the head node.
+    /// Lock and return a reference to the value, panicking if this is the head
+    /// node.
     #[inline]
-    pub fn value(&self) -> &V {
-        self.value.as_ref().expect("head node has no value")
+    pub fn value(&self) -> MappedMutexGuard<'_, V> {
+        MutexGuard::map(
+            self.value.as_ref().expect("head node has no value").lock(),
+            |v| v,
+        )
+    }
+
+    /// Atomically swap the value and return the previous value.
+    #[inline]
+    pub fn swap_value(&self, new_value: V) -> V {
+        let mut guard = self.value.as_ref().expect("head node has no value").lock();
+        std::mem::replace(&mut *guard, new_value)
     }
 }
 

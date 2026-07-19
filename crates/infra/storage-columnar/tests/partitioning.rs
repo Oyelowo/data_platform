@@ -11,6 +11,7 @@ fn partitioned_options() -> ColumnarOptions {
         compaction_threshold_bytes: 1024 * 1024 * 1024,
         background_compaction: false,
         sync_on_flush: true,
+        target_file_size: 256 * 1024 * 1024,
     }
 }
 

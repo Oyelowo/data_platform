@@ -600,6 +600,7 @@ mod tests {
         let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, 512, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
+        pool.set_wal(Arc::clone(&wal));
         let value_log = Arc::new(ValueLog::open(dir.path()).unwrap());
 
         let tree = Arc::new(

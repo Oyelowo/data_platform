@@ -15,7 +15,7 @@ use parking_lot::{Mutex, RwLock};
 use storage_traits::{ColumnBatch, ColumnarEngine, Predicate, ScanResult};
 use storage_wal::{Durability, Wal, WalOptions};
 
-use crate::compaction::{self, CompactionInput};
+use crate::compaction::{self, CompactionInput, CompactionWorker};
 use crate::manifest::Manifest;
 use crate::manifest_wal::{self, ManifestRecord};
 use crate::partition::partition_key;
@@ -24,7 +24,7 @@ use crate::reader;
 use crate::schema::TableSchema;
 use crate::snapshot;
 use crate::types::ColumnType;
-use crate::writer;
+use crate::writer::{self, sync_dir};
 use crate::{ColumnarOptions, Error, Result};
 
 const DEFAULT_PARTITION: &str = "__default";
@@ -38,6 +38,11 @@ type PartitionBatch = Vec<(String, Vec<Option<Bytes>>)>;
 /// Arrow/Parquet-backed analytical columnar engine.
 #[derive(Debug)]
 pub struct ColumnarEngineImpl {
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Inner {
     path: PathBuf,
     options: ColumnarOptions,
     ingest_lock: Mutex<()>,
@@ -47,6 +52,7 @@ pub struct ColumnarEngineImpl {
     file_reads: AtomicU64,
     pins: PinSet,
     wal_next_lsn: AtomicU64,
+    compaction_worker: Mutex<Option<CompactionWorker>>,
 }
 
 impl ColumnarEngineImpl {
@@ -67,19 +73,90 @@ impl ColumnarEngineImpl {
         let (manifest, snapshot_lsn, wal_next_lsn) = recover(&path, &wal)?;
         let next_file_id = AtomicU64::new(manifest.files.len() as u64);
 
-        Ok(Self {
-            path,
-            options,
+        let manifest_arc = Arc::new(RwLock::new(Arc::new(manifest)));
+        let engine = Arc::new(Inner {
+            path: path.clone(),
+            options: options.clone(),
             ingest_lock: Mutex::new(()),
-            wal,
-            manifest: Arc::new(RwLock::new(Arc::new(manifest))),
+            wal: wal.clone(),
+            manifest: manifest_arc.clone(),
             next_file_id,
             file_reads: AtomicU64::new(0),
             pins: PinSet::new(),
             wal_next_lsn: AtomicU64::new(wal_next_lsn.max(snapshot_lsn)),
-        })
+            compaction_worker: Mutex::new(None),
+        });
+
+        if options.background_compaction {
+            let engine_ref = engine.clone();
+            let worker = CompactionWorker::spawn(move || engine_ref.force_compaction(None));
+            *engine.compaction_worker.lock() = Some(worker);
+        }
+
+        Ok(Self { inner: engine })
+    }
+}
+
+impl Drop for ColumnarEngineImpl {
+    fn drop(&mut self) {
+        // Shut down the background compaction worker gracefully. Errors during
+        // drop are logged and ignored. The WAL is closed by its own Drop impl.
+        let mut worker = self.inner.compaction_worker.lock();
+        if let Some(mut w) = worker.take() {
+            let _ = w.shutdown();
+        }
+    }
+}
+
+impl ColumnarEngineImpl {
+    /// Return the path to the table directory.
+    pub fn path(&self) -> &Path {
+        self.inner.path()
     }
 
+    /// Return the number of Parquet files opened by scans on this engine.
+    pub fn file_reads(&self) -> u64 {
+        self.inner.file_reads()
+    }
+
+    /// Replace the table schema. Persisted to the WAL.
+    pub fn set_schema(&self, schema: TableSchema) -> Result<()> {
+        self.inner.set_schema(schema)
+    }
+
+    /// Flush any buffered state to stable storage.
+    pub fn sync(&self) -> Result<()> {
+        self.inner.sync()
+    }
+
+    /// Gracefully shut down background workers and release resources.
+    pub fn close(&self) -> Result<()> {
+        self.inner.close()
+    }
+
+    /// Return the number of live files in the manifest.
+    pub fn file_count(&self) -> usize {
+        self.inner.file_count()
+    }
+
+    /// Force a compaction of small files in `partition`.
+    ///
+    /// If `partition` is `None`, every partition is compacted independently.
+    /// Returns the number of input files that were rewritten.
+    pub fn force_compaction(&self, partition: Option<&str>) -> Result<usize> {
+        self.inner.force_compaction(partition)
+    }
+
+    /// Take a manifest snapshot and truncate old WAL segments.
+    ///
+    /// Snapshots are normally written automatically after a configurable number
+    /// of WAL records; this method allows callers to force a snapshot.
+    pub fn snapshot(&self) -> Result<u64> {
+        self.inner.snapshot()
+    }
+}
+
+impl Inner {
     /// Return the path to the table directory.
     pub fn path(&self) -> &Path {
         &self.path
@@ -106,10 +183,43 @@ impl ColumnarEngineImpl {
     /// Flush any buffered state to stable storage.
     pub fn sync(&self) -> Result<()> {
         let _guard = self.ingest_lock.lock();
-        // The underlying storage_wal fsyncs on every Immediate append, and
-        // Parquet files are fsynced before rename, so there is no additional
-        // buffered state to flush in this slice.
+        self.sync_unlocked()
+    }
+
+    fn sync_unlocked(&self) -> Result<()> {
+        self.wal.sync()?;
+        self.sync_volumes()?;
+        self.sync_table_dir()?;
         Ok(())
+    }
+
+    /// Gracefully shut down background workers and release resources.
+    pub fn close(&self) -> Result<()> {
+        let mut worker = self.compaction_worker.lock();
+        if let Some(mut w) = worker.take() {
+            w.shutdown()?;
+        }
+        self.wal.close()?;
+        Ok(())
+    }
+
+    fn sync_volumes(&self) -> Result<()> {
+        // Fsync every partition directory so newly-created Parquet files are
+        // durable as directory entries.
+        let manifest = self.manifest.read();
+        let partitions: std::collections::HashSet<&str> =
+            manifest.files.iter().map(|f| f.partition.as_str()).collect();
+        for partition in partitions {
+            let path = self.path.join(partition);
+            if path.exists() {
+                sync_dir(&path)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_table_dir(&self) -> Result<()> {
+        sync_dir(&self.path)
     }
 
     /// Return the number of live files in the manifest.
@@ -139,6 +249,10 @@ impl ColumnarEngineImpl {
             total_removed += removed;
         }
 
+        if self.options.sync_on_flush {
+            self.sync_unlocked()?;
+        }
+
         Ok(total_removed)
     }
 
@@ -155,27 +269,46 @@ impl ColumnarEngineImpl {
             &self.file_reads,
         )?;
         let combined = arrow::compute::concat_batches(&self.current_schema().to_arrow(), &batches)?;
+        let total_rows = combined.num_rows();
 
-        // Write the combined batch into one or more output files. For simplicity a
-        // single output file is produced per compaction invocation in Phase 2.
-        let file_id = self.next_file_id.fetch_add(1, Ordering::SeqCst);
-        let file_name = format!("{:016x}.parquet", file_id);
-        let temp_path = self.path.join(TMP_DIR).join(format!("{}.tmp", file_name));
-        let final_path = self.path.join(&partition).join(&file_name);
-        std::fs::create_dir_all(final_path.parent().unwrap())?;
+        // Decide how many output files to produce based on the target file size.
+        let total_input_bytes: u64 = input
+            .files
+            .iter()
+            .map(|f| std::fs::metadata(&f.path).map(|m| m.len()).unwrap_or(0))
+            .sum();
+        let output_count = compaction::output_file_count(total_input_bytes, self.options.target_file_size);
+        let rows_per_file = total_rows.div_ceil(output_count.max(1));
 
-        let file_meta = writer::write_batch(
-            &temp_path,
-            &final_path,
-            &partition,
-            &self.options,
-            &self.current_schema(),
-            &combined,
-        )?;
+        let schema = self.current_schema();
+        let mut added_files = Vec::with_capacity(output_count.max(1));
+        let mut offset = 0usize;
+        while offset < total_rows {
+            let end = (offset + rows_per_file).min(total_rows);
+            let slice = combined.slice(offset, end - offset);
+
+            let file_id = self.next_file_id.fetch_add(1, Ordering::SeqCst);
+            let file_name = format!("{:016x}.parquet", file_id);
+            let temp_path = self.path.join(TMP_DIR).join(format!("{}.tmp", file_name));
+            let final_path = self.path.join(&partition).join(&file_name);
+            std::fs::create_dir_all(final_path.parent().unwrap())?;
+
+            let file_meta = writer::write_batch(
+                &temp_path,
+                &final_path,
+                &partition,
+                &self.options,
+                &schema,
+                &slice,
+            )?;
+            added_files.push(file_meta);
+
+            offset = end;
+        }
 
         // Atomic swap: WAL record first, then in-memory manifest.
         let record = ManifestRecord::Compact {
-            add: vec![file_meta],
+            add: added_files,
             remove: removed_paths.clone(),
         };
         self.append_record(record.clone())?;
@@ -239,6 +372,16 @@ impl ColumnarEngineImpl {
 impl ColumnarEngine for ColumnarEngineImpl {
     type Error = Error;
 
+    fn ingest(&self, columns: ColumnBatch) -> Result<()> {
+        self.inner.ingest(columns)
+    }
+
+    fn scan(&self, projection: &[&str], predicate: &Predicate) -> Result<ScanResult> {
+        self.inner.scan(projection, predicate)
+    }
+}
+
+impl Inner {
     fn ingest(&self, columns: ColumnBatch) -> Result<()> {
         let _guard = self.ingest_lock.lock();
 
@@ -307,8 +450,14 @@ impl ColumnarEngine for ColumnarEngineImpl {
         drop(_guard);
         self.maybe_snapshot()?;
 
-        if self.options.background_compaction {
-            let _ = self.force_compaction(None);
+        if self.options.sync_on_flush {
+            self.sync()?;
+        }
+
+        if self.options.background_compaction
+            && let Some(worker) = self.compaction_worker.lock().as_ref()
+        {
+            let _ = worker.trigger();
         }
 
         Ok(())
@@ -556,10 +705,13 @@ fn parse_f64(bytes: &Bytes) -> Result<f64> {
 }
 
 fn recover(path: &Path, wal: &Wal) -> Result<(Manifest, u64, u64)> {
-    // Attempt to load a snapshot first.
-    let (mut manifest, snapshot_lsn) = match snapshot::load(path) {
-        Ok((m, lsn)) => (m, lsn),
-        Err(_) => (Manifest::empty(), 0u64),
+    // Attempt to load a snapshot first. A missing CURRENT file means there is
+    // simply no snapshot yet; any other failure is treated as corruption.
+    let current_path = path.join(snapshot::CURRENT_FILE);
+    let (mut manifest, snapshot_lsn) = if current_path.exists() {
+        snapshot::load(path)?
+    } else {
+        (Manifest::empty(), 0u64)
     };
 
     // Replay the WAL from the snapshot LSN (records with LSN >= snapshot_lsn).

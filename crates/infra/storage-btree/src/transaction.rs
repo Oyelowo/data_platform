@@ -10,7 +10,7 @@ use crate::cursor::BPlusTreeCursor;
 use crate::error::{Error, Result};
 use crate::options::BtreeOptions;
 use crate::tree::BPlusTree;
-use crate::txn::{IsolationLevel as V2IsolationLevel, Transaction as V2Transaction};
+use crate::txn::{IsolationLevel as V2IsolationLevel, Transaction as V2Transaction, NULL_TXN_ID, Timestamp};
 
 /// A buffered modification made by a transaction but not yet committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,6 +201,18 @@ fn map_isolation(level: storage_traits::IsolationLevel) -> Result<V2IsolationLev
             "ReadUncommitted isolation is not supported; use ReadCommitted",
         )),
     }
+}
+
+/// Build a transient read-only transaction for autocommit `get`/`scan`.
+///
+/// The transaction is **not** registered in the transaction table: it only needs
+/// a stable read timestamp and MVCC visibility rules.  Using `Snapshot`
+/// isolation gives a consistent point-in-time view for the duration of the
+/// operation.
+pub(crate) fn implicit_read_txn(tree: &BPlusTree) -> V2Transaction {
+    let ts = tree.current_timestamp();
+    let read_ts = Timestamp::new(ts.get().saturating_sub(1));
+    V2Transaction::new(NULL_TXN_ID, read_ts, V2IsolationLevel::Snapshot)
 }
 
 #[cfg(test)]

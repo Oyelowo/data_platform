@@ -32,7 +32,7 @@ fn concurrent_disjoint_inserts() {
 
     assert_eq!(map.len(), THREADS * PER_THREAD);
 
-    let snapshot = map.iter();
+    let snapshot: Vec<_> = map.iter().collect();
     assert_eq!(snapshot.len(), THREADS * PER_THREAD);
 
     for (expected, (k, v)) in snapshot.iter().enumerate() {
@@ -70,7 +70,7 @@ fn concurrent_overlapping_mutate_invariants() {
     inserter.join().unwrap();
     remover.join().unwrap();
 
-    let snapshot = map.iter();
+    let snapshot: Vec<_> = map.iter().collect();
     let keys: BTreeSet<_> = snapshot.iter().map(|(k, _)| *k).collect();
     assert_eq!(
         keys.len(),
@@ -108,7 +108,7 @@ fn concurrent_replace_same_key() {
         h.join().unwrap();
     }
 
-    let snapshot = map.iter();
+    let snapshot: Vec<_> = map.iter().collect();
     assert_eq!(snapshot.len(), 1);
     let value = snapshot[0].1;
     assert!(value <= THREADS * ROUNDS, "unexpected value {}", value);

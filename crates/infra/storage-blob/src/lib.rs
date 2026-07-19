@@ -14,6 +14,7 @@ pub mod index_wal;
 pub mod options;
 pub mod recovery;
 pub mod store;
+pub mod util;
 pub mod volume;
 pub mod volume_manager;
 

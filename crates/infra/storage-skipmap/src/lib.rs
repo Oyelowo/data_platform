@@ -14,4 +14,4 @@ pub mod node;
 #[cfg(test)]
 mod tests;
 
-pub use map::SkipMap;
+pub use map::{Cursor, SkipMap};

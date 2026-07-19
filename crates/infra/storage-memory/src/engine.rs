@@ -84,16 +84,15 @@ impl Engine for MemoryEngine {
     fn scan(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<Self::Cursor> {
         let start_bytes = start.map(Bytes::copy_from_slice);
         let end_bytes = end.map(Bytes::copy_from_slice);
-        let buffer = self
+        let buffer: Vec<_> = self
             .data
             .range(start_bytes.as_ref(), end_bytes.as_ref())
-            .into_iter()
             .collect();
         Ok(MemoryCursor::from_snapshot(buffer))
     }
 
     fn stats(&self) -> Result<EngineStats> {
-        let entries = self.data.iter();
+        let entries: Vec<_> = self.data.iter().collect();
         let mut memory_bytes = 0u64;
         for (k, v) in &entries {
             memory_bytes += k.len() as u64 + v.len() as u64;

@@ -29,10 +29,13 @@
 
 mod committer;
 mod fault;
+mod fs;
 mod reader;
 mod record;
 mod segment;
 mod wal;
+
+pub use fs::sync_dir;
 
 pub use fault::{FaultConfig, FaultInjector};
 pub use record::{Durability, RECORD_HEADER_SIZE, Record, RecordType};
@@ -64,4 +67,7 @@ pub enum Error {
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    #[error("wal directory is already locked by another process")]
+    Locked,
 }

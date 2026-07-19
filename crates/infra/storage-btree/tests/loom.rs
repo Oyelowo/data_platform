@@ -167,3 +167,44 @@ fn smo_top_down_latch_order_is_deadlock_free() {
         assert_eq!(shared.load(Ordering::Acquire), 6);
     });
 }
+
+/// Model 4: a page flush must observe a stable page version.
+///
+/// A writer toggles a version word while mutating a payload; a flusher copies
+/// the payload and checks the version before/after.  If the flusher observes a
+/// stable version, the copied payload must be one the writer actually stored.
+#[test]
+fn latched_flush_never_reads_torn_page() {
+    loom::model(|| {
+        let page = Arc::new(ModelPage::new(0));
+
+        let flushed = Arc::new(AtomicU64::new(u64::MAX));
+        let writer_page = Arc::clone(&page);
+        let flusher_page = Arc::clone(&page);
+        let flushed_ref = Arc::clone(&flushed);
+
+        let writer = thread::spawn(move || {
+            write_versioned(&writer_page, 42);
+        });
+
+        let flusher = thread::spawn(move || {
+            if let Some(v) = optimistic_read(&flusher_page) {
+                flushed_ref.store(v, Ordering::Release);
+            }
+        });
+
+        writer.join().unwrap();
+        let flushed_value = flusher.join().unwrap();
+        let stored = flushed.load(Ordering::Acquire);
+
+        // If the flusher produced a value, it must be one the writer stored.
+        // Before the latch-coordination fix the flusher could have read a torn
+        // value (e.g. partial bytes of 42 mixed with the initial 0).  This model
+        // abstracts the `read_locked_data` version-check protocol.
+        if stored != u64::MAX {
+            assert!(stored == 0 || stored == 42);
+        }
+        // Prevent unused warning on the join result.
+        let _ = flushed_value;
+    });
+}

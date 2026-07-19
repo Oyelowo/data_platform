@@ -11,6 +11,8 @@ members = [
     "storage-btree",
     "storage-bwtree",
     "storage-columnar",
+    "storage-index",
+    "storage-art",
     # "object_store",
     # "distributed_storages",
     # "consensus",

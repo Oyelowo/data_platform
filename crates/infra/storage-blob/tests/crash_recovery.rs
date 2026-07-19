@@ -106,11 +106,18 @@ fn torn_volume_tail_is_truncated_and_earlier_objects_survive() {
     store.sync().unwrap();
     drop(store);
 
-    // Truncate into the last record to simulate a torn append.
+    // Truncate into the payload of the last record to simulate a torn append.
+    // Compute the truncation offset from the record layout so the test stays
+    // correct regardless of header size or padding.
     let volume_path = active_volume_path(dir.path());
-    let file_size = fs::metadata(&volume_path).unwrap().len();
-    assert!(file_size >= 4, "volume file unexpectedly small");
-    truncate_file(&volume_path, file_size - 4);
+    let offsets = volume_record_offsets(&volume_path);
+    assert!(offsets.len() >= 2, "expected at least two volume records");
+    let torn_offset = offsets[1];
+    let header_size = storage_blob::format::HEADER_SIZE as u64;
+    let id_len = b"torn".len() as u64;
+    // Leave only two payload bytes of the torn record.
+    let truncate_to = torn_offset + header_size + id_len + 2;
+    truncate_file(&volume_path, truncate_to);
 
     let store = open(&dir);
     let mut reader = store.get(b"safe").unwrap();

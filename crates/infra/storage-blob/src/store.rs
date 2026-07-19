@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use storage_traits::BlobStore as BlobStoreTrait;
 use storage_wal::{Durability, Wal, WalOptions};
@@ -11,11 +11,18 @@ use storage_wal::{Durability, Wal, WalOptions};
 use crate::gc::{GarbageCollector, GcWorker};
 use crate::index::{BlobLocation, Index};
 use crate::index_wal::IndexRecord;
+use crate::util::sync_dir;
 use crate::volume::BlobPayloadReader;
 use crate::volume_manager::VolumeManager;
 use crate::{BlobStoreOptions, Error, Result};
 
 /// Content-addressed object store.
+///
+/// Mutating operations (`put`, `delete`, and GC moves) are serialized by a
+/// global mutex so that the order in which records are appended to the volume,
+/// appended to the index WAL, and reflected in the in-memory index is always
+/// identical.  This guarantees that recovery replays the WAL into the same
+/// final index state.
 #[derive(Debug)]
 pub struct BlobStoreImpl {
     path: PathBuf,
@@ -25,6 +32,8 @@ pub struct BlobStoreImpl {
     volumes: Arc<VolumeManager>,
     gc: Arc<GarbageCollector>,
     gc_worker: Option<GcWorker>,
+    /// Global lock serializing all mutating operations.
+    mutation_lock: Arc<Mutex<()>>,
 }
 
 impl BlobStoreImpl {
@@ -33,7 +42,9 @@ impl BlobStoreImpl {
         options.validate()?;
         let path = path.as_ref().to_path_buf();
         fs::create_dir_all(&path)?;
+        sync_dir(&path)?;
         fs::create_dir_all(path.join("index-wal"))?;
+        sync_dir(&path.join("index-wal"))?;
 
         let wal = Arc::new(Wal::open(
             path.join("index-wal"),
@@ -47,10 +58,12 @@ impl BlobStoreImpl {
 
         crate::recovery::recover(&path, &wal, &index, &volumes)?;
 
+        let mutation_lock = Arc::new(Mutex::new(()));
         let gc = Arc::new(GarbageCollector::new(
             Arc::clone(&wal),
             index.clone(),
             Arc::clone(&volumes),
+            Arc::clone(&mutation_lock),
         ));
         let gc_worker = if options.background_gc {
             Some(GcWorker::start(Arc::clone(&gc), options.clone()))
@@ -66,6 +79,7 @@ impl BlobStoreImpl {
             volumes,
             gc,
             gc_worker,
+            mutation_lock,
         })
     }
 
@@ -103,7 +117,16 @@ impl BlobStoreTrait for BlobStoreImpl {
     type Writer = BlobWriter;
 
     fn put(&self, id: &[u8], reader: &mut dyn Read) -> Result<u64> {
+        let _guard = self.mutation_lock.lock().unwrap();
+
         let (loc, header) = self.volumes.append_record(id, reader)?;
+
+        // When sync_on_put is enabled, make the volume data durable before the
+        // index WAL entry that references it.
+        if self.options.sync_on_put {
+            self.volumes.sync()?;
+        }
+
         let location = BlobLocation::from_record(loc.volume_number, loc.offset, &header);
         let record = IndexRecord::Put {
             id: id.to_vec(),
@@ -126,19 +149,24 @@ impl BlobStoreTrait for BlobStoreImpl {
             .ok_or_else(|| Error::NotFound(id.to_vec()))?;
         let volume_reader = self.volumes.reader(location.volume_number)?;
         let (header, _record_size) = volume_reader.read_header(location.offset)?;
-        let path = self.volumes.volume_path(location.volume_number);
-        BlobPayloadReader::open(&path, location.offset, &header, id)
+        BlobPayloadReader::open(Arc::clone(&volume_reader), location.offset, &header, id)
     }
 
     fn delete(&self, id: &[u8]) -> Result<()> {
-        if self.index.get(id).is_none() {
-            return Ok(());
+        {
+            let _guard = self.mutation_lock.lock().unwrap();
+
+            // Re-check inside the lock: another thread may have removed it.
+            if self.index.get(id).is_none() {
+                return Ok(());
+            }
+
+            let record = IndexRecord::Delete { id: id.to_vec() };
+            self.wal
+                .append(record.encode(), Durability::Immediate)
+                .map_err(|e| Error::IndexWal(e.to_string()))?;
+            self.index.delete(id);
         }
-        let record = IndexRecord::Delete { id: id.to_vec() };
-        self.wal
-            .append(record.encode(), Durability::Immediate)
-            .map_err(|e| Error::IndexWal(e.to_string()))?;
-        self.index.delete(id);
         Ok(())
     }
 

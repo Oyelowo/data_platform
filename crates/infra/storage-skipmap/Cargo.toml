@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 crossbeam-epoch = "0.9"
+parking_lot = "0.12"
 rand = "0.8"
 
 [dev-dependencies]

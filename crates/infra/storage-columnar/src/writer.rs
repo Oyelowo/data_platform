@@ -11,7 +11,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
 
-use crate::manifest::{ColumnStats, FileMeta};
+use crate::manifest::{ColumnStats, FileMeta, StatsValue};
 use crate::schema::TableSchema;
 use crate::types::ColumnType;
 use crate::{ColumnarOptions, Result};
@@ -90,90 +90,29 @@ fn read_column_stats(
             let entry = map.entry(name.clone()).or_insert_with(ColumnStats::unknown);
             entry.null_count += stats.null_count_opt().unwrap_or(0) as usize;
 
-            let (min_bytes, max_bytes) = stats_min_max(stats, def.ty)?;
+            let (min_value, max_value) = stats_min_max(stats, def.ty)?;
 
-            if entry.min.is_empty() && entry.max.is_empty() {
-                entry.min = min_bytes;
-                entry.max = max_bytes;
-                continue;
-            }
-
-            update_typed_min_max(entry, min_bytes, max_bytes, def.ty);
+            entry.update(min_value, max_value);
         }
     }
 
     Ok(map)
 }
 
-/// Update `entry.min`/`entry.max` using typed comparison so that numeric types
-/// compare by value rather than by lexicographic byte order.
-fn update_typed_min_max(entry: &mut ColumnStats, min: Bytes, max: Bytes, ty: ColumnType) {
-    match ty {
-        ColumnType::Int64 | ColumnType::TimestampMicros => {
-            let entry_min = parse_i64(&entry.min);
-            let entry_max = parse_i64(&entry.max);
-            let new_min = parse_i64(&min);
-            let new_max = parse_i64(&max);
-            if let (Ok(cur), Ok(v)) = (entry_min, new_min) {
-                if v < cur {
-                    entry.min = min;
-                }
-            } else {
-                entry.min = Bytes::new();
-            }
-            if let (Ok(cur), Ok(v)) = (entry_max, new_max) {
-                if v > cur {
-                    entry.max = max;
-                }
-            } else {
-                entry.max = Bytes::new();
-            }
-        }
-        ColumnType::Float64 => {
-            let entry_min = parse_f64(&entry.min);
-            let entry_max = parse_f64(&entry.max);
-            let new_min = parse_f64(&min);
-            let new_max = parse_f64(&max);
-            if let (Ok(cur), Ok(v)) = (entry_min, new_min) {
-                if v < cur {
-                    entry.min = min;
-                }
-            } else {
-                entry.min = Bytes::new();
-            }
-            if let (Ok(cur), Ok(v)) = (entry_max, new_max) {
-                if v > cur {
-                    entry.max = max;
-                }
-            } else {
-                entry.max = Bytes::new();
-            }
-        }
-        ColumnType::Bool | ColumnType::Utf8 | ColumnType::Binary => {
-            if min.as_ref() < entry.min.as_ref() {
-                entry.min = min;
-            }
-            if max.as_ref() > entry.max.as_ref() {
-                entry.max = max;
-            }
-        }
-    }
-}
-
 fn stats_min_max(
     stats: &parquet::file::statistics::Statistics,
-    _ty: ColumnType,
-) -> Result<(Bytes, Bytes)> {
+    ty: ColumnType,
+) -> Result<(StatsValue, StatsValue)> {
     use parquet::file::statistics::Statistics;
 
-    let unknown = || (Bytes::new(), Bytes::new());
+    let unknown = || (StatsValue::Unknown, StatsValue::Unknown);
 
     match stats {
         Statistics::Boolean(s) => {
             let min = s.min_opt().copied();
             let max = s.max_opt().copied();
             match (min, max) {
-                (Some(min), Some(max)) => Ok((bool_to_bytes(min), bool_to_bytes(max))),
+                (Some(min), Some(max)) => Ok((StatsValue::Bool(min), StatsValue::Bool(max))),
                 _ => Ok(unknown()),
             }
         }
@@ -181,9 +120,7 @@ fn stats_min_max(
             let min = s.min_opt().copied();
             let max = s.max_opt().copied();
             match (min, max) {
-                (Some(min), Some(max)) => {
-                    Ok((Bytes::from(min.to_string()), Bytes::from(max.to_string())))
-                }
+                (Some(min), Some(max)) => Ok((StatsValue::Int64(min), StatsValue::Int64(max))),
                 _ => Ok(unknown()),
             }
         }
@@ -192,7 +129,7 @@ fn stats_min_max(
             let max = s.max_opt().copied();
             match (min, max) {
                 (Some(min), Some(max)) => {
-                    Ok((Bytes::from(min.to_string()), Bytes::from(max.to_string())))
+                    Ok((StatsValue::Float64(min), StatsValue::Float64(max)))
                 }
                 _ => Ok(unknown()),
             }
@@ -201,10 +138,29 @@ fn stats_min_max(
             let min = s.min_opt();
             let max = s.max_opt();
             match (min, max) {
-                (Some(min), Some(max)) => Ok((
-                    Bytes::copy_from_slice(min.data()),
-                    Bytes::copy_from_slice(max.data()),
-                )),
+                (Some(min), Some(max)) => match ty {
+                    ColumnType::Utf8 => Ok((
+                        StatsValue::Utf8(
+                            std::str::from_utf8(min.data())
+                                .map_err(|e| {
+                                    crate::Error::Batch(format!("invalid utf8 stats: {e}"))
+                                })?
+                                .to_string(),
+                        ),
+                        StatsValue::Utf8(
+                            std::str::from_utf8(max.data())
+                                .map_err(|e| {
+                                    crate::Error::Batch(format!("invalid utf8 stats: {e}"))
+                                })?
+                                .to_string(),
+                        ),
+                    )),
+                    ColumnType::Binary => Ok((
+                        StatsValue::Binary(Bytes::copy_from_slice(min.data())),
+                        StatsValue::Binary(Bytes::copy_from_slice(max.data())),
+                    )),
+                    _ => Ok(unknown()),
+                },
                 _ => Ok(unknown()),
             }
         }
@@ -212,25 +168,7 @@ fn stats_min_max(
     }
 }
 
-fn bool_to_bytes(value: bool) -> Bytes {
-    Bytes::from_static(if value { b"true" } else { b"false" })
-}
-
-fn parse_i64(bytes: &Bytes) -> Result<i64> {
-    let s = std::str::from_utf8(bytes)
-        .map_err(|e| crate::Error::Batch(format!("invalid utf8 for i64: {e}")))?;
-    s.parse::<i64>()
-        .map_err(|e| crate::Error::Batch(format!("invalid i64 '{s}': {e}")))
-}
-
-fn parse_f64(bytes: &Bytes) -> Result<f64> {
-    let s = std::str::from_utf8(bytes)
-        .map_err(|e| crate::Error::Batch(format!("invalid utf8 for f64: {e}")))?;
-    s.parse::<f64>()
-        .map_err(|e| crate::Error::Batch(format!("invalid f64 '{s}': {e}")))
-}
-
-fn sync_dir(path: &Path) -> Result<()> {
+pub(crate) fn sync_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         let dir = File::open(path)?;

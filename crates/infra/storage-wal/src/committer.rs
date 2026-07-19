@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded};
 
 use crate::fault::{FaultConfig, FaultInjector};
+use crate::fs::sync_dir;
 use crate::record::{RECORD_HEADER_SIZE, Record};
 use crate::segment::Segment;
 use crate::{Error, Lsn, Result};
@@ -275,19 +276,44 @@ fn worker_loop_with_state(
     // caller's own record LSN for appends, or zero for sync barriers).
     let mut pending_durable: Vec<(Sender<Result<Reply>>, Lsn)> = Vec::new();
 
+    let result = worker_loop_inner(&mut state, &receiver, shutdown, &mut pending_durable);
+
+    // Whatever caused us to exit, notify any remaining waiters so they are not
+    // stranded waiting on a closed channel.
+    if !pending_durable.is_empty() {
+        let err_msg = match &result {
+            Err(e) => e.to_string(),
+            Ok(()) => Error::Closed.to_string(),
+        };
+        for (reply, _lsn) in pending_durable.drain(..) {
+            let _ = reply.send(Err(Error::Io(std::io::Error::other(err_msg.clone()))));
+        }
+    }
+
+    // Best-effort final sync so the directory is left in a quiesced state.
+    let _ = state.segment.sync();
+    result
+}
+
+fn worker_loop_inner(
+    state: &mut WorkerState,
+    receiver: &Receiver<CommitRequest>,
+    shutdown: Arc<AtomicBool>,
+    pending_durable: &mut Vec<(Sender<Result<Reply>>, Lsn)>,
+) -> Result<()> {
     loop {
         // Wait for the first request of the next group, or timeout and flush.
         let req = match receiver.recv_timeout(COMMIT_TIMEOUT) {
             Ok(req) => req,
             Err(RecvTimeoutError::Timeout) => {
-                flush_pending(&mut state, &mut pending_durable)?;
+                flush_pending(state, pending_durable)?;
                 if shutdown.load(Ordering::Acquire) && pending_durable.is_empty() {
                     break;
                 }
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => {
-                flush_pending(&mut state, &mut pending_durable)?;
+                flush_pending(state, pending_durable)?;
                 break;
             }
         };
@@ -297,24 +323,23 @@ fn worker_loop_with_state(
             continue;
         }
 
-        handle_append_request(&mut state, req, &mut pending_durable)?;
+        handle_append_request(state, req, pending_durable)?;
 
         // Drain additional requests without blocking to build the group.
         while let Ok(req) = receiver.try_recv() {
-            handle_append_request(&mut state, req, &mut pending_durable)?;
+            handle_append_request(state, req, pending_durable)?;
             if pending_durable.len() >= CHANNEL_CAPACITY / 2 {
                 break;
             }
         }
 
-        flush_pending(&mut state, &mut pending_durable)?;
+        flush_pending(state, pending_durable)?;
 
         if shutdown.load(Ordering::Acquire) && receiver.is_empty() {
             break;
         }
     }
 
-    state.segment.sync()?;
     Ok(())
 }
 
@@ -324,6 +349,7 @@ fn init_worker(
     fault: FaultInjector,
 ) -> Result<WorkerState> {
     std::fs::create_dir_all(&dir)?;
+    sync_dir(&dir)?;
     let segments = crate::segment::list_segments(&dir)?;
     let segment_first = segments.last().copied().unwrap_or(0);
     let mut segment = Segment::open(&dir, segment_first, segment_size)?;
@@ -379,6 +405,7 @@ fn write_record(state: &mut WorkerState, mut record: Record) -> Result<(Lsn, usi
         state.last_synced_len = state.segment.written();
         state.next_lsn += state.segment.written();
         state.segment = Segment::open(&state.dir, state.next_lsn, state.segment_size)?;
+        sync_dir(&state.dir)?;
         state.last_synced_len = 0;
         record.lsn = state.next_lsn;
         buf.clear();
@@ -412,44 +439,36 @@ fn flush_pending(
         return Ok(());
     }
 
-    if state.fault.should_fail_flush() {
-        for (reply, _lsn) in pending.drain(..) {
-            let _ = reply.send(Err(Error::Io(std::io::Error::other(
-                "injected flush failure",
-            ))));
+    let result = do_flush(state);
+    match result {
+        Ok(()) => {
+            state.last_synced_len = state.segment.written();
+            for (reply, lsn) in pending.drain(..) {
+                // Best-effort reply; if the caller hung up, drop the result.
+                let _ = reply.send(Ok(Reply::Flushed(lsn)));
+            }
+            Ok(())
         }
+        Err(e) => {
+            let msg = e.to_string();
+            for (reply, _lsn) in pending.drain(..) {
+                let _ = reply.send(Err(Error::Io(std::io::Error::other(msg.clone()))));
+            }
+            Err(Error::Io(std::io::Error::other(msg)))
+        }
+    }
+}
+
+fn do_flush(state: &mut WorkerState) -> Result<()> {
+    if state.fault.should_fail_flush() {
         return Err(Error::Io(std::io::Error::other("injected flush failure")));
     }
-
-    if let Err(e) = state.segment.flush() {
-        for (reply, _lsn) in pending.drain(..) {
-            let _ = reply.send(Err(Error::Closed));
-        }
-        return Err(e);
-    }
+    state.segment.flush()?;
 
     if state.fault.should_fail_sync() {
-        for (reply, _lsn) in pending.drain(..) {
-            let _ = reply.send(Err(Error::Io(std::io::Error::other(
-                "injected fsync failure",
-            ))));
-        }
         return Err(Error::Io(std::io::Error::other("injected fsync failure")));
     }
-
-    if let Err(e) = state.segment.sync() {
-        for (reply, _lsn) in pending.drain(..) {
-            let _ = reply.send(Err(Error::Closed));
-        }
-        return Err(e);
-    }
-    state.last_synced_len = state.segment.written();
-
-    for (reply, lsn) in pending.drain(..) {
-        // Best-effort reply; if the caller hung up, drop the result.
-        let _ = reply.send(Ok(Reply::Flushed(lsn)));
-    }
-
+    state.segment.sync()?;
     Ok(())
 }
 
@@ -515,7 +534,11 @@ mod tests {
         .unwrap();
 
         let result = committer.append(Record::new(RecordType::Put, &b"a"[..]));
-        assert!(result.is_err(), "fsync failure should propagate to append");
+        assert!(
+            matches!(result, Err(Error::Io(_))),
+            "fsync failure should propagate as Io error, got {:?}",
+            result
+        );
         // The worker has terminated; shutdown may report the same error.
         let _ = committer.shutdown();
     }
@@ -540,7 +563,12 @@ mod tests {
 
         // The explicit sync should fail because the injected fault triggers on
         // the first fsync.
-        assert!(committer.sync().is_err());
+        let result = committer.sync();
+        assert!(
+            matches!(result, Err(Error::Io(_))),
+            "sync failure should propagate as Io error, got {:?}",
+            result
+        );
         let _ = committer.shutdown();
     }
 

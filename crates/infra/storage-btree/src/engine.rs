@@ -23,7 +23,8 @@ use crate::space::PageAllocator;
 use crate::sync::Mutex as SyncMutex;
 use crate::transaction::BtreeTransaction;
 use crate::tree::BPlusTree;
-use crate::txn::{NULL_TXN_ID, Timestamp, Transaction as V2Transaction};
+
+use crate::txn::TransactionTable;
 use crate::valuelog::{Durability, ValueLog};
 use crate::wal::{NULL_LSN, WalLog};
 
@@ -79,6 +80,7 @@ impl BtreeEngine {
             options.wal_fault_config.clone(),
         )?);
         wal.set_metrics(Arc::clone(&metrics));
+        pool.set_wal(Arc::clone(&wal));
         // Use buffered value-log appends: the engine calls sync at operation
         // boundaries, so we pay one fsync per commit instead of one per value.
         let value_log = Arc::new(ValueLog::open_with_backend(
@@ -101,14 +103,17 @@ impl BtreeEngine {
             }
         };
 
+        let txn_table = Arc::new(TransactionTable::new());
         let recovered_root = Recovery::new(Arc::clone(&pool), Arc::clone(&wal), recovery_root)
             .with_value_log(Arc::clone(&value_log))
+            .with_txn_table(Arc::clone(&txn_table))
             .recover(checkpoint_lsn)?;
 
-        let mut tree = BPlusTree::open(
+        let mut tree = BPlusTree::open_with_txn_table(
             Arc::clone(&pool),
             recovered_root,
             options.inline_threshold(),
+            txn_table,
         )
         .with_wal(Arc::clone(&wal))
         .with_value_log(Arc::clone(&value_log));
@@ -182,8 +187,12 @@ impl BtreeEngine {
     pub fn close(&self) -> Result<()> {
         self.inner.stop_background_cleaner()?;
         self.inner.stop_background_checkpoint()?;
-        self.inner.checkpoint()?;
-        self.inner.tree.compact()?;
+        // If the WAL has already suffered a sync failure its commit worker may
+        // have exited; running a checkpoint would block forever waiting for it.
+        if self.inner.wal.is_healthy() {
+            let _ = self.inner.checkpoint();
+            let _ = self.inner.tree.compact();
+        }
         self.inner.value_log.close()?;
         self.inner.wal.close()?;
         Ok(())
@@ -193,10 +202,15 @@ impl BtreeEngine {
     ///
     /// This is intended for fault-injection tests. It truncates the WAL to the
     /// last fsynced record and truncates files managed by a `FaultyBackend` to
-    /// their last-synced length.
+    /// their last-synced length. The WAL is also closed so the advisory directory
+    /// lock is released; this lets tests reopen the database in the same process
+    /// after simulating a crash.
     pub fn crash(&self) {
         let _ = self.inner.wal.crash();
         self.inner.backend.crash();
+        // Release the WAL directory lock so a new engine instance can reopen in
+        // the same process. Closing an already-failed WAL is idempotent.
+        let _ = self.inner.wal.close();
     }
 
     /// Create a crash-consistent point-in-time backup at `dst`.
@@ -267,21 +281,15 @@ impl storage_traits::Engine for BtreeEngine {
     }
 
     fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        self.inner.tree.get(key).map(|v| v.map(Bytes::from))
+        let txn = crate::transaction::implicit_read_txn(&self.inner.tree);
+        self.inner
+            .tree
+            .get_txn(&txn, key)
+            .map(|v| v.map(Bytes::from))
     }
 
     fn scan(&self, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<Self::Cursor> {
-        // Construct a transient snapshot transaction so the cursor gets a stable
-        // read timestamp without registering in the transaction table. The
-        // cursor only copies the timestamp and txn id, so the transient handle
-        // can be dropped immediately.
-        let ts = self.inner.tree.current_timestamp();
-        let read_ts = Timestamp::new(ts.get().saturating_sub(1));
-        let txn = V2Transaction::new(
-            NULL_TXN_ID,
-            read_ts,
-            crate::txn::IsolationLevel::ReadCommitted,
-        );
+        let txn = crate::transaction::implicit_read_txn(&self.inner.tree);
         BPlusTreeCursor::new(Arc::clone(&self.inner.tree), &txn, start, end, None)
     }
 
@@ -702,6 +710,9 @@ mod tests {
             .unwrap();
         txn.put(b"k", b"v").unwrap();
         txn.commit().unwrap();
+        // Crash to drop buffered records and release the WAL lock before
+        // forgetting the engine, so the same process can reopen the directory.
+        engine.crash();
         std::mem::forget(engine);
 
         // Reopen: the lost transaction must not appear, and the tree must be
@@ -709,5 +720,78 @@ mod tests {
         let engine2 = BtreeEngine::open(dir.path(), BtreeOptions::default()).unwrap();
         assert_eq!(engine2.get(b"k").unwrap(), None);
         engine2.check_integrity().unwrap();
+    }
+
+    #[test]
+    fn autocommit_get_uses_mvcc_visibility() {
+        let (engine, _dir) = make_engine();
+        // Insert a committed value first so the key exists.
+        let mut txn = engine
+            .begin(storage_traits::TxnOptions {
+                read_only: false,
+                isolation: storage_traits::IsolationLevel::Snapshot,
+            })
+            .unwrap();
+        txn.put(b"k", b"committed").unwrap();
+        txn.commit().unwrap();
+
+        // Begin a write transaction but do not commit.
+        let mut txn2 = engine
+            .begin(storage_traits::TxnOptions {
+                read_only: false,
+                isolation: storage_traits::IsolationLevel::Snapshot,
+            })
+            .unwrap();
+        txn2.put(b"k", b"uncommitted").unwrap();
+
+        // Autocommit get must see the committed value, not the uncommitted write.
+        assert_eq!(
+            engine.get(b"k").unwrap(),
+            Some(Bytes::from_static(b"committed"))
+        );
+
+        // After commit the new value is visible.
+        txn2.commit().unwrap();
+        assert_eq!(
+            engine.get(b"k").unwrap(),
+            Some(Bytes::from_static(b"uncommitted"))
+        );
+    }
+
+    #[test]
+    fn autocommit_scan_uses_mvcc_visibility() {
+        let (engine, _dir) = make_engine();
+        let mut txn = engine
+            .begin(storage_traits::TxnOptions {
+                read_only: false,
+                isolation: storage_traits::IsolationLevel::Snapshot,
+            })
+            .unwrap();
+        txn.put(b"a", b"1").unwrap();
+        txn.put(b"c", b"3").unwrap();
+        txn.commit().unwrap();
+
+        let mut writer = engine
+            .begin(storage_traits::TxnOptions {
+                read_only: false,
+                isolation: storage_traits::IsolationLevel::Snapshot,
+            })
+            .unwrap();
+        writer.put(b"b", b"uncommitted").unwrap();
+
+        let mut cursor = engine.scan(None, None).unwrap();
+        let all = cursor.next_batch(100).unwrap();
+        let keys: Vec<_> = all.iter().map(|(k, _)| k.as_ref().to_vec()).collect();
+        assert_eq!(keys, vec![b"a".to_vec(), b"c".to_vec()]);
+
+        writer.commit().unwrap();
+
+        let mut cursor = engine.scan(None, None).unwrap();
+        let all = cursor.next_batch(100).unwrap();
+        let keys: Vec<_> = all.iter().map(|(k, _)| k.as_ref().to_vec()).collect();
+        assert_eq!(
+            keys,
+            vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
     }
 }

@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bytes::Bytes;
 
@@ -178,6 +179,21 @@ impl VolumeReader {
     /// The payload CRC is verified.  This is useful for recovery and GC.
     pub fn read_record(&self, offset: u64) -> Result<(RecordHeader, Bytes, Bytes)> {
         let (header, record_size) = self.read_header(offset)?;
+
+        // Validate that the claimed record fits inside the file before
+        // allocating a buffer based on header lengths.
+        let file_size = self.file_size()?;
+        if offset.saturating_add(record_size) > file_size {
+            return Err(Error::CorruptRecord {
+                volume: self.number,
+                offset,
+                message: format!(
+                    "record size {} extends past file size {}",
+                    record_size, file_size
+                ),
+            });
+        }
+
         let mut record_buf = vec![0u8; record_size as usize];
         Self::read_exact_at(&self.file, offset, &mut record_buf)?;
 
@@ -218,7 +234,8 @@ impl VolumeReader {
         }
     }
 
-    fn read_exact_at(file: &File, offset: u64, buf: &mut [u8]) -> Result<()> {
+    /// Read exactly `buf.len()` bytes at `offset` from `file`.
+    pub(crate) fn read_exact_at(file: &File, offset: u64, buf: &mut [u8]) -> Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::FileExt;
@@ -237,8 +254,10 @@ impl VolumeReader {
 }
 
 /// Streaming reader for a single object's payload.
+#[derive(Debug)]
 pub struct BlobPayloadReader {
-    file: File,
+    reader: Arc<VolumeReader>,
+    offset: u64,
     remaining: u64,
     crc: u32,
     expected_crc: u32,
@@ -246,33 +265,50 @@ pub struct BlobPayloadReader {
 }
 
 impl BlobPayloadReader {
-    /// Create a reader for the payload of `header` located at `offset` in `path`.
+    /// Create a reader for the payload of `header` located at `offset` in `reader`.
+    ///
+    /// The shared `VolumeReader` is kept alive for the duration of the read so
+    /// that background GC cannot delete the underlying volume file while the
+    /// payload is still being streamed.
+    ///
     /// Verifies that the stored ID matches `expected_id`.
     pub fn open(
-        path: &Path,
+        reader: Arc<VolumeReader>,
         offset: u64,
         header: &RecordHeader,
         expected_id: &[u8],
     ) -> Result<Self> {
-        let mut file = OpenOptions::new().read(true).open(path)?;
-
         // Verify the stored ID matches the requested ID.
         let id_offset = offset + HEADER_SIZE as u64;
-        file.seek(SeekFrom::Start(id_offset))?;
         let mut stored_id = vec![0u8; header.id_len as usize];
-        file.read_exact(&mut stored_id)?;
+        VolumeReader::read_exact_at(&reader.file, id_offset, &mut stored_id)?;
         if stored_id.as_slice() != expected_id {
             return Err(Error::CorruptRecord {
-                volume: 0,
+                volume: reader.number,
                 offset,
                 message: "record id mismatch".into(),
             });
         }
 
+        // Sanity-check that the claimed payload fits inside the volume file.
+        let file_size = reader.file_size()?;
+        let payload_end = offset
+            .saturating_add(header.payload_offset())
+            .saturating_add(header.payload_len);
+        if payload_end > file_size {
+            return Err(Error::CorruptRecord {
+                volume: reader.number,
+                offset,
+                message: format!(
+                    "payload extends past file: end={payload_end}, file_size={file_size}"
+                ),
+            });
+        }
+
         let payload_offset = offset + header.payload_offset();
-        file.seek(SeekFrom::Start(payload_offset))?;
         Ok(Self {
-            file,
+            reader,
+            offset: payload_offset,
             remaining: header.payload_len,
             crc: 0,
             expected_crc: header.payload_crc,
@@ -297,6 +333,10 @@ impl Read for BlobPayloadReader {
             return Ok(0);
         }
 
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
         if self.remaining == 0 {
             // Object fully consumed; verify CRC on the next read.
             self.pending_verify = true;
@@ -304,19 +344,15 @@ impl Read for BlobPayloadReader {
         }
 
         let to_read = std::cmp::min(buf.len() as u64, self.remaining) as usize;
-        let n = self.file.read(&mut buf[..to_read])?;
-        if n == 0 && self.remaining > 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "payload ended before all bytes were read",
-            ));
-        }
-        self.crc = crc32c::crc32c_append(self.crc, &buf[..n]);
-        self.remaining -= n as u64;
+        VolumeReader::read_exact_at(&self.reader.file, self.offset, &mut buf[..to_read])
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e))?;
+        self.crc = crc32c::crc32c_append(self.crc, &buf[..to_read]);
+        self.offset += to_read as u64;
+        self.remaining -= to_read as u64;
         if self.remaining == 0 {
             self.pending_verify = true;
         }
-        Ok(n)
+        Ok(to_read)
     }
 }
 
@@ -378,23 +414,90 @@ mod tests {
         let (_dir, path) = tmp_path();
         let mut writer = VolumeWriter::create(&path, 1).unwrap();
         let mut payload = Cursor::new(b"hello world");
-        let (loc, _header) = writer.append_record(b"obj-1", &mut payload).unwrap();
+        let (loc, header) = writer.append_record(b"obj-1", &mut payload).unwrap();
         assert_eq!(loc.volume_number, 1);
         assert_eq!(loc.offset, 0);
         assert!(loc.record_size > 0);
         assert_eq!(loc.record_size % 8, 0);
 
-        let reader = VolumeReader::open(&path, 1).unwrap();
-        let (header, id, payload) = reader.read_record(loc.offset).unwrap();
+        let reader = Arc::new(VolumeReader::open(&path, 1).unwrap());
+        let (read_header, id, payload) = reader.read_record(loc.offset).unwrap();
         assert_eq!(id.as_ref(), b"obj-1");
         assert_eq!(payload.as_ref(), b"hello world");
-        assert_eq!(header.payload_len, 11);
+        assert_eq!(read_header.payload_len, 11);
 
         // Verify streaming reader.
-        let mut stream = BlobPayloadReader::open(&path, loc.offset, &header, b"obj-1").unwrap();
+        let mut stream = BlobPayloadReader::open(Arc::clone(&reader), loc.offset, &header, b"obj-1").unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).unwrap();
         assert_eq!(buf, b"hello world");
+    }
+
+    #[test]
+    fn header_checksum_mismatch_is_detected() {
+        let (_dir, path) = tmp_path();
+        let mut writer = VolumeWriter::create(&path, 1).unwrap();
+        writer.append_record(b"x", &mut Cursor::new(b"y")).unwrap();
+        writer.sync().unwrap();
+        drop(writer);
+
+        // Corrupt the header checksum.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[HEADER_SIZE - 1] ^= 0x01;
+        std::fs::write(&path, bytes).unwrap();
+
+        let reader = VolumeReader::open(&path, 1).unwrap();
+        let err = reader.read_header(0).unwrap_err();
+        assert!(err.to_string().contains("header crc mismatch"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn corrupted_payload_len_does_not_allocate_huge_buffer() {
+        let (_dir, path) = tmp_path();
+        let mut writer = VolumeWriter::create(&path, 1).unwrap();
+        writer.append_record(b"x", &mut Cursor::new(b"y")).unwrap();
+        writer.sync().unwrap();
+        drop(writer);
+
+        // Corrupt payload_len to a large value that exceeds the file size but
+        // keeps the header checksum valid.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[12..20].copy_from_slice(&(1u64 << 40).to_le_bytes());
+        let crc = crc32c::crc32c(&bytes[..HEADER_SIZE - 4]);
+        bytes[24..28].copy_from_slice(&crc.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let reader = VolumeReader::open(&path, 1).unwrap();
+        let err = reader.read_record(0).unwrap_err();
+        // The read must fail before attempting a huge allocation.
+        assert!(
+            err.to_string().contains("record size") || err.to_string().contains("crc"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn overflowing_payload_len_is_rejected() {
+        let (_dir, path) = tmp_path();
+        let mut writer = VolumeWriter::create(&path, 1).unwrap();
+        writer.append_record(b"x", &mut Cursor::new(b"y")).unwrap();
+        writer.sync().unwrap();
+        drop(writer);
+
+        // Corrupt payload_len to u64::MAX and keep the header checksum valid.
+        // The record size overflows, which must be caught during header decode.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[12..20].copy_from_slice(&u64::MAX.to_le_bytes());
+        let crc = crc32c::crc32c(&bytes[..HEADER_SIZE - 4]);
+        bytes[24..28].copy_from_slice(&crc.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let reader = VolumeReader::open(&path, 1).unwrap();
+        let err = reader.read_header(0).unwrap_err();
+        assert!(
+            err.to_string().contains("record size overflow"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -424,13 +527,18 @@ mod tests {
     fn empty_payload_roundtrips() {
         let (_dir, path) = tmp_path();
         let mut writer = VolumeWriter::create(&path, 1).unwrap();
-        let (loc, _header) = writer
+        let (loc, header) = writer
             .append_record(b"empty", &mut Cursor::new(&[] as &[u8]))
             .unwrap();
-        let reader = VolumeReader::open(&path, 1).unwrap();
-        let (header, id, payload) = reader.read_record(loc.offset).unwrap();
+        let reader = Arc::new(VolumeReader::open(&path, 1).unwrap());
+        let (read_header, id, payload) = reader.read_record(loc.offset).unwrap();
         assert_eq!(id.as_ref(), b"empty");
         assert!(payload.is_empty());
-        assert_eq!(header.payload_len, 0);
+        assert_eq!(read_header.payload_len, 0);
+
+        let mut stream = BlobPayloadReader::open(reader, loc.offset, &header, b"empty").unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).unwrap();
+        assert!(buf.is_empty());
     }
 }

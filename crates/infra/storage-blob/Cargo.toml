@@ -13,6 +13,7 @@ bytes = "1.10"
 thiserror = "2.0"
 crc32c = "0.6"
 dashmap = "6.1"
+lru = "0.13"
 
 [dev-dependencies]
 storage-testkit = { path = "../storage-testkit" }

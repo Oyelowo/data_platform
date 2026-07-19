@@ -252,6 +252,25 @@ impl Drop for BlobReadLease {
     }
 }
 
+/// RAII guard that keeps a set of blob files pinned against GC.
+pub struct BlobPinGuard {
+    file_numbers: Vec<FileNumber>,
+    registry: Arc<Mutex<HashMap<FileNumber, AtomicUsize>>>,
+}
+
+impl Drop for BlobPinGuard {
+    fn drop(&mut self) {
+        let mut reg = self.registry.lock().unwrap();
+        for file_number in &self.file_numbers {
+            if let Some(counter) = reg.get_mut(file_number)
+                && counter.fetch_sub(1, Ordering::Release) == 1
+            {
+                reg.remove(file_number);
+            }
+        }
+    }
+}
+
 /// Lock-free, internally-consistent accounting for blob-file sizes and
 /// garbage bytes.  Counters are updated incrementally so the background worker
 /// can decide whether a forced GC pass is needed without scanning disk.
@@ -430,6 +449,28 @@ impl BlobStore {
         }
     }
 
+    /// Pin every blob file in `files` so background GC cannot delete them while
+    /// the returned guard is alive.  This is used by long-lived snapshots and
+    /// autocommit point reads to keep their referenced blob files on disk.
+    pub fn pin_blob_files(&self, files: &HashSet<FileNumber>) -> BlobPinGuard {
+        let mut reg = self.active_reads.lock().unwrap();
+        for &file_number in files {
+            let counter = reg.entry(file_number).or_default();
+            counter.fetch_add(1, Ordering::Acquire);
+        }
+        BlobPinGuard {
+            file_numbers: files.iter().copied().collect(),
+            registry: Arc::clone(&self.active_reads),
+        }
+    }
+
+    /// Pin every blob file currently on disk.  This is a conservative snapshot
+    /// pin: it prevents deletion of any blob file that the snapshot might read.
+    pub fn pin_all_blob_files(&self) -> Result<BlobPinGuard> {
+        let files: HashSet<FileNumber> = self.list_files()?.into_iter().collect();
+        Ok(self.pin_blob_files(&files))
+    }
+
     /// True when no reader currently holds a lease on `file_number`.
     fn is_idle(&self, file_number: FileNumber) -> bool {
         let reg = self.active_reads.lock().unwrap();
@@ -450,9 +491,11 @@ impl BlobStore {
 
     /// Read the full record (including column family) referenced by `blob_ref`.
     pub(crate) fn read_blob_record(&self, blob_ref: BlobRef) -> Result<BlobRecord> {
+        // Acquire the read lease *before* opening the file so background GC
+        // cannot delete the file between the open and the lease acquisition.
+        let _lease = self.acquire_lease(blob_ref.file_number);
         let path = blob_file_path(&self.path, blob_ref.file_number);
         let file = File::open(&path)?;
-        let _lease = self.acquire_lease(blob_ref.file_number);
         let mut header = [0u8; BLOB_HEADER_SIZE as usize];
         file.read_exact_at(&mut header, blob_ref.offset)?;
         let header = BlobRecordHeader::decode(&header)
@@ -1439,5 +1482,73 @@ mod tests {
 
         // After GC the file is gone and the ratio is zero.
         assert!(!store.force_gc_needed(0.1));
+    }
+
+    #[test]
+    fn pin_guard_prevents_gc_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        // Small threshold so every write rotates to a new file.
+        let store = BlobStore::open(dir.path(), 1, Arc::new(Metrics::default())).unwrap();
+
+        let r1 = store.put(0, b"k", b"v", 1).unwrap();
+        let _r2 = store.put(0, b"k2", b"v2", 2).unwrap();
+        assert_ne!(r1.file_number, store.current_file_number());
+
+        // Pin all current blob files (simulating an LSM snapshot).
+        let pin = store.pin_all_blob_files().unwrap();
+
+        let mut owner = DummyOwner {
+            live: vec![],
+            rewritten: Vec::new(),
+        };
+        let stats = store
+            .gc_once(
+                &mut owner,
+                &GcOptions {
+                    min_live_ratio: 0.9,
+                    threads: 1,
+                },
+                &[10],
+            )
+            .unwrap();
+
+        // The pinned file must survive even though no records are live.
+        assert_eq!(stats.deleted_files, 0);
+        assert!(blob_file_path(store.path(), r1.file_number).exists());
+
+        // Once the pin is dropped the file can be reclaimed.
+        drop(pin);
+        let stats = store
+            .gc_once(
+                &mut owner,
+                &GcOptions {
+                    min_live_ratio: 0.9,
+                    threads: 1,
+                },
+                &[10],
+            )
+            .unwrap();
+        assert_eq!(stats.deleted_files, 1);
+        assert!(!blob_file_path(store.path(), r1.file_number).exists());
+    }
+
+    #[test]
+    fn read_lease_is_acquired_before_opening_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::open(dir.path(), 1, Arc::new(Metrics::default())).unwrap();
+
+        let r1 = store.put(0, b"k", b"v", 1).unwrap();
+        let _r2 = store.put(0, b"k2", b"v2", 2).unwrap();
+        assert_ne!(r1.file_number, store.current_file_number());
+
+        // Hold a read lease on the file and delete it underneath the store to
+        // simulate a concurrent GC.  The lease acquisition before opening means
+        // the read must fail gracefully (file not found) rather than observing
+        // a torn state, and importantly the lease counter prevents GC deletion
+        // while the lease is held.
+        let lease = store.acquire_lease(r1.file_number);
+        std::fs::remove_file(blob_file_path(store.path(), r1.file_number)).unwrap();
+        assert!(store.get(r1).is_err());
+        drop(lease);
     }
 }

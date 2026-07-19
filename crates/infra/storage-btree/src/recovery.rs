@@ -21,7 +21,7 @@ use crate::buffer::BufferPool;
 use crate::error::{Error, Result};
 use crate::page::{NULL_PAGE_ID, Page, PageId};
 use crate::slot::{OwnedCell, OwnedValue, ValueKind};
-use crate::txn::{NULL_TXN_ID, TxnId};
+use crate::txn::{NULL_TXN_ID, TransactionTable, TxnId};
 use crate::undo;
 use crate::valuelog::ValueLog;
 use crate::version::MvccHeader;
@@ -59,6 +59,10 @@ pub struct Recovery {
     root_page_id: AtomicU64,
     /// Optional value log whose refcounts should be rebuilt from leaf pages.
     value_log: Option<Arc<ValueLog>>,
+    /// Optional transaction table to populate with committed transactions seen
+    /// during the analysis pass.  This lets MVCC visibility work immediately
+    /// after recovery without requiring callers to replay Commit records.
+    txn_table: Option<Arc<TransactionTable>>,
 }
 
 impl Recovery {
@@ -69,12 +73,20 @@ impl Recovery {
             wal,
             root_page_id: AtomicU64::new(root_page_id.get()),
             value_log: None,
+            txn_table: None,
         }
     }
 
     /// Attach a value log so recovery can rebuild its reference counts.
     pub fn with_value_log(mut self, value_log: Arc<ValueLog>) -> Self {
         self.value_log = Some(value_log);
+        self
+    }
+
+    /// Attach a transaction table that will be populated with committed
+    /// transactions discovered during recovery.
+    pub fn with_txn_table(mut self, txn_table: Arc<TransactionTable>) -> Self {
+        self.txn_table = Some(txn_table);
         self
     }
 
@@ -91,6 +103,13 @@ impl Recovery {
     }
 
     pub fn recover(&self, checkpoint_lsn: Lsn) -> Result<PageId> {
+        // Rebuild the committed-transaction table from the full WAL so that
+        // MVCC visibility works immediately after recovery.  (Records before
+        // the checkpoint LSN may have been truncated, so a complete solution
+        // persists this map in the checkpoint META; the full WAL scan is
+        // sufficient when truncation has not yet removed segments.)
+        self.recover_committed_transactions()?;
+
         let analysis = self.analyze(checkpoint_lsn)?;
         self.redo(&analysis, checkpoint_lsn)?;
         if self.value_log.is_some() {
@@ -98,6 +117,24 @@ impl Recovery {
         }
         self.undo(&analysis)?;
         Ok(self.root())
+    }
+
+    /// Scan the entire WAL for `Commit` records and register them in the
+    /// attached transaction table, if any.
+    fn recover_committed_transactions(&self) -> Result<()> {
+        let table = match self.txn_table.as_ref() {
+            Some(t) => t,
+            None => return Ok(()),
+        };
+        for item in self.wal.iter(NULL_LSN)? {
+            let (_lsn, record) = item?;
+            if let RecordType::Commit = record.header.record_type
+                && let RecordPayload::Commit { commit_ts } = record.payload
+            {
+                table.recover_committed(record.header.transaction_id, commit_ts)?;
+            }
+        }
+        Ok(())
     }
 
     /// Rebuild value-log reference counts by scanning every live leaf cell
@@ -178,7 +215,15 @@ impl Recovery {
             }
 
             match record.header.record_type {
-                RecordType::Commit | RecordType::Abort => {
+                RecordType::Commit => {
+                    result.active_txns.remove(&record.header.transaction_id);
+                    if let Some(ref table) = self.txn_table
+                        && let RecordPayload::Commit { commit_ts } = record.payload
+                    {
+                        table.recover_committed(record.header.transaction_id, commit_ts)?;
+                    }
+                }
+                RecordType::Abort => {
                     result.active_txns.remove(&record.header.transaction_id);
                 }
                 _ => {
@@ -739,6 +784,7 @@ mod tests {
         tree.insert_txn(&txn, b"k", b"new").unwrap();
         // Drop without committing: simulate a crash with an active transaction.
         drop(tree);
+        drop(wal);
 
         // Recover from the WAL.
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
@@ -806,6 +852,7 @@ mod tests {
             },
         };
         wal.append(clr).unwrap();
+        drop(wal);
 
         // Recover: analysis must see the CLR, redo must apply it, and undo must
         // continue from undo_next_lsn (which is the Begin record's prev_lsn).
@@ -856,6 +903,7 @@ mod tests {
 
         drop(tree);
         drop(pool);
+        drop(wal);
 
         // Recover and verify the tombstone still points to the old value.
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());
@@ -916,6 +964,7 @@ mod tests {
 
         drop(tree);
         drop(pool);
+        drop(wal);
 
         // Recover and verify the older snapshot still sees the pre-split values.
         let disk2 = Arc::new(PagedFile::open(dir.path().join("pages.dat"), page_size).unwrap());

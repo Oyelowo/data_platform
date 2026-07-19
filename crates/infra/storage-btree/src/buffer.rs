@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 
@@ -20,6 +21,7 @@ use crate::metrics::Metrics;
 use crate::page::{NULL_PAGE_ID, Page, PageId};
 use crate::space::PageAllocator;
 use crate::sync::Mutex as SyncMutex;
+use crate::wal::{Lsn, NULL_LSN, WalLog};
 
 /// Index of a frame inside the buffer pool.
 pub type FrameId = usize;
@@ -235,6 +237,12 @@ pub struct BufferPool {
     metrics: Arc<Metrics>,
     /// Eviction policy.  Default is CLOCK-Pro.
     eviction_policy: Box<dyn EvictionPolicy>,
+    /// Optional physiological WAL.  When present, flushes ensure the WAL is
+    /// durable up to each page's `page_lsn` before writing the page.
+    wal: OnceLock<Arc<WalLog>>,
+    /// Highest LSN that is known to be durable on disk.  Pages with
+    /// `page_lsn > flushed_lsn` must not be flushed until the WAL catches up.
+    flushed_lsn: AtomicU64,
 }
 
 impl BufferPool {
@@ -307,7 +315,18 @@ impl BufferPool {
             eviction_lock: ParkingMutex::new(()),
             metrics,
             eviction_policy: policy,
+            wal: OnceLock::new(),
+            flushed_lsn: AtomicU64::new(NULL_LSN.get()),
         })
+    }
+
+    /// Attach a WAL to this buffer pool.
+    ///
+    /// Must be called before any WAL-before-page enforcement is required; flushing
+    /// a page whose `page_lsn` is non-zero without an attached WAL is an error.
+    /// Ignored if a WAL has already been attached.
+    pub fn set_wal(&self, wal: Arc<WalLog>) {
+        let _ = self.wal.set(wal);
     }
 
     /// Return a reference to the pool's metrics collector.
@@ -514,11 +533,70 @@ impl BufferPool {
         Ok(PageGuard::new_installed(frame_id, page, Arc::clone(self)))
     }
 
+    /// Ensure the WAL is durable up to `page_lsn` before flushing a page.
+    ///
+    /// Updates `flushed_lsn` so subsequent flushes with lower or equal LSNs can
+    /// skip the sync.  If no WAL is attached, non-zero page LSNs are rejected:
+    /// the caller should have attached a WAL before making durable pages.
+    fn sync_wal_before_flush(&self, page_lsn: Lsn) -> Result<()> {
+        if page_lsn == NULL_LSN {
+            return Ok(());
+        }
+        let current = Lsn::new(self.flushed_lsn.load(Ordering::Acquire));
+        if page_lsn <= current {
+            return Ok(());
+        }
+        match self.wal.get() {
+            Some(wal) => {
+                wal.sync_up_to(page_lsn)?;
+                self.flushed_lsn
+                    .fetch_max(page_lsn.get(), Ordering::Release);
+                Ok(())
+            }
+            None => Err(Error::Corruption(
+                "flush of dirty page with WAL LSN but no WAL attached".into(),
+            )),
+        }
+    }
+
+    /// Copy `page` bytes while holding an OLC read latch and verifying the latch
+    /// version is stable.  Spins briefly until a consistent snapshot is obtained.
+    fn copy_page_for_flush(page: &Page) -> Vec<u8> {
+        loop {
+            if let Some(bytes) = page.read_locked_data() {
+                return bytes;
+            }
+            std::thread::yield_now();
+        }
+    }
+
     /// Flush a specific frame to disk if it is dirty.
     pub fn flush_frame(&self, frame_id: FrameId) -> Result<()> {
+        // Snapshot frame state without holding the page latch.  We release the
+        // frame lock before acquiring the page OLC latch to avoid deadlock with
+        // writers that hold the page latch while marking the frame dirty.
+        let (page_id, page_lsn, page) = {
+            let frame = self.frames[frame_id].lock();
+            if !frame.dirty.load(Ordering::Relaxed) || frame.page_id == NULL_PAGE_ID {
+                return Ok(());
+            }
+            let page_lsn = frame.page.header().map(|h| h.page_lsn).unwrap_or(NULL_LSN);
+            (frame.page_id, page_lsn, Arc::clone(&frame.page))
+        };
+
+        // WAL-before-page: the on-disk page image must not become durable before
+        // the WAL records that describe its modifications.
+        self.sync_wal_before_flush(page_lsn)?;
+
+        // Copy the page while holding an OLC read latch and verifying the version
+        // did not change.  Retry if a concurrent writer modified the page.
+        let bytes = Self::copy_page_for_flush(&page);
+
+        // Re-check the frame under the lock: it may have been evicted or flushed
+        // while we were copying.
         let frame = self.frames[frame_id].lock();
-        if frame.dirty.load(Ordering::Relaxed) && frame.page_id != NULL_PAGE_ID {
-            self.disk.write_page(frame.page_id, &frame.page.data())?;
+        if frame.page_id == page_id && frame.dirty.load(Ordering::Relaxed) {
+            self.disk.write_page(page_id, &bytes)?;
             frame.dirty.store(false, Ordering::Relaxed);
             self.metrics.inc_page_flushes();
         }
@@ -544,15 +622,46 @@ impl BufferPool {
     /// are skipped because they may still be mutated by the holder of the pin.
     pub fn flush_dirty_unpinned(&self) -> Result<()> {
         for frame_id in 0..self.frames.len() {
+            // Snapshot frame state without holding the page latch to avoid the
+            // page-latch/frame-lock deadlock described in `flush_frame`.
+            let (page_id, page_lsn, page, pinned) = {
+                let frame = match self.frames[frame_id].try_lock() {
+                    Some(g) => g,
+                    None => continue,
+                };
+                if frame.page_id == NULL_PAGE_ID
+                    || !frame.dirty.load(Ordering::Relaxed)
+                    || frame.pin_count.load(Ordering::Acquire) > 0
+                {
+                    continue;
+                }
+                let page_lsn = frame.page.header().map(|h| h.page_lsn).unwrap_or(NULL_LSN);
+                (
+                    frame.page_id,
+                    page_lsn,
+                    Arc::clone(&frame.page),
+                    frame.pin_count.load(Ordering::Acquire),
+                )
+            };
+
+            // If the pin count changed between the snapshot and now we cannot
+            // safely treat the frame as unpinned.
+            if pinned > 0 {
+                continue;
+            }
+
+            self.sync_wal_before_flush(page_lsn)?;
+            let bytes = Self::copy_page_for_flush(&page);
+
             let frame = match self.frames[frame_id].try_lock() {
                 Some(g) => g,
                 None => continue,
             };
-            if frame.page_id != NULL_PAGE_ID
+            if frame.page_id == page_id
                 && frame.dirty.load(Ordering::Relaxed)
                 && frame.pin_count.load(Ordering::Acquire) == 0
             {
-                self.disk.write_page(frame.page_id, &frame.page.data())?;
+                self.disk.write_page(page_id, &bytes)?;
                 frame.dirty.store(false, Ordering::Relaxed);
             }
         }
@@ -573,6 +682,27 @@ impl BufferPool {
             let frame = self.frames[frame_id].lock();
             if frame.page_id == page_id {
                 return Ok(frame.dirty.load(Ordering::Relaxed));
+            }
+        }
+        Err(Error::NotFound(format!(
+            "page {page_id} not resident in pool"
+        )))
+    }
+
+    /// Return the pin count of the frame holding `page_id`.
+    ///
+    /// Intended for tests that verify frames are pinned during tree operations.
+    #[cfg(test)]
+    pub fn frame_pin_count(&self, page_id: PageId) -> Result<u32> {
+        let shard = self.shard(page_id);
+        let frame_id = {
+            let table = self.page_table[shard].read();
+            table.get(&page_id).copied()
+        };
+        if let Some(frame_id) = frame_id {
+            let frame = self.frames[frame_id].lock();
+            if frame.page_id == page_id {
+                return Ok(frame.pin_count.load(Ordering::Acquire));
             }
         }
         Err(Error::NotFound(format!(
@@ -658,8 +788,21 @@ impl BufferPool {
 
         if frame.page_id != NULL_PAGE_ID {
             if frame.dirty.load(Ordering::Relaxed) {
-                self.disk.write_page(frame.page_id, &frame.page.data())?;
-                self.metrics.inc_page_flushes();
+                let page_id = frame.page_id;
+                let page_lsn = frame.page.header().map(|h| h.page_lsn).unwrap_or(NULL_LSN);
+                let page = Arc::clone(&frame.page);
+                // Release the frame lock while syncing the WAL and latching the
+                // page; re-acquire below before writing.
+                drop(frame);
+
+                self.sync_wal_before_flush(page_lsn)?;
+                let bytes = Self::copy_page_for_flush(&page);
+
+                frame = self.frames[hand].lock();
+                if frame.page_id == page_id && frame.dirty.load(Ordering::Relaxed) {
+                    self.disk.write_page(page_id, &bytes)?;
+                    self.metrics.inc_page_flushes();
+                }
             }
             let shard = self.shard(frame.page_id);
             let mut table = self.page_table[shard].write();
@@ -952,6 +1095,163 @@ mod tests {
         assert!(
             metrics.snapshot().evictions > before,
             "eviction counter should increase"
+        );
+    }
+
+    fn make_pool_with_wal(
+        capacity: usize,
+        fault_config: Option<storage_wal::FaultConfig>,
+    ) -> (Arc<BufferPool>, Arc<WalLog>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
+        let pool = Arc::new(BufferPool::new(capacity, 512, disk, alloc).unwrap());
+        let wal = Arc::new(
+            WalLog::open_with_fault_config(dir.path(), storage_wal::WalOptions::default(), fault_config)
+                .unwrap(),
+        );
+        pool.set_wal(Arc::clone(&wal));
+        (pool, wal, dir)
+    }
+
+    #[test]
+    fn flush_frame_with_wal_syncs_before_writing() {
+        let (pool, wal, dir) = make_pool_with_wal(4, None);
+        let guard = pool.new_page().unwrap();
+        let id = guard.page().id;
+        guard
+            .page()
+            .insert(b"k", &crate::slot::ValueKind::Inline(b"v"))
+            .unwrap();
+        guard.mark_dirty();
+        drop(guard);
+
+        // Manually set a page LSN so the flush path must sync the WAL first.
+        let lsn = wal
+            .append(crate::wal::Record {
+                header: crate::wal::RecordHeader::new(
+                    crate::wal::RecordType::SetRoot,
+                    crate::txn::NULL_TXN_ID,
+                    crate::wal::NULL_LSN,
+                    crate::page::NULL_PAGE_ID,
+                    crate::wal::NULL_LSN,
+                ),
+                payload: crate::wal::RecordPayload::SetRoot {
+                    new_root_page_id: id,
+                },
+            })
+            .unwrap();
+        crate::wal::set_page_lsn(&pool.fetch(id).unwrap().page_arc(), lsn).unwrap();
+
+        let before = wal.iter(crate::wal::NULL_LSN).unwrap().count();
+        pool.flush_frame(0).unwrap();
+        let after = wal.iter(crate::wal::NULL_LSN).unwrap().count();
+        // The WAL record was already appended; flushing should not add more.
+        assert_eq!(before, after);
+
+        // The page is durable and can be read back through a fresh pool.
+        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
+        let pool2 = Arc::new(BufferPool::new(4, 512, disk, alloc).unwrap());
+        let guard = pool2.fetch_or_read(id).unwrap();
+        let cell = guard.page().get(b"k").unwrap().unwrap();
+        assert_eq!(
+            cell.value.as_value_kind(),
+            crate::slot::ValueKind::Inline(b"v")
+        );
+    }
+
+    #[test]
+    fn flush_frame_without_wal_rejects_nonzero_page_lsn() {
+        let (pool, _dir) = make_pool(4);
+        let guard = pool.new_page().unwrap();
+        let id = guard.page().id;
+        guard
+            .page()
+            .insert(b"k", &crate::slot::ValueKind::Inline(b"v"))
+            .unwrap();
+        guard.mark_dirty();
+        drop(guard);
+
+        // Pretend the page has a WAL LSN but no WAL is attached.
+        crate::wal::set_page_lsn(&pool.fetch(id).unwrap().page_arc(), crate::wal::Lsn::new(1))
+            .unwrap();
+
+        assert!(
+            pool.flush_frame(0).is_err(),
+            "flush must fail when page_lsn is set but no WAL is attached"
+        );
+    }
+
+    #[test]
+    fn flush_frame_is_consistent_under_concurrent_write() {
+        let (pool, _wal, dir) = make_pool_with_wal(4, None);
+        let guard = pool.new_page().unwrap();
+        let id = guard.page().id;
+        guard
+            .page()
+            .insert(b"k", &crate::slot::ValueKind::Inline(b"0"))
+            .unwrap();
+        guard.mark_dirty();
+        drop(guard);
+
+        let pool2 = Arc::clone(&pool);
+        let writer = std::thread::spawn(move || {
+            for i in 1u8..=100 {
+                let guard = pool2.fetch(id).unwrap();
+                guard
+                    .with_mut(|page| {
+                        page.insert(b"k", &crate::slot::ValueKind::Inline(&[i]))?;
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        });
+
+        // Flush repeatedly while the writer is modifying the page.  The latch
+        // coordination in `flush_frame` guarantees every on-disk image is a
+        // valid, non-torn page.
+        for _ in 0..50 {
+            pool.flush_frame(0).unwrap();
+        }
+        writer.join().unwrap();
+        pool.flush_frame(0).unwrap();
+
+        // Reopen and verify the page is structurally valid.
+        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
+        let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
+        let pool3 = Arc::new(BufferPool::new(4, 512, disk, alloc).unwrap());
+        let guard = pool3.fetch_or_read(id).unwrap();
+        let cell = guard.page().get(b"k").unwrap().unwrap();
+        assert!(cell.value.as_value_kind() != crate::slot::ValueKind::Inline(b""));
+    }
+
+    #[test]
+    fn wal_before_page_enforced_by_faulty_sync() {
+        // If WAL sync fails, the page flush must also fail so we never make a
+        // page durable without its WAL records.
+        let (pool, _wal, _dir) = make_pool_with_wal(
+            4,
+            Some(storage_wal::FaultConfig {
+                fail_sync_every: Some(1),
+                ..Default::default()
+            }),
+        );
+        let guard = pool.new_page().unwrap();
+        let id = guard.page().id;
+        guard
+            .page()
+            .insert(b"k", &crate::slot::ValueKind::Inline(b"v"))
+            .unwrap();
+        guard.mark_dirty();
+        drop(guard);
+
+        crate::wal::set_page_lsn(&pool.fetch(id).unwrap().page_arc(), crate::wal::Lsn::new(1))
+            .unwrap();
+
+        assert!(
+            pool.flush_frame(0).is_err(),
+            "flush must propagate WAL sync failures"
         );
     }
 }

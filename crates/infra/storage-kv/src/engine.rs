@@ -20,6 +20,7 @@
 //!   doing any I/O.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -29,6 +30,7 @@ use crate::blob::{BlobRef, BlobStore};
 use crate::cache::BlockCaches;
 use crate::column_family::{ColumnFamily, ColumnFamilyHandle, ColumnFamilyId, ColumnFamilySet};
 use crate::compaction::pick_compaction;
+use crate::file::sync_dir;
 use crate::compaction_merge;
 use crate::cursor::LsmCursor;
 use crate::immutable::sstable_path;
@@ -45,6 +47,27 @@ use crate::version_set::VersionEdit;
 use crate::wal::WalRecord;
 use crate::worker::{Worker, WorkerCommand};
 use crate::{Error, Result, SequenceNumber};
+
+/// Atomically update the `CURRENT` pointer to name `manifest_name`.
+///
+/// Writes a temporary file, fsyncs it, renames it over `CURRENT`, then fsyncs
+/// the database directory so the rename is durable.  This matches the standard
+/// LevelDB/RocksDB pattern for crash-safe metadata updates.
+pub(crate) fn set_current_file(db_path: impl AsRef<Path>, manifest_name: &str) -> Result<()> {
+    let db_path = db_path.as_ref();
+    let tmp_path = db_path.join("CURRENT.tmp");
+    let final_path = db_path.join("CURRENT");
+
+    {
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(format!("{manifest_name}\n").as_bytes())?;
+        file.sync_all()?;
+    }
+
+    std::fs::rename(&tmp_path, &final_path)?;
+    sync_dir(db_path)?;
+    Ok(())
+}
 
 /// Public handle to an LSM-tree engine.
 pub struct LsmEngine {
@@ -98,7 +121,7 @@ impl LsmEngine {
         } else {
             Manifest::create(&manifest_path)?
         }));
-        std::fs::write(path.join("CURRENT"), "MANIFEST-000001\n")?;
+        set_current_file(&path, "MANIFEST-000001")?;
 
         let seq_allocator = SequenceAllocator::new(last_sequence);
 
@@ -635,9 +658,54 @@ impl LsmEngineInner {
     /// WAL and inserted into its MemTable.  This keeps the published snapshot
     /// watermark below the batch while it is being applied, so readers observe
     /// either none or all of the transaction's writes.
+    ///
+    /// # Atomicity strategy (Option A)
+    ///
+    /// All validation that can fail is performed before any mutation or WAL
+    /// append: every targeted column family must exist, every `delete_range`
+    /// must have valid bounds, and every affected CF must pass the write-stall
+    /// check.  Once pre-validation succeeds, the only failure points are WAL
+    /// append and blob write, both of which occur before any MemTable insertion.
+    /// Therefore a failed batch cannot leave a partial MemTable footprint; the
+    /// held sequence guards are simply dropped, which publishes a gap in the
+    /// sequence space and makes the batch invisible to readers.
     pub(crate) fn apply_transaction_ops(&self, ops: &[crate::transaction::WriteOp]) -> Result<()> {
         if ops.is_empty() {
             return Ok(());
+        }
+
+        // Pre-validate every operation and collect the affected column families.
+        // If anything fails here, no durable or in-memory state has changed yet.
+        let mut affected_cfs: Vec<ColumnFamilyId> = Vec::with_capacity(ops.len());
+        {
+            let state = self.state.lock().unwrap();
+            for op in ops {
+                let cf_id = match op {
+                    crate::transaction::WriteOp::Put { cf, .. }
+                    | crate::transaction::WriteOp::Delete { cf, .. }
+                    | crate::transaction::WriteOp::DeleteRange { cf, .. } => *cf,
+                };
+                let _cf = state
+                    .column_families
+                    .get(cf_id)
+                    .ok_or_else(|| Error::InvalidArgument("column family not found".into()))?;
+                if let crate::transaction::WriteOp::DeleteRange { start, end, .. } = op
+                    && start >= end
+                {
+                    return Err(Error::InvalidArgument(
+                        "delete_range start must be < end".into(),
+                    ));
+                }
+                affected_cfs.push(cf_id);
+            }
+        }
+        affected_cfs.sort_unstable();
+        affected_cfs.dedup();
+
+        // Pre-check write stall for every affected CF so the batch cannot fail
+        // mid-way due to L0 backpressure.
+        for &cf_id in &affected_cfs {
+            self.check_write_stall(cf_id)?;
         }
 
         // Allocate one sequence per operation and hold every guard until the
@@ -663,12 +731,6 @@ impl LsmEngineInner {
                     WalRecord::new_delete_cf(*cf, key, seq)
                 }
                 crate::transaction::WriteOp::DeleteRange { cf, start, end } => {
-                    if start >= end {
-                        drop(guards);
-                        return Err(Error::InvalidArgument(
-                            "delete_range start must be < end".into(),
-                        ));
-                    }
                     WalRecord::new_delete_range_cf(*cf, start, end, seq)
                 }
             };
@@ -710,6 +772,8 @@ impl LsmEngineInner {
         // Insert every operation into the appropriate MemTable.  Because the
         // sequence numbers increase with operation order, the final memtable
         // state reflects the order in which the application issued the writes.
+        // No mid-batch stall/freeze checks are performed here; they were handled
+        // during pre-validation or will be handled after the batch is visible.
         for ((op, &seq), blob_ref) in ops.iter().zip(sequences.iter()).zip(blob_refs) {
             let state = self.state.lock().unwrap();
             let cf_id = match op {
@@ -739,16 +803,20 @@ impl LsmEngineInner {
                     write_guard.delete_range(start, end, seq);
                 }
             }
-            drop(state);
-            self.check_write_stall(cf_id)?;
-            if self.should_freeze(cf_id) {
-                self.maybe_freeze(cf_id)?;
-            }
         }
 
         // All writes are now durable and visible; release the watermark.
         for guard in guards {
             guard.release();
+        }
+
+        // Post-batch MemTable freezing.  This cannot fail atomically because the
+        // batch is already visible; any error here (e.g., the CF was dropped
+        // concurrently) is best-effort and does not affect batch durability.
+        for &cf_id in &affected_cfs {
+            if self.should_freeze(cf_id) {
+                let _ = self.maybe_freeze(cf_id);
+            }
         }
 
         Ok(())
@@ -1067,7 +1135,9 @@ impl LsmEngineInner {
         key: &[u8],
         snapshot: SequenceNumber,
     ) -> Result<Option<Bytes>> {
-        let (memtable, immutable, version, caches, path) = {
+        // Pin the blob file set while still holding the engine lock so the
+        // pinned set matches the captured snapshot view.
+        let (memtable, immutable, version, caches, path, _blob_pin) = {
             let state = self.state.lock().unwrap();
             let cf = state
                 .column_families
@@ -1078,7 +1148,8 @@ impl LsmEngineInner {
             let version = cf.version_set.current();
             let caches = cf.caches.clone();
             let path = state.path.clone();
-            (memtable, immutable, version, caches, path)
+            let blob_pin = self.blob_store.pin_all_blob_files()?;
+            (memtable, immutable, version, caches, path, blob_pin)
         };
         self.get_with_parts(
             key, snapshot, &memtable, &immutable, &version, &caches, &path,
@@ -1276,6 +1347,13 @@ impl EngineState {
         let path = self.path.clone();
         let mut fully_cleaned = Vec::new();
         for (id, zombie) in self.dropped_cfs.iter_mut() {
+            // Do not delete any file while a reader may still hold the dropped
+            // CF's current `Version`.  Once only the `VersionSet` itself holds
+            // the current reference, the current version's files are also safe
+            // to delete if they are obsolete.
+            if !zombie.version_set.current_is_unreferenced() {
+                continue;
+            }
             let live = zombie.version_set.live_file_numbers();
             let current = zombie.version_set.current_file_numbers();
             // Only retired versions (snapshots) can keep files alive now.
@@ -1503,5 +1581,68 @@ fn resolve_typed_result(
     match result {
         None => Ok(None),
         Some((ty, val)) => resolve_value(ty, Some(val), blob_store),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `CURRENT` must be written atomically via a temp file and directory fsync
+    /// so recovery can find the manifest after a crash.  We verify the helper
+    /// produces a readable CURRENT file and that a second call replaces it.
+    #[test]
+    fn current_file_is_atomic_and_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        set_current_file(dir.path(), "MANIFEST-000001").unwrap();
+
+        let current = std::fs::read_to_string(dir.path().join("CURRENT")).unwrap();
+        assert_eq!(current.trim(), "MANIFEST-000001");
+
+        set_current_file(dir.path(), "MANIFEST-000002").unwrap();
+        let current = std::fs::read_to_string(dir.path().join("CURRENT")).unwrap();
+        assert_eq!(current.trim(), "MANIFEST-000002");
+        assert!(!dir.path().join("CURRENT.tmp").exists());
+    }
+
+    /// Recovery must not delete SSTables when `CURRENT` is missing but the
+    /// manifest is still present.
+    #[test]
+    fn recovery_keeps_sstables_when_current_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = LsmOptions {
+            write_buffer_size: 256,
+            ..Default::default()
+        };
+        {
+            let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
+            for i in 0..50u8 {
+                engine.put(&[i], &[i + 100]).unwrap();
+            }
+            engine.sync().unwrap();
+        }
+
+        // Ensure at least one SSTable was produced.
+        let sst_count_before = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("sst"))
+            .count();
+        assert!(sst_count_before > 0);
+
+        // Simulate a crash that left CURRENT behind but lost the pointer.
+        std::fs::remove_file(dir.path().join("CURRENT")).unwrap();
+
+        {
+            let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
+            for i in 0..50u8 {
+                assert_eq!(
+                    engine.get(&[i]).unwrap().unwrap().as_ref(),
+                    &[i + 100],
+                    "key {} lost after CURRENT recovery",
+                    i
+                );
+            }
+        }
     }
 }

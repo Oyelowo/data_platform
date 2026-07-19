@@ -6,7 +6,7 @@ use bytes::Bytes;
 use storage_traits::Predicate;
 
 use crate::Result;
-use crate::manifest::ColumnStats;
+use crate::manifest::{ColumnStats, StatsValue};
 use crate::schema::TableSchema;
 use crate::types::ColumnType;
 
@@ -26,41 +26,21 @@ pub fn prune_file_by_stats(
             let Some(col_stats) = stats.get(column) else {
                 return true;
             };
-            if col_stats.min.is_empty() && col_stats.max.is_empty() {
+            if col_stats.min.is_unknown() || col_stats.max.is_unknown() {
                 return true;
             }
             let Some(def) = schema.column(column) else {
                 return true;
             };
-            match def.ty {
-                ColumnType::Int64 | ColumnType::TimestampMicros => {
-                    let Some(min) = parse_i64(&col_stats.min).ok() else {
-                        return true;
-                    };
-                    let Some(max) = parse_i64(&col_stats.max).ok() else {
-                        return true;
-                    };
-                    let Some(v) = parse_i64(value).ok() else {
-                        return true;
-                    };
-                    min <= v && v <= max
-                }
-                ColumnType::Float64 => {
-                    let Some(min) = parse_f64(&col_stats.min).ok() else {
-                        return true;
-                    };
-                    let Some(max) = parse_f64(&col_stats.max).ok() else {
-                        return true;
-                    };
-                    let Some(v) = parse_f64(value).ok() else {
-                        return true;
-                    };
-                    min <= v && v <= max
-                }
-                ColumnType::Bool | ColumnType::Utf8 | ColumnType::Binary => {
-                    col_stats.min.as_ref() <= value.as_ref()
-                        && value.as_ref() <= col_stats.max.as_ref()
-                }
+            let Ok(query) = StatsValue::from_bytes(value, def.ty) else {
+                return true;
+            };
+            match compare_stats_value(&col_stats.min, &query) {
+                Some(std::cmp::Ordering::Greater) => false,
+                _ => !matches!(
+                    compare_stats_value(&query, &col_stats.max),
+                    Some(std::cmp::Ordering::Greater)
+                ),
             }
         }
         Predicate::Range {
@@ -72,7 +52,7 @@ pub fn prune_file_by_stats(
             let Some(col_stats) = stats.get(column) else {
                 return true;
             };
-            if col_stats.min.is_empty() && col_stats.max.is_empty() {
+            if col_stats.min.is_unknown() || col_stats.max.is_unknown() {
                 return true;
             }
             let Some(def) = schema.column(column) else {
@@ -80,56 +60,28 @@ pub fn prune_file_by_stats(
             };
 
             let lower_overlaps = match lower {
-                Some(lo) => match def.ty {
-                    ColumnType::Int64 | ColumnType::TimestampMicros => {
-                        let Some(max) = parse_i64(&col_stats.max).ok() else {
-                            return true;
-                        };
-                        let Some(lo) = parse_i64(lo).ok() else {
-                            return true;
-                        };
-                        lo <= max
-                    }
-                    ColumnType::Float64 => {
-                        let Some(max) = parse_f64(&col_stats.max).ok() else {
-                            return true;
-                        };
-                        let Some(lo) = parse_f64(lo).ok() else {
-                            return true;
-                        };
-                        lo <= max
-                    }
-                    ColumnType::Bool | ColumnType::Utf8 | ColumnType::Binary => {
-                        lo.as_ref() <= col_stats.max.as_ref()
-                    }
-                },
+                Some(lo) => {
+                    let Ok(lo) = StatsValue::from_bytes(lo, def.ty) else {
+                        return true;
+                    };
+                    !matches!(
+                        compare_stats_value(&lo, &col_stats.max),
+                        Some(std::cmp::Ordering::Greater)
+                    )
+                }
                 None => true,
             };
 
             let upper_overlaps = match upper {
-                Some(hi) => match def.ty {
-                    ColumnType::Int64 | ColumnType::TimestampMicros => {
-                        let Some(min) = parse_i64(&col_stats.min).ok() else {
-                            return true;
-                        };
-                        let Some(hi) = parse_i64(hi).ok() else {
-                            return true;
-                        };
-                        hi >= min
-                    }
-                    ColumnType::Float64 => {
-                        let Some(min) = parse_f64(&col_stats.min).ok() else {
-                            return true;
-                        };
-                        let Some(hi) = parse_f64(hi).ok() else {
-                            return true;
-                        };
-                        hi >= min
-                    }
-                    ColumnType::Bool | ColumnType::Utf8 | ColumnType::Binary => {
-                        hi.as_ref() >= col_stats.min.as_ref()
-                    }
-                },
+                Some(hi) => {
+                    let Ok(hi) = StatsValue::from_bytes(hi, def.ty) else {
+                        return true;
+                    };
+                    !matches!(
+                        compare_stats_value(&col_stats.min, &hi),
+                        Some(std::cmp::Ordering::Greater)
+                    )
+                }
                 None => true,
             };
 
@@ -142,6 +94,11 @@ pub fn prune_file_by_stats(
             .iter()
             .any(|c| prune_file_by_stats(c, stats, schema)),
     }
+}
+
+/// Compare two `StatsValue`s, returning `None` if their types are incompatible.
+fn compare_stats_value(left: &StatsValue, right: &StatsValue) -> Option<std::cmp::Ordering> {
+    left.partial_cmp(right)
 }
 
 /// Evaluate a predicate against a single row given as a map from column name to

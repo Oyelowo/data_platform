@@ -115,3 +115,56 @@ fn tmp_files_are_cleaned_on_open() {
     let _engine = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap();
     assert!(!stale.exists(), "stale temp file should be removed on open");
 }
+
+#[test]
+fn sync_on_flush_makes_data_durable() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let mut options = ColumnarOptions::default();
+        options.sync_on_flush = true;
+        let engine = ColumnarEngineImpl::open(dir.path(), options).unwrap();
+        engine
+            .set_schema(TableSchema {
+                columns: vec![ColumnDef {
+                    name: "id".into(),
+                    ty: ColumnType::Int64,
+                    nullable: true,
+                }],
+            })
+            .unwrap();
+        engine
+            .ingest(vec![("id".into(), vec![Some(Bytes::from("42"))])])
+            .unwrap();
+    }
+
+    let engine = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap();
+    let result = engine.scan(&["id"], &Predicate::True).unwrap();
+    assert_eq!(result[0].1, vec![Some(Bytes::from("42"))]);
+}
+
+#[test]
+fn explicit_sync_flushes_wal_and_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let engine = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap();
+        engine
+            .set_schema(TableSchema {
+                columns: vec![ColumnDef {
+                    name: "id".into(),
+                    ty: ColumnType::Int64,
+                    nullable: true,
+                }],
+            })
+            .unwrap();
+        engine
+            .ingest(vec![("id".into(), vec![Some(Bytes::from("7"))])])
+            .unwrap();
+        engine.sync().unwrap();
+    }
+
+    // After an explicit sync, reopening must see the data even if sync_on_flush
+    // was disabled on the second open.
+    let engine = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap();
+    let result = engine.scan(&["id"], &Predicate::True).unwrap();
+    assert_eq!(result[0].1, vec![Some(Bytes::from("7"))]);
+}

@@ -81,7 +81,8 @@ impl SSTableReader {
             true,
         )?;
 
-        let filter_reader = BloomFilterReader::new(&filter_data, 10);
+        let bits_per_key = find_bloom_bits_per_key(&meta_index).unwrap_or(10) as usize;
+        let filter_reader = BloomFilterReader::new(&filter_data, bits_per_key);
 
         let range_tombstones = match find_range_tombstone_handle(&meta_index) {
             Some(handle) => {
@@ -227,6 +228,11 @@ impl SSTableReader {
     /// Return the path to the SSTable file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Return the bloom filter bits-per-key configured for this table.
+    pub fn bloom_bits_per_key(&self) -> usize {
+        self.filter_reader.bits_per_key()
     }
 }
 
@@ -536,6 +542,26 @@ fn find_filter_handle(meta_index: &[u8]) -> Result<BlockHandle> {
         iter.next();
     }
     Err(crate::Error::Sstable("filter handle not found".into()))
+}
+
+fn find_bloom_bits_per_key(meta_index: &[u8]) -> Option<u64> {
+    let mut iter = BlockIterator::new(
+        Bytes::copy_from_slice(meta_index),
+        BlockComparator::Bytewise,
+    );
+    iter.seek_to_first();
+    while iter.valid() {
+        if iter.key() == b"filter.bloom.bits_per_key" {
+            let value = iter.value();
+            if value.len() >= 8 {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&value[..8]);
+                return Some(u64::from_le_bytes(buf));
+            }
+        }
+        iter.next();
+    }
+    None
 }
 
 fn find_range_tombstone_handle(meta_index: &[u8]) -> Option<BlockHandle> {
@@ -917,6 +943,38 @@ mod tests {
             } else {
                 assert_eq!(got, Some(Some(Bytes::from(vec![i, 1]))));
             }
+        }
+    }
+
+    /// The persisted bloom filter bits-per-key must be read back and used to
+    /// construct the reader.  With a non-default value, present keys must still
+    /// never produce false negatives.
+    #[test]
+    fn bloom_bits_per_key_is_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sst");
+        let mut builder = SSTableBuilder::open(
+            &path,
+            SSTableBuilderOptions {
+                bloom_bits_per_key: 4,
+                compression: CompressionType::None,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for i in 0..200u16 {
+            builder.add(&ik(&i.to_be_bytes()), &i.to_le_bytes()).unwrap();
+        }
+        builder.finish().unwrap();
+
+        let mut reader = SSTableReader::open(&path, 1, None).unwrap();
+        assert_eq!(reader.bloom_bits_per_key(), 4);
+        for i in 0..200u16 {
+            assert!(
+                reader.get(&i.to_be_bytes(), u64::MAX).unwrap().is_some(),
+                "false negative for key {} with persisted bits_per_key",
+                i
+            );
         }
     }
 

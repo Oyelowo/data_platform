@@ -379,3 +379,43 @@ fn cf_txn_snapshot_survives_flush() {
         );
     }
 }
+
+#[test]
+fn batch_commit_is_atomic_on_pre_validation_failure() {
+    let dir = TempDir::new().unwrap();
+    let opts = LsmOptions {
+        write_buffer_size: 64,
+        max_write_buffer_number: 2,
+        // Disable compaction so L0 files accumulate and the stop-write trigger
+        // is guaranteed to fire.
+        level0_file_num_compaction_trigger: 100,
+        level0_stop_writes_trigger: 3,
+        level0_slowdown_writes_trigger: 2,
+        ..Default::default()
+    };
+    let engine = LsmEngine::open(dir.path(), opts.clone()).unwrap();
+    let cf = engine.create_column_family("cf1", opts.clone()).unwrap();
+
+    // Fill L0 up to the stop-writes trigger.
+    for i in 0..3u8 {
+        engine.put_cf(&cf, &[i], &[i + 1]).unwrap();
+        engine.sync().unwrap();
+    }
+
+    // A transaction that tries to write many keys must either apply all of them
+    // or none of them.  Because pre-validation runs before any mutation, a
+    // stop-write failure means the entire batch is rejected and no key is visible.
+    let mut txn = engine.begin(Default::default()).unwrap();
+    for i in 10..20u8 {
+        txn.put_cf(&cf, &[i], &[i + 10]).unwrap();
+    }
+    assert!(txn.commit().is_err());
+
+    for i in 10..20u8 {
+        assert!(
+            engine.get_cf(&cf, &[i]).unwrap().is_none(),
+            "partial batch visible for key {}",
+            i
+        );
+    }
+}

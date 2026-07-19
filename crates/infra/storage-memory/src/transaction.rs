@@ -96,7 +96,6 @@ impl Transaction for MemoryTransaction {
         let mut merged: BTreeMap<Bytes, Option<Bytes>> = self
             .data
             .range(start_bytes.as_ref(), end_bytes.as_ref())
-            .into_iter()
             .map(|(k, v)| (k, Some(v)))
             .collect();
 

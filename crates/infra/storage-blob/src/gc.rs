@@ -4,6 +4,10 @@
 //! deletes the old volumes once their contents are no longer referenced by the
 //! index.  Readers hold open file descriptors, so unlinking a volume file while
 //! a read is in progress is safe on Unix-like systems.
+//!
+//! Each GC move is serialized with other mutating operations by the store-wide
+//! `mutation_lock`.  This guarantees that the WAL order for GC moves matches
+//! the final in-memory index order.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -17,6 +21,7 @@ use storage_wal::{Durability, Wal};
 
 use crate::index::{BlobLocation, Index};
 use crate::index_wal::IndexRecord;
+use crate::util::sync_dir;
 use crate::volume::VolumeReader;
 use crate::volume_manager::VolumeManager;
 use crate::{BlobStoreOptions, Error, Result};
@@ -29,17 +34,24 @@ pub struct GarbageCollector {
     volumes: Arc<VolumeManager>,
     bytes_rewritten: AtomicU64,
     bytes_dropped: AtomicU64,
+    mutation_lock: Arc<std::sync::Mutex<()>>,
 }
 
 impl GarbageCollector {
     /// Create a new GC instance.
-    pub fn new(wal: Arc<Wal>, index: Index, volumes: Arc<VolumeManager>) -> Self {
+    pub fn new(
+        wal: Arc<Wal>,
+        index: Index,
+        volumes: Arc<VolumeManager>,
+        mutation_lock: Arc<std::sync::Mutex<()>>,
+    ) -> Self {
         Self {
             wal,
             index,
             volumes,
             bytes_rewritten: AtomicU64::new(0),
             bytes_dropped: AtomicU64::new(0),
+            mutation_lock,
         }
     }
 
@@ -93,6 +105,10 @@ impl GarbageCollector {
                 // Read the full record (GC operates on whole records).
                 let (_header, _stored_id, payload) = reader.read_record(old_loc.offset)?;
 
+                // Serialize the move with other mutating operations so that WAL
+                // order and index order stay identical.
+                let _guard = self.mutation_lock.lock().unwrap();
+
                 // Rewrite to the active volume.
                 let (new_loc, new_header) = self
                     .volumes
@@ -109,6 +125,10 @@ impl GarbageCollector {
                     .is_some();
 
                 if swapped {
+                    // Make the rewritten data durable before recording the move
+                    // in the WAL, matching the sync_on_put durability boundary.
+                    self.volumes.sync()?;
+
                     let record = IndexRecord::GcMove {
                         id: id.clone(),
                         old_volume_number: old_loc.volume_number,
@@ -125,11 +145,15 @@ impl GarbageCollector {
                     volume_reclaimed +=
                         crate::format::padded_record_size(id.len() as u32, payload.len() as u64);
                 }
+                // The lock is released here so that foreground operations are
+                // not blocked for the entire GC pass.
             }
 
             // Evict the reader cache entry and delete the volume.
             self.volumes.evict_reader(volume_number);
             fs::remove_file(&path)?;
+            // Ensure the directory entry removal is durable.
+            sync_dir(self.volumes.volumes_dir())?;
             self.bytes_dropped
                 .fetch_add(volume_reclaimed, Ordering::Relaxed);
             reclaimed += volume_reclaimed;

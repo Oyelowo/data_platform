@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::manifest::Manifest;
 use crate::{Error, Result};
 
-const CURRENT_FILE: &str = "CURRENT";
+pub(crate) const CURRENT_FILE: &str = "CURRENT";
 const SNAPSHOT_DIR: &str = "manifest-snapshot";
 
 /// Write a snapshot of `manifest` at `lsn` and update the `CURRENT` pointer.
@@ -48,15 +48,24 @@ pub fn write(path: &Path, manifest: &Manifest, lsn: u64) -> Result<PathBuf> {
     Ok(snapshot_path)
 }
 
-/// Load the latest snapshot and its LSN, if one exists.
+/// Load the latest snapshot and its LSN.
+///
+/// Returns `Error::CorruptSnapshot` if `CURRENT` exists but the snapshot it
+/// points to cannot be read or decoded. Callers that need to distinguish a
+/// missing snapshot from a corrupt one should check for `CURRENT` first.
 pub fn load(path: &Path) -> Result<(Manifest, u64)> {
     let current_path = path.join(CURRENT_FILE);
-    let current = std::fs::read_to_string(&current_path)?;
+    let current = std::fs::read_to_string(&current_path).map_err(|e| {
+        Error::CorruptSnapshot(format!("failed to read CURRENT: {e}"))
+    })?;
     let snapshot_name = current.trim();
     let snapshot_path = path.join(SNAPSHOT_DIR).join(snapshot_name);
-    let bytes = std::fs::read(&snapshot_path)?;
-    let manifest: Manifest = serde_json::from_slice(&bytes)
-        .map_err(|e| Error::ManifestWal(format!("failed to decode snapshot: {e}")))?;
+    let bytes = std::fs::read(&snapshot_path).map_err(|e| {
+        Error::CorruptSnapshot(format!("failed to read snapshot file {snapshot_path:?}: {e}"))
+    })?;
+    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| {
+        Error::CorruptSnapshot(format!("failed to decode snapshot: {e}"))
+    })?;
 
     let lsn = parse_lsn(snapshot_name)?;
     Ok((manifest, lsn))
@@ -64,8 +73,8 @@ pub fn load(path: &Path) -> Result<(Manifest, u64)> {
 
 fn parse_lsn(name: &str) -> Result<u64> {
     let stem = name.strip_suffix(".snapshot").ok_or_else(|| {
-        Error::ManifestWal(format!("snapshot name missing .snapshot suffix: {name}"))
+        Error::CorruptSnapshot(format!("snapshot name missing .snapshot suffix: {name}"))
     })?;
     stem.parse::<u64>()
-        .map_err(|e| Error::ManifestWal(format!("invalid snapshot lsn '{stem}': {e}")))
+        .map_err(|e| Error::CorruptSnapshot(format!("invalid snapshot lsn '{stem}': {e}")))
 }

@@ -159,3 +159,57 @@ fn drop_cf_does_not_delete_other_cfs_files() {
         );
     }
 }
+
+#[test]
+fn drop_cf_does_not_delete_files_while_snapshot_holds_them() {
+    use storage_traits::Engine;
+
+    let dir = tempfile::tempdir().unwrap();
+    let engine = LsmEngine::open(dir.path(), small_opts()).unwrap();
+    let cf = engine.create_column_family("cf1", small_opts()).unwrap();
+    for i in 0..50u8 {
+        engine.put_cf(&cf, &[i], &[i + 1]).unwrap();
+    }
+    engine.sync().unwrap();
+
+    // Begin a transaction that pins the current version of cf1.
+    let txn = engine.begin(Default::default()).unwrap();
+
+    // Drop the column family while the snapshot is alive.  Files must not be
+    // physically deleted yet because the transaction may still read them.
+    engine.drop_column_family(&cf).unwrap();
+    engine.sync().unwrap();
+
+    let sst_while_txn_alive = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("sst"))
+        .count();
+    assert!(
+        sst_while_txn_alive > 0,
+        "dropped CF files must be retained while a snapshot holds them"
+    );
+
+    // The snapshot must still see the data from the dropped CF.
+    for i in 0..50u8 {
+        assert_eq!(
+            txn.get_cf(&cf, &[i]).unwrap(),
+            Some(bytes::Bytes::from(vec![i + 1]))
+        );
+    }
+
+    // After the snapshot is dropped, cleanup can remove the files.
+    drop(txn);
+    drop(engine);
+
+    let engine = LsmEngine::open(dir.path(), small_opts()).unwrap();
+    engine.sync().unwrap();
+    drop(engine);
+
+    let sst_after_close = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("sst"))
+        .count();
+    assert_eq!(sst_after_close, 0, "dropped CF files must be removed after snapshots drop");
+}

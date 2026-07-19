@@ -48,6 +48,17 @@ impl VersionSet {
         self.inner.lock().unwrap().current.clone()
     }
 
+    /// True when no external reader holds a reference to the current `Version`.
+    ///
+    /// The `VersionSet` itself always holds one strong reference; this returns
+    /// `true` only when that is the only remaining reference.  This is used by
+    /// dropped-column-family cleanup to avoid deleting files that an in-flight
+    /// reader may still reference.
+    pub fn current_is_unreferenced(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        Arc::strong_count(&inner.current) == 1
+    }
+
     pub fn new_file_number(&self) -> FileNumber {
         self.inner.lock().unwrap().file_numbers.next()
     }
@@ -133,7 +144,7 @@ impl VersionSet {
         inner.retired_versions.push(Arc::downgrade(&old_current));
 
         inner.file_numbers.ensure_at_least(edit.next_file_number);
-        inner.last_sequence = inner.last_sequence.min(edit.last_sequence);
+        inner.last_sequence = inner.last_sequence.max(edit.last_sequence);
         Ok(())
     }
 
@@ -273,5 +284,33 @@ mod tests {
 
         let numbers: Vec<FileNumber> = vs.current().levels[0].iter().map(|f| f.number).collect();
         assert_eq!(numbers, vec![10, 11, 12]);
+    }
+
+    /// `last_sequence` must increase monotonically as edits with higher
+    /// sequence numbers are applied.  Using `min` would leave it stuck at the
+    /// initial value and break WAL replay cutoffs.
+    #[test]
+    fn last_sequence_increases_with_edits() {
+        let vs = VersionSet::new(7);
+        vs.set_last_sequence(0);
+        vs.apply(VersionEdit {
+            last_sequence: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(vs.last_sequence(), 5);
+        vs.apply(VersionEdit {
+            last_sequence: 10,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(vs.last_sequence(), 10);
+        // Applying a lower edit must not roll the sequence back.
+        vs.apply(VersionEdit {
+            last_sequence: 7,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(vs.last_sequence(), 10);
     }
 }

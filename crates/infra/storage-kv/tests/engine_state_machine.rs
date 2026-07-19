@@ -118,6 +118,9 @@ impl StateMachineTest for EngineModel {
                 state.engine.sync().unwrap();
             }
             Transition::Reopen => {
+                // The old engine must be dropped first so the WAL advisory lock
+                // is released before the new open attempts to acquire it.
+                drop(state.engine);
                 state.engine = LsmEngine::open(state.dir.path(), opts()).unwrap();
             }
             Transition::Get(k) => {

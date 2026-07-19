@@ -35,23 +35,31 @@ impl WalIterator {
     }
 
     fn advance_to_segment(&mut self, lsn: Lsn) -> Result<()> {
+        if self.segments.is_empty() {
+            self.segment_idx = 0;
+            self.buf = Bytes::new();
+            self.current_lsn = lsn;
+            return Ok(());
+        }
         self.segment_idx = self
             .segments
             .partition_point(|&first_lsn| first_lsn <= lsn)
             .saturating_sub(1);
         if self.segment_idx >= self.segments.len() {
-            return Ok(());
+            self.segment_idx = self.segments.len() - 1;
         }
         let first_lsn = self.segments[self.segment_idx];
         let mut data = read_segment(&self.dir, first_lsn)?;
-        let offset = (lsn - first_lsn) as usize;
+        // If `lsn` is before the first segment, clamp to the start of the WAL.
+        let effective_lsn = lsn.max(first_lsn);
+        let offset = (effective_lsn - first_lsn) as usize;
         if offset > data.len() {
             data.clear();
         } else {
             data.drain(..offset);
         }
         self.buf = Bytes::from(data);
-        self.current_lsn = lsn;
+        self.current_lsn = effective_lsn;
         Ok(())
     }
 
@@ -152,6 +160,15 @@ impl WalReader {
             lsn,
             reason: "record disappeared during read".into(),
         })?;
+        if record.lsn != lsn {
+            return Err(Error::CorruptRecord {
+                lsn,
+                reason: format!(
+                    "LSN mismatch: requested {}, decoded record has {}",
+                    lsn, record.lsn
+                ),
+            });
+        }
         Ok(Some(record))
     }
 }

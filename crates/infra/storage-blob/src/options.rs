@@ -19,6 +19,11 @@ pub struct BlobStoreOptions {
     pub background_gc_interval: Duration,
 
     /// fsync policy for volume appends.
+    ///
+    /// When `true` (the default), the active volume is fsynced before the
+    /// index WAL entry that references the appended data is appended.  This
+    /// guarantees that recovery never replays an index entry for data that was
+    /// lost in a crash.
     pub sync_on_put: bool,
 }
 

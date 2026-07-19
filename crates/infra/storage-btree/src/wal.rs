@@ -8,6 +8,7 @@
 use parking_lot::Mutex as ParkingMutex;
 
 use crate::error::{Error, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::page::PageId;
 use crate::slot::{OwnedCell, OwnedValue, parse_cell};
 use crate::txn::{NULL_TXN_ID, Timestamp, TxnId};
@@ -843,6 +844,10 @@ fn encode_record_to_vec(record: &Record) -> Result<Vec<u8>> {
 pub struct WalLog {
     inner: storage_wal::Wal,
     metrics: ParkingMutex<Option<std::sync::Arc<crate::metrics::Metrics>>>,
+    /// Set to true once a sync fails.  Used by the engine layer to avoid
+    /// blocking forever in close()/checkpoint() on a WAL whose commit worker
+    /// has already exited.
+    sync_failed: AtomicBool,
 }
 
 impl WalLog {
@@ -867,6 +872,7 @@ impl WalLog {
         Ok(Self {
             inner,
             metrics: ParkingMutex::new(None),
+            sync_failed: AtomicBool::new(false),
         })
     }
 
@@ -924,7 +930,30 @@ impl WalLog {
         {
             m.record_wal_sync(start.elapsed().as_nanos() as u64);
         }
+        if result.is_err() {
+            self.sync_failed.store(true, Ordering::Release);
+        }
         result
+    }
+
+    /// True if no prior `sync` failed.  Once this returns false the WAL worker
+    /// may have exited; callers should avoid further blocking operations.
+    pub fn is_healthy(&self) -> bool {
+        !self.sync_failed.load(Ordering::Acquire)
+    }
+
+    /// Ensure the WAL is durable up to `lsn`.
+    ///
+    /// The underlying `storage-wal` layer only exposes a global `sync()`, so this
+    /// flushes all pending records.  That is safe because LSNs are monotonic and
+    /// the record at `lsn` has already been appended before the caller updates the
+    /// in-memory `page_lsn`.  Returns the durable LSN.
+    pub fn sync_up_to(&self, lsn: Lsn) -> Result<Lsn> {
+        if lsn == NULL_LSN {
+            return Ok(NULL_LSN);
+        }
+        self.sync()?;
+        Ok(lsn)
     }
 
     /// Iterate over all physiological records starting from `start_lsn`.

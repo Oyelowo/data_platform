@@ -47,7 +47,7 @@ mod unit {
         map.insert(1, 10);
         map.insert(2, 20);
 
-        let entries: Vec<_> = map.range(Some(&1), Some(&3));
+        let entries: Vec<_> = map.range(Some(&1), Some(&3)).collect();
         assert_eq!(entries, vec![(1, 10), (2, 20)]);
     }
 
@@ -58,7 +58,7 @@ mod unit {
         map.insert(1, 10);
         map.insert(2, 20);
 
-        let entries: Vec<_> = map.iter();
+        let entries: Vec<_> = map.iter().collect();
         assert_eq!(entries, vec![(1, 10), (2, 20), (3, 30)]);
     }
 
@@ -82,7 +82,7 @@ mod unit {
         }
 
         assert_eq!(
-            map.iter(),
+            map.iter().collect::<Vec<_>>(),
             model.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>()
         );
     }

@@ -11,7 +11,7 @@
 //! heuristics match reality.  Hints are advisory: they never change results
 //! and their errors are swallowed by callers.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use bytes::Bytes;
@@ -149,6 +149,26 @@ fn fadvise_impl(file: &File, offset: u64, len: u64, advice: FadviseAdvice) -> Re
 /// so this is a no-op there.
 #[cfg(all(unix, not(target_os = "linux")))]
 fn fadvise_impl(_file: &File, _offset: u64, _len: u64, _advice: FadviseAdvice) -> Result<()> {
+    Ok(())
+}
+
+/// fsync the directory at `path` so that newly created/renamed file entries
+/// are durable.  This is a no-op on non-Unix platforms where directory fsync
+/// is not supported.
+pub fn sync_dir(path: impl AsRef<Path>) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY)
+            .open(path.as_ref())?;
+        file.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
     Ok(())
 }
 

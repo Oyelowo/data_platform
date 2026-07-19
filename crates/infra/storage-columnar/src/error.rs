@@ -45,4 +45,8 @@ pub enum Error {
     /// Option validation error.
     #[error("invalid option: {0}")]
     InvalidOption(String),
+
+    /// A snapshot exists but could not be loaded, suggesting on-disk corruption.
+    #[error("corrupt snapshot: {0}")]
+    CorruptSnapshot(String),
 }

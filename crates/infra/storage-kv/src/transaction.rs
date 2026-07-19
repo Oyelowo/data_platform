@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
+use crate::blob::{BlobPinGuard, BlobRef};
 use crate::cache::BlockCaches;
 use crate::column_family::{ColumnFamilyHandle, ColumnFamilyId};
 use crate::engine::LsmEngineInner;
+use crate::internal_key::{ValueType, parse_internal_key};
 use crate::memtable::MemTable;
 use crate::txn_cursor::TxnCursor;
 use crate::version::Version;
@@ -77,6 +79,10 @@ pub struct LsmTransaction {
     pub(crate) finished: bool,
     /// Buffered writes, in application order.
     pub(crate) ops: Vec<WriteOp>,
+    /// Keeps the blob files referenced by this snapshot pinned while the
+    /// transaction is alive so background blob GC cannot delete them.
+    #[allow(dead_code)]
+    pub(crate) blob_pin: BlobPinGuard,
 }
 
 impl LsmTransaction {
@@ -85,14 +91,8 @@ impl LsmTransaction {
         // this transaction, and pin the full engine view so its MemTables and
         // SSTable files are not deleted or replaced while the transaction is
         // alive.
-        let view = {
+        let (view, blob_pin) = {
             let mut state = inner.state.lock().unwrap();
-            // TODO: compute the blob files referenced by this snapshot's pinned
-            // view and pass them to register so future GC can delete files not
-            // referenced by any pinned view.  For now we pass an empty set and
-            // rely on BlobGcOwner::may_delete_files to defer all deletions while
-            // snapshots are alive.
-            state.snapshots.register(sequence, HashSet::new());
             let mut cf_views = HashMap::new();
             for cf in state.column_families.iter() {
                 let view = CfSnapshotView {
@@ -111,7 +111,17 @@ impl LsmTransaction {
                 caches: state.default_cf().caches.clone(),
                 path: state.path.clone(),
             });
-            SnapshotView { default, cf_views }
+            let view = SnapshotView { default, cf_views };
+
+            // Pin the blob files referenced by this snapshot.  MemTables and
+            // immutable queues are scanned for explicit BlobRefs; to cover
+            // SSTable-referenced BlobRefs without opening every table we also
+            // pin every blob file currently on disk.
+            let blob_files = collect_blob_files_from_view(&view, &state.blob_store);
+            let blob_pin = state.blob_store.pin_blob_files(&blob_files);
+            state.snapshots.register(sequence, blob_files);
+
+            (view, blob_pin)
         };
         Self {
             inner,
@@ -120,6 +130,7 @@ impl LsmTransaction {
             view,
             finished: false,
             ops: Vec::new(),
+            blob_pin,
         }
     }
 
@@ -322,6 +333,42 @@ impl storage_traits::Transaction for LsmTransaction {
         match level {
             storage_traits::IsolationLevel::ReadCommitted => Ok(()),
             _ => Err(Error::InvalidArgument("unsupported isolation level".into())),
+        }
+    }
+}
+
+/// Collect the blob file numbers referenced by a snapshot view.
+///
+/// Explicit `BlobRef`s in the mutable and immutable MemTables are scanned.
+/// Because `Version` does not track which SSTables contain blob references,
+/// every blob file currently on disk is also included as a conservative upper
+/// bound.
+fn collect_blob_files_from_view(
+    view: &SnapshotView,
+    blob_store: &crate::blob::BlobStore,
+) -> HashSet<crate::FileNumber> {
+    let mut files = HashSet::new();
+    for cf_view in view.cf_views.values() {
+        collect_blob_files_from_memtable(&cf_view.memtable, &mut files);
+        for mem in &cf_view.immutable {
+            collect_blob_files_from_memtable(mem, &mut files);
+        }
+    }
+    if let Ok(list) = blob_store.list_files() {
+        files.extend(list);
+    }
+    files
+}
+
+fn collect_blob_files_from_memtable(
+    memtable: &MemTable,
+    files: &mut HashSet<crate::FileNumber>,
+) {
+    for (ikey, value) in memtable.iter() {
+        if let Some((_, ValueType::BlobRef)) = parse_internal_key(&ikey)
+            && let Some(blob_ref) = BlobRef::decode(&value)
+        {
+            files.insert(blob_ref.file_number);
         }
     }
 }

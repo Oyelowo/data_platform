@@ -1,12 +1,16 @@
 //! Public WAL API.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
+
 use crate::committer::Committer;
+use crate::fs::sync_dir;
 use crate::reader::{WalIterator, WalReader};
-use crate::record::{Durability, Record, RecordType};
+use crate::record::{Durability, Record, RecordType, RECORD_HEADER_SIZE};
 use crate::segment::{Segment, list_segments, segment_path};
-use crate::{Lsn, Result};
+use crate::{Error, Lsn, Result};
 
 /// Configuration for a WAL.
 #[derive(Debug, Clone, Copy)]
@@ -20,6 +24,21 @@ pub struct WalOptions {
 impl WalOptions {
     /// Default segment size: 64 MiB.
     pub const DEFAULT_SEGMENT_SIZE: u64 = 64 * 1024 * 1024;
+
+    /// Minimum sensible segment size: must fit several records plus headers.
+    pub const MIN_SEGMENT_SIZE: u64 = RECORD_HEADER_SIZE as u64 * 4;
+
+    /// Validate options and return an error if they are unusable.
+    pub fn validate(&self) -> Result<()> {
+        if self.segment_size < Self::MIN_SEGMENT_SIZE {
+            return Err(Error::InvalidArgument(format!(
+                "segment_size {} is below minimum {}",
+                self.segment_size,
+                Self::MIN_SEGMENT_SIZE
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Default for WalOptions {
@@ -36,6 +55,9 @@ pub struct Wal {
     dir: PathBuf,
     options: WalOptions,
     committer: Committer,
+    /// Advisory lock file ensuring only one `Wal` instance owns the directory.
+    /// Stored in a mutex so `close` can release the lock from a shared reference.
+    lock: std::sync::Mutex<Option<File>>,
 }
 
 impl std::fmt::Debug for Wal {
@@ -58,13 +80,27 @@ impl Wal {
     ///
     /// The fault config is intended for deterministic testing of durability
     /// boundaries.
+    ///
+    /// # Locking
+    ///
+    /// This method acquires an advisory lock on `dir/wal.lock`. A second open
+    /// on the same directory returns [`Error::Locked`].
     pub fn open_with_fault_config(
         dir: impl AsRef<Path>,
         options: WalOptions,
         fault_config: Option<crate::FaultConfig>,
     ) -> Result<Self> {
+        options.validate()?;
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
+        sync_dir(&dir)?;
+
+        let lock_path = dir.join("wal.lock");
+        let lock_file = File::create(&lock_path)?;
+        if lock_file.try_lock_exclusive().is_err() {
+            return Err(Error::Locked);
+        }
+
         let committer = match fault_config {
             Some(cfg) => {
                 Committer::start_with_fault_config(dir.clone(), options.segment_size, cfg)?
@@ -75,6 +111,7 @@ impl Wal {
             dir,
             options,
             committer,
+            lock: std::sync::Mutex::new(Some(lock_file)),
         })
     }
 
@@ -125,18 +162,30 @@ impl Wal {
         WalIterator::new(&self.dir, start_lsn)
     }
 
-    /// Truncate all segments whose first LSN is strictly less than `before_lsn`.
-    /// Returns the number of segments removed.
+    /// Truncate all completed segments whose first LSN is strictly less than
+    /// `before_lsn`. The active (last) segment is never removed, even if it is
+    /// fully before `before_lsn`, because the group-commit worker may still be
+    /// appending to it.
     pub fn truncate_before(&self, before_lsn: Lsn) -> Result<usize> {
         let segments = list_segments(&self.dir)?;
+        if segments.is_empty() {
+            return Ok(0);
+        }
         let mut removed = 0;
-        for first_lsn in segments {
+        // The last segment is the active segment and must be preserved.
+        for first_lsn in segments.iter().take(segments.len().saturating_sub(1)) {
+            // A segment is "completed" if its entire byte range is before
+            // `before_lsn`. We use a strict <= so that a record at exactly
+            // `before_lsn` remains readable.
             if first_lsn + self.options.segment_size <= before_lsn {
-                std::fs::remove_file(segment_path(&self.dir, first_lsn))?;
+                std::fs::remove_file(segment_path(&self.dir, *first_lsn))?;
                 removed += 1;
             } else {
                 break;
             }
+        }
+        if removed > 0 {
+            sync_dir(&self.dir)?;
         }
         Ok(removed)
     }
@@ -174,9 +223,13 @@ impl Wal {
     /// Gracefully close the WAL, waiting for the commit worker to finish.
     ///
     /// Idempotent: safe to call from a shared reference and safe to call more
-    /// than once.
+    /// than once. The advisory directory lock is released so the directory can
+    /// be reopened by another `Wal` instance.
     pub fn close(&self) -> Result<()> {
-        self.committer.shutdown()
+        let result = self.committer.shutdown();
+        // Release the advisory lock so another process/instance can open the WAL.
+        let _ = self.lock.lock().unwrap().take();
+        result
     }
 
     /// Directory containing the segment files.
@@ -189,8 +242,9 @@ impl Drop for Wal {
     fn drop(&mut self) {
         // Ensure the fsync worker is joined even when the caller does not call
         // `close` explicitly. This is required when `Wal` is held inside an
-        // `Arc` and dropped from the last reference.
-        let _ = self.close();
+        // `Arc` and dropped from the last reference. The advisory lock file is
+        // dropped as part of the struct drop, releasing the lock.
+        let _ = self.committer.shutdown();
     }
 }
 

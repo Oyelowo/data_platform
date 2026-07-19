@@ -31,7 +31,7 @@ fn miri_iteration() {
     map.insert(3, 30);
     map.insert(1, 10);
     map.insert(2, 20);
-    let entries = map.iter();
+    let entries: Vec<_> = map.iter().collect();
     assert_eq!(entries, vec![(1, 10), (2, 20), (3, 30)]);
 }
 
@@ -41,5 +41,8 @@ fn miri_range() {
     map.insert(1, 10);
     map.insert(2, 20);
     map.insert(3, 30);
-    assert_eq!(map.range(Some(&1), Some(&3)), vec![(1, 10), (2, 20)]);
+    assert_eq!(
+        map.range(Some(&1), Some(&3)).collect::<Vec<_>>(),
+        vec![(1, 10), (2, 20)]
+    );
 }

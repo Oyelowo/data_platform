@@ -225,6 +225,11 @@ impl TransactionTable {
         self.committed.with_mut(|committed| {
             committed.insert(txn_id, commit_ts);
         });
+        // Make sure the logical clock stays ahead of any recovered timestamp so
+        // that future transaction ids and commit timestamps remain ordered.
+        let _ = self
+            .clock
+            .fetch_max(commit_ts.get().saturating_add(2), Ordering::SeqCst);
         Ok(())
     }
 

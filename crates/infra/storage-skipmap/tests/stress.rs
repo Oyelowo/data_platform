@@ -51,7 +51,7 @@ fn mixed_workload_no_crash() {
     }
 
     // After the workload, the map must still be queryable and ordered.
-    let snapshot: Vec<_> = map.iter();
+    let snapshot: Vec<_> = map.iter().collect();
     for window in snapshot.windows(2) {
         assert!(window[0].0 < window[1].0, "scan not sorted");
     }
@@ -79,7 +79,7 @@ fn contention_overwrite() {
     }
 
     // Every key 0..16 must be present with some value.
-    let snapshot: std::collections::BTreeMap<usize, usize> = map.iter().into_iter().collect();
+    let snapshot: std::collections::BTreeMap<usize, usize> = map.iter().collect();
     for k in 0..16 {
         assert!(snapshot.contains_key(&k), "missing key {}", k);
     }

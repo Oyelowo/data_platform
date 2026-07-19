@@ -75,3 +75,40 @@ fn snapshot_survives_missing_wal_segments() {
     let result = engine.scan(&["id"], &Predicate::True).unwrap();
     assert_eq!(result[0].1, vec![Some(Bytes::from("1"))]);
 }
+
+#[test]
+fn corrupt_snapshot_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let engine = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default()).unwrap();
+        engine
+            .set_schema(TableSchema {
+                columns: vec![ColumnDef {
+                    name: "id".into(),
+                    ty: ColumnType::Int64,
+                    nullable: true,
+                }],
+            })
+            .unwrap();
+        engine
+            .ingest(vec![("id".into(), vec![Some(Bytes::from("1"))])])
+            .unwrap();
+        engine.snapshot().unwrap();
+    }
+
+    // Corrupt the snapshot file that CURRENT points to.
+    let current = std::fs::read_to_string(dir.path().join("CURRENT")).unwrap();
+    let snapshot_path = dir.path().join("manifest-snapshot").join(current.trim());
+    std::fs::write(&snapshot_path, b"not valid json").unwrap();
+
+    let result = ColumnarEngineImpl::open(dir.path(), ColumnarOptions::default());
+    assert!(
+        result.is_err(),
+        "corrupt snapshot should fail recovery instead of opening empty"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("corrupt snapshot"),
+        "error should be CorruptSnapshot, got: {err}"
+    );
+}

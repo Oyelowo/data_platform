@@ -3,7 +3,6 @@
 use crossbeam_epoch::{Atomic, Guard, Owned, Shared};
 use rand::RngCore;
 use std::fmt;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as MemOrdering};
 
 use crate::node::{MARK_TAG, Node, mark_shared, unmark_shared};
@@ -23,27 +22,43 @@ struct Position<'g, K, V> {
 }
 
 /// A lock-free ordered map backed by a skip list.
-pub struct SkipMap<K, V> {
+pub struct SkipMap<K, V>
+where
+    K: Send + Sync + 'static,
+    V: Send + Sync + 'static,
+{
     /// Sentinel head node with a full-height tower.
     head: Atomic<Node<K, V>>,
     /// Highest level currently in use (hint, never decreases).
     max_height: AtomicUsize,
     /// Approximate number of entries.
     len: AtomicUsize,
-    /// Random number generator for height selection.
-    rng: Mutex<rand::rngs::StdRng>,
 }
 
 impl<K, V> fmt::Debug for SkipMap<K, V>
 where
-    K: fmt::Debug,
+    K: fmt::Debug + Send + Sync + 'static,
+    V: Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SkipMap").field("len", &self.len()).finish()
     }
 }
 
-impl<K, V> SkipMap<K, V> {
+impl<K, V> SkipMap<K, V>
+where
+    K: Send + Sync + 'static,
+    V: Send + Sync + 'static,
+{
+    /// Create an empty skip-map.
+    pub fn new() -> Self {
+        Self {
+            head: Atomic::new(Node::head(MAX_HEIGHT)),
+            max_height: AtomicUsize::new(1),
+            len: AtomicUsize::new(0),
+        }
+    }
+
     /// Approximate number of entries.
     pub fn len(&self) -> usize {
         self.len.load(MemOrdering::Relaxed)
@@ -53,6 +68,14 @@ impl<K, V> SkipMap<K, V> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Load the first real node at level 0. This helper does not require `K: Ord`
+    /// so that `Drop` and `Cursor` can traverse the list.
+    fn level0_first<'g>(&self, guard: &'g Guard) -> Shared<'g, Node<K, V>> {
+        let head = self.head.load(MemOrdering::Acquire, guard);
+        let head_node = unsafe { head.deref() };
+        head_node.next[0].load(MemOrdering::Acquire, guard)
+    }
 }
 
 impl<K, V> SkipMap<K, V>
@@ -60,16 +83,6 @@ where
     K: Ord + Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    /// Create an empty skip-map.
-    pub fn new() -> Self {
-        Self {
-            head: Atomic::new(Node::head(MAX_HEIGHT)),
-            max_height: AtomicUsize::new(1),
-            len: AtomicUsize::new(0),
-            rng: Mutex::new(rand::SeedableRng::from_entropy()),
-        }
-    }
-
     /// Look up a key and clone its value.
     pub fn get(&self, key: &K) -> Option<V>
     where
@@ -87,65 +100,39 @@ where
         K: Clone,
     {
         let guard = crossbeam_epoch::pin();
-        let height = self.random_height();
-        let new: Shared<'_, Node<K, V>> =
-            Owned::new(Node::new(key.clone(), value, height)).into_shared(&guard);
 
         loop {
             let pos = self.search(&key, &guard);
 
-            if let Some(n) = self.found_node(&pos, &key) {
-                let node = unsafe { n.deref() };
-                if node.is_marked() {
+            if let Some(old) = self.found_node(&pos, &key) {
+                let old_node = unsafe { old.deref() };
+                if old_node.is_marked() {
                     continue;
                 }
 
-                // Replace an existing entry by logically deleting the old node
-                // and inserting a new one. In-place mutation would race with
-                // concurrent readers, so we never mutate values after
-                // publication.
-                let old = node.value().clone();
-
-                // Link level 0 of the new node to the successor of the old
-                // node so that it is visible immediately after the CAS.
-                let next0 = node.next[0].load(MemOrdering::Acquire, &guard);
-                unsafe {
-                    new.deref().next[0].store(unmark_shared(next0), MemOrdering::Relaxed);
-                }
-
-                // Attempt to splice the new node in front of the old one at
-                // level 0. If this fails, another thread changed the list and
-                // we retry the whole operation.
-                let pred0 = pos.preds[0];
-                if unsafe { pred0.deref() }.next[0]
-                    .compare_exchange(n, new, MemOrdering::SeqCst, MemOrdering::Relaxed, &guard)
+                // Replace the value in place. A concurrent `remove` may have
+                // already started; if so, retry. Otherwise the node stays in the
+                // list and only its payload changes.
+                if old_node
+                    .removed
+                    .compare_exchange(false, true, MemOrdering::SeqCst, MemOrdering::Relaxed)
                     .is_err()
                 {
                     continue;
                 }
 
-                // Mark the old node as deleted. From this point on find()
-                // will skip it because its level-0 next pointer is tagged.
-                let _ = node.next[0].compare_exchange(
-                    unmark_shared(next0),
-                    mark_shared(next0),
-                    MemOrdering::SeqCst,
-                    MemOrdering::Relaxed,
-                    &guard,
-                );
+                let old_value = old_node.swap_value(value);
 
-                // Physically unlink the old node from all levels before
-                // retiring it, so no future reader can dereference it after
-                // reclamation.
-                self.unlink_all(&pos, n, &guard);
+                // Clear the removed flag: this is still a live node.
+                old_node.removed.store(false, MemOrdering::Release);
 
-                // Build the tower for the new node and retire the old one.
-                self.build_tower(new, &pos, &guard);
-                unsafe {
-                    guard.defer_destroy(n);
-                }
-                return Some(old);
+                return Some(old_value);
             }
+
+            // Allocate a new node only when we actually need to insert one.
+            let height = random_height();
+            let new: Shared<'_, Node<K, V>> =
+                Owned::new(Node::new(key.clone(), value.clone(), height)).into_shared(&guard);
 
             // Link level 0.
             unsafe {
@@ -167,7 +154,11 @@ where
                 return None;
             }
 
-            // CAS failed; retry.
+            // CAS failed; retry. The unused new node is retired here to avoid
+            // leaking the allocation under contention.
+            unsafe {
+                guard.defer_destroy(new);
+            }
         }
     }
 
@@ -189,33 +180,11 @@ where
 
             let old = node.value().clone();
 
-            // Logical delete: mark level 0.
-            let next0 = node.next[0].load(MemOrdering::SeqCst, &guard);
-            let marked = mark_shared(next0);
-            if node.next[0]
-                .compare_exchange(
-                    next0,
-                    marked,
-                    MemOrdering::SeqCst,
-                    MemOrdering::Relaxed,
-                    &guard,
-                )
-                .is_err()
-            {
-                continue;
+            if self.remove_node(n, &pos, &guard) {
+                return Some(old);
             }
 
-            self.len.fetch_sub(1, MemOrdering::Relaxed);
-
-            // Physical delete at all levels.
-            self.unlink_all(&pos, n, &guard);
-
-            // Retire the node.
-            unsafe {
-                guard.defer_destroy(n);
-            }
-
-            return Some(old);
+            // Another thread removed/replaced the node concurrently. Retry.
         }
     }
 
@@ -224,55 +193,21 @@ where
         let guard = crossbeam_epoch::pin();
         self.search_found(key, &guard).is_some()
     }
+}
 
-    /// Return all entries in `[start, end)` as a sorted snapshot.
-    pub fn range(&self, start: Option<&K>, end: Option<&K>) -> Vec<(K, V)>
-    where
-        K: Clone,
-        V: Clone,
-    {
-        let guard = crossbeam_epoch::pin();
-        let mut out = Vec::new();
-        let mut curr = self.level0_head(&guard);
-
-        while let Some(node) = unsafe { curr.as_ref() } {
-            let next = node.next[0].load(MemOrdering::Acquire, &guard);
-
-            // Skip logically deleted nodes. Their level-0 next pointer carries
-            // the mark bit.
-            if node.is_marked() {
-                curr = next;
-                continue;
-            }
-
-            let key = node.key();
-
-            if let Some(s) = start
-                && key < s
-            {
-                curr = next;
-                continue;
-            }
-            if let Some(e) = end
-                && key >= e
-            {
-                break;
-            }
-
-            out.push((key.clone(), node.value().clone()));
-            curr = next;
-        }
-
-        out
+impl<K, V> SkipMap<K, V>
+where
+    K: Ord + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    /// Return a lazy cursor over entries in `[start, end)` in ascending order.
+    pub fn range<'a>(&'a self, start: Option<&'a K>, end: Option<&'a K>) -> Cursor<'a, K, V> {
+        Cursor::new(self, start, end)
     }
 
-    /// Return all entries as a sorted snapshot.
-    pub fn iter(&self) -> Vec<(K, V)>
-    where
-        K: Clone,
-        V: Clone,
-    {
-        self.range(None, None)
+    /// Return a lazy cursor over all entries in ascending order.
+    pub fn iter(&self) -> Cursor<'_, K, V> {
+        Cursor::new(self, None, None)
     }
 
     /// Return the greatest entry that is less than or equal to `key`.
@@ -280,17 +215,10 @@ where
     /// This is a point lookup: it does not guarantee a consistent snapshot of
     /// the whole map, but it returns a single entry that was present at some
     /// point during the call.
-    pub fn floor(&self, key: &K) -> Option<(K, V)>
-    where
-        K: Clone,
-        V: Clone,
-    {
+    pub fn floor(&self, key: &K) -> Option<(K, V)> {
         let guard = crossbeam_epoch::pin();
         let pos = self.search(key, &guard);
 
-        // `search` returns the first node >= `key` as succs[0]. If that node is
-        // exactly `key` (and not marked), it is the floor. Otherwise the floor
-        // is preds[0], the last node < `key`.
         let succ = pos.succs[0];
         if let Some(succ_node) = unsafe { succ.as_ref() }
             && let Some(ref k) = succ_node.key
@@ -305,7 +233,6 @@ where
         if pred_node.is_marked() {
             return None;
         }
-        // The sentinel head node has no key/value.
         pred_node.key.as_ref()?;
         Some((pred_node.key().clone(), pred_node.value().clone()))
     }
@@ -313,14 +240,9 @@ where
 
 impl<K, V> SkipMap<K, V>
 where
-    K: Ord,
+    K: Ord + Send + Sync + 'static,
+    V: Send + Sync + 'static,
 {
-    fn level0_head<'g>(&self, guard: &'g Guard) -> Shared<'g, Node<K, V>> {
-        let head = self.head.load(MemOrdering::Acquire, guard);
-        let head_node = unsafe { head.deref() };
-        head_node.next[0].load(MemOrdering::Acquire, guard)
-    }
-
     /// Search for `key`. Returns predecessors and successors at every level.
     fn search<'g>(&self, key: &K, guard: &'g Guard) -> Position<'g, K, V> {
         let mut preds = Vec::with_capacity(MAX_HEIGHT);
@@ -349,7 +271,6 @@ where
 
                 loop {
                     if curr.tag() == MARK_TAG {
-                        // Predecessor pointer is marked; restart.
                         continue 'retry;
                     }
 
@@ -357,12 +278,6 @@ where
                         Some(node) => {
                             let next = node.next[level].load(MemOrdering::Acquire, guard);
 
-                            // A node whose level-0 next pointer is marked is
-                            // logically deleted. At level 0 the mark is stored
-                            // directly in `next`; at upper levels we detect it
-                            // via `is_marked` and help complete the physical
-                            // deletion so searches cannot get trapped behind a
-                            // deleted predecessor.
                             let marked = next.tag() == MARK_TAG || (level > 0 && node.is_marked());
                             if marked {
                                 let unmarked_next = unmark_shared(next);
@@ -400,8 +315,6 @@ where
         }
     }
 
-    /// Return the found node from a search position, if it matches the key and
-    /// is not marked.
     fn found_node<'g>(&self, pos: &Position<'g, K, V>, key: &K) -> Option<Shared<'g, Node<K, V>>> {
         unsafe { pos.succs[0].as_ref() }.and_then(|node| {
             if node.key() == key && !node.is_marked() {
@@ -412,13 +325,11 @@ where
         })
     }
 
-    /// Convenience: search and return the matching unmarked node.
     fn search_found<'g>(&self, key: &K, guard: &'g Guard) -> Option<Shared<'g, Node<K, V>>> {
         let pos = self.search(key, guard);
         self.found_node(&pos, key)
     }
 
-    /// Build the upper levels of a newly inserted node.
     fn build_tower(&self, node: Shared<Node<K, V>>, pos: &Position<K, V>, guard: &Guard) {
         let height = unsafe { node.deref() }.height();
         let mut pos = Position {
@@ -442,17 +353,14 @@ where
                     break;
                 }
 
-                // Re-search and retry. If the node was removed, stop building.
                 let key = unsafe { node.deref() }.key();
                 pos = self.search(key, guard);
                 if self.found_node(&pos, key) != Some(node) {
                     return;
                 }
-                // Keep retrying at this level with the refreshed position.
             }
         }
 
-        // Update max height hint.
         let mut max = self.max_height.load(MemOrdering::Relaxed);
         while height > max {
             match self.max_height.compare_exchange_weak(
@@ -467,7 +375,49 @@ where
         }
     }
 
-    /// Physically unlink a marked node at all levels using the search position.
+    /// Remove a node that is known to be in the list. Returns `true` if this
+    /// call was responsible for the removal (i.e., it set the `removed` flag).
+    fn remove_node(
+        &self,
+        node: Shared<Node<K, V>>,
+        pos: &Position<K, V>,
+        guard: &Guard,
+    ) -> bool {
+        let node_ref = unsafe { node.deref() };
+
+        // Only the thread that successfully sets `removed` from false to true
+        // is allowed to mark, unlink, and retire the node. This prevents the
+        // double-retire race between replace and remove.
+        if node_ref
+            .removed
+            .compare_exchange(false, true, MemOrdering::SeqCst, MemOrdering::Relaxed)
+            .is_err()
+        {
+            return false;
+        }
+
+        // Logical delete: mark level 0.
+        let next0 = node_ref.next[0].load(MemOrdering::SeqCst, guard);
+        let marked = mark_shared(next0);
+        if node_ref
+            .next[0]
+            .compare_exchange(next0, marked, MemOrdering::SeqCst, MemOrdering::Relaxed, guard)
+            .is_ok()
+        {
+            self.len.fetch_sub(1, MemOrdering::Relaxed);
+        }
+
+        // Physical delete at all levels.
+        self.unlink_all(pos, node, guard);
+
+        // Retire the node.
+        unsafe {
+            guard.defer_destroy(node);
+        }
+
+        true
+    }
+
     fn unlink_all(&self, pos: &Position<K, V>, node: Shared<Node<K, V>>, guard: &Guard) {
         let height = unsafe { node.deref() }.height();
         for level in 0..height {
@@ -484,24 +434,143 @@ where
             );
         }
     }
-
-    /// Generate a random tower height.
-    fn random_height(&self) -> usize {
-        let mut rng = self.rng.lock().expect("rng mutex poisoned");
-        let mut height = 1;
-        while height < MAX_HEIGHT && rng.next_u32().is_multiple_of(P_ADVANCE) {
-            height += 1;
-        }
-        height
-    }
 }
 
 impl<K, V> Default for SkipMap<K, V>
 where
-    K: Ord + Send + Sync + 'static,
+    K: Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<K, V> Drop for SkipMap<K, V>
+where
+    K: Send + Sync + 'static,
+    V: Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        // Walk the level-0 linked list and retire every node so that dropping a
+        // populated SkipMap does not leak memory.
+        let guard = crossbeam_epoch::pin();
+        let mut curr = self.level0_first(&guard);
+        while let Some(node) = unsafe { curr.as_ref() } {
+            let next = node.next[0].load(MemOrdering::Acquire, &guard);
+            if !node.removed.load(MemOrdering::Relaxed) {
+                node.removed.store(true, MemOrdering::Relaxed);
+                unsafe {
+                    guard.defer_destroy(curr);
+                }
+            }
+            curr = next;
+        }
+
+        // Retire the sentinel head as well.
+        let head = self.head.load(MemOrdering::Acquire, &guard);
+        unsafe {
+            guard.defer_destroy(head);
+        }
+    }
+}
+
+/// Generate a random tower height using a per-thread RNG.
+fn random_height() -> usize {
+    let mut rng = rand::thread_rng();
+    let mut height = 1;
+    while height < MAX_HEIGHT && rng.next_u32().is_multiple_of(P_ADVANCE) {
+        height += 1;
+    }
+    height
+}
+
+/// A lazy cursor over a sorted range of entries in a `SkipMap`.
+pub struct Cursor<'a, K, V>
+where
+    K: Send + Sync + 'static,
+    V: Send + Sync + 'static,
+{
+    map: &'a SkipMap<K, V>,
+    start: Option<&'a K>,
+    end: Option<&'a K>,
+    // We cannot store a Shared pointer across calls because the guard is local
+    // to each `next` call. Instead we store the last returned key and resume
+    // from it on the next call.
+    last_key: Option<K>,
+}
+
+impl<'a, K, V> Cursor<'a, K, V>
+where
+    K: Ord + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    fn new(map: &'a SkipMap<K, V>, start: Option<&'a K>, end: Option<&'a K>) -> Self {
+        Self {
+            map,
+            start,
+            end,
+            last_key: None,
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for Cursor<'a, K, V>
+where
+    K: Ord + Clone + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let guard = crossbeam_epoch::pin();
+
+        let mut curr = self.map.level0_first(&guard);
+
+        // Skip nodes before the lower bound.
+        while let Some(node) = unsafe { curr.as_ref() } {
+            let next = node.next[0].load(MemOrdering::Acquire, &guard);
+            if node.is_marked() {
+                curr = next;
+                continue;
+            }
+            let key = node.key();
+            if let Some(ref last) = self.last_key {
+                if key <= last {
+                    curr = next;
+                    continue;
+                }
+            } else if let Some(s) = self.start
+                && key < s
+            {
+                curr = next;
+                continue;
+            }
+            if let Some(e) = self.end
+                && key >= e
+            {
+                return None;
+            }
+            self.last_key = Some(key.clone());
+            return Some((key.clone(), node.value().clone()));
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_get_remove() {
+        let map: SkipMap<i32, &str> = SkipMap::new();
+        assert!(map.get(&1).is_none());
+        assert_eq!(map.insert(1, "one"), None);
+        assert_eq!(map.get(&1), Some("one"));
+        assert_eq!(map.insert(1, "ONE"), Some("one"));
+        assert_eq!(map.get(&1), Some("ONE"));
+        assert_eq!(map.remove(&1), Some("ONE"));
+        assert!(map.get(&1).is_none());
     }
 }

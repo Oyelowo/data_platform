@@ -11,6 +11,7 @@ bytes = "1.10"
 thiserror = "2.0"
 crc32c = "0.6"
 crossbeam-channel = "0.5"
+fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3.19"

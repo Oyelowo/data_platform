@@ -187,8 +187,13 @@ impl MemTable {
     }
 
     /// Return all point entries in ascending internal-key order.
+    ///
+    /// The skip-map cursor yields entries in raw byte order, which places older
+    /// sequence numbers before newer ones for the same user key.  The SSTable
+    /// format and flush logic expect entries newest-first, so we re-sort using
+    /// the internal-key comparator before returning.
     pub fn iter(&self) -> Vec<(Vec<u8>, Bytes)> {
-        let mut entries = self.map.iter();
+        let mut entries: Vec<_> = self.map.iter().collect();
         entries.sort_by(|a, b| compare_internal_keys(&a.0, &b.0));
         entries
     }

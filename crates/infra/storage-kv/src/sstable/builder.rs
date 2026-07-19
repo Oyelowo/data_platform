@@ -280,6 +280,11 @@ impl SSTableBuilder {
         let mut handle_buf = Vec::new();
         filter_handle.encode(&mut handle_buf);
         meta_index_builder.add(b"filter.bloom", &handle_buf);
+        // Persist the bloom filter configuration so readers reconstruct the
+        // filter with the same bits-per-key used during construction.
+        handle_buf.clear();
+        handle_buf.extend_from_slice(&(self.options.bloom_bits_per_key as u64).to_le_bytes());
+        meta_index_builder.add(b"filter.bloom.bits_per_key", &handle_buf);
         if let Some(ref h) = range_tombstone_handle {
             handle_buf.clear();
             h.encode(&mut handle_buf);

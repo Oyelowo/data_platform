@@ -494,6 +494,18 @@ impl Page {
             .expect("full-page read is always in bounds")
     }
 
+    /// Copy the raw page bytes while holding an OLC read latch.
+    ///
+    /// Returns `Some(bytes)` if the latch version was stable for the entire copy,
+    /// or `None` if the page was locked or changed mid-copy. Callers that need a
+    /// consistent on-disk image (e.g. flusher, eviction) should retry until this
+    /// returns `Some`.
+    pub fn read_locked_data(&self) -> Option<Vec<u8>> {
+        let guard = self.optimistic()?;
+        let bytes = self.data();
+        if guard.validate() { Some(bytes) } else { None }
+    }
+
     /// Consume the page and return the raw bytes.
     pub fn into_vec(self) -> Vec<u8> {
         self.data()

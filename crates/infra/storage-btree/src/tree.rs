@@ -77,9 +77,15 @@ impl OptimisticLeaf {
 }
 
 /// Pinned path captured during an optimistic traversal.  `leaf_arc` provides
-/// cheap shared access for locking and validation.
+/// cheap shared access for locking and validation; `leaf_guard` keeps the leaf
+/// frame pinned so eviction cannot replace it while the caller holds the leaf
+/// write latch.
 struct OptimisticPath {
     leaf_arc: Arc<crate::page::Page>,
+    /// Keeps the leaf frame pinned while the caller holds the leaf write latch.
+    /// The field is never read directly; it exists for its `Drop` side effect.
+    #[allow(dead_code)]
+    leaf_guard: PageGuard,
     /// Root page id observed at the start of the traversal.
     root_id: PageId,
     path: Vec<(PageGuard, Arc<crate::page::Page>, u64)>,
@@ -167,6 +173,19 @@ impl BPlusTree {
     /// The caller is responsible for ensuring `root_page_id` is valid and that
     /// recovery, if needed, has already been run.
     pub fn open(pool: Arc<BufferPool>, root_page_id: PageId, inline_threshold: usize) -> Self {
+        Self::open_with_txn_table(pool, root_page_id, inline_threshold, Arc::new(TransactionTable::new()))
+    }
+
+    /// Open an existing tree with an explicit transaction table.
+    ///
+    /// This is used by the engine after recovery so that committed transactions
+    /// discovered in the WAL are visible to MVCC readers.
+    pub fn open_with_txn_table(
+        pool: Arc<BufferPool>,
+        root_page_id: PageId,
+        inline_threshold: usize,
+        txn_table: Arc<TransactionTable>,
+    ) -> Self {
         Self {
             pool,
             root_page_id: AtomicU64::new(root_page_id.get()),
@@ -175,7 +194,7 @@ impl BPlusTree {
             retired: SyncMutex::new(Vec::new()),
             active_roots: SyncMutex::new(HashMap::new()),
             wal: None,
-            txn_table: Arc::new(TransactionTable::new()),
+            txn_table,
             value_log: None,
         }
     }
@@ -1152,6 +1171,7 @@ impl BPlusTree {
             if arc.is_leaf() {
                 return Ok(Some(OptimisticPath {
                     leaf_arc: arc,
+                    leaf_guard: guard,
                     root_id,
                     path,
                 }));
@@ -1324,6 +1344,8 @@ impl BPlusTree {
                     let page_id = record.header.page_id;
                     let guard = self.pool.fetch_or_read(page_id)?;
                     let page = guard.page();
+                    let write = Self::acquire_undo_write_latch(page);
+                    let page = write.page();
                     if let Some(current) = page.get(&cell.key)? {
                         self.release_value(&current.value);
                     }
@@ -1340,6 +1362,8 @@ impl BPlusTree {
                     let page_id = record.header.page_id;
                     let guard = self.pool.fetch_or_read(page_id)?;
                     let page = guard.page();
+                    let write = Self::acquire_undo_write_latch(page);
+                    let page = write.page();
                     let image = crate::undo::make_undo_image(old_cell.clone(), *old_header);
                     crate::undo::apply_undo_to_page(page, key, &image)?;
                     self.add_value_ref(&old_cell.value);
@@ -1349,6 +1373,8 @@ impl BPlusTree {
                     let page_id = record.header.page_id;
                     let guard = self.pool.fetch_or_read(page_id)?;
                     let page = guard.page();
+                    let write = Self::acquire_undo_write_latch(page);
+                    let page = write.page();
                     if let Some(current) = page.get(&cell.key)? {
                         self.release_value(&current.value);
                     }
@@ -1365,6 +1391,20 @@ impl BPlusTree {
             lsn = record.header.prev_lsn;
         }
         Ok(last_clr)
+    }
+
+    /// Acquire an exclusive OLC write latch on `page` for undo processing.
+    ///
+    /// Undo must observe and mutate a stable page image, so it cannot use the
+    /// optimistic read path.  The latch is held briefly, so we spin until it is
+    /// available; giving up would leave the transaction half-undone.
+    fn acquire_undo_write_latch(page: &crate::page::Page) -> WriteGuard<'_> {
+        loop {
+            if let Some(write) = page.try_write() {
+                return write;
+            }
+            std::thread::yield_now();
+        }
     }
 
     /// Look up `key` within the snapshot of `txn`.
@@ -2938,6 +2978,7 @@ mod tests {
         let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
+        pool.set_wal(Arc::clone(&wal));
         let tree = BPlusTree::with_min_cells(pool.clone(), page_size / 4, min_cells)
             .unwrap()
             .with_wal(Arc::clone(&wal));
@@ -2961,6 +3002,7 @@ mod tests {
         let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
         let pool = Arc::new(BufferPool::new(64, page_size, disk, alloc.clone()).unwrap());
         let wal = Arc::new(WalLog::open(dir.path(), storage_wal::WalOptions::default()).unwrap());
+        pool.set_wal(Arc::clone(&wal));
         let value_log = Arc::new(ValueLog::open(dir.path()).unwrap());
         let tree = BPlusTree::with_min_cells(pool.clone(), page_size / 4, min_cells)
             .unwrap()
@@ -3507,6 +3549,7 @@ mod tests {
         );
         let meta = cp.run().unwrap();
         assert!(meta.checkpoint_lsn > NULL_LSN);
+        drop(cp);
 
         // Delete most keys to trigger leaf merges, internal underflow, and
         // eventually a root shrink.
@@ -3518,9 +3561,15 @@ mod tests {
         }
         tree.check_integrity().unwrap();
 
-        // Reopen from the checkpoint and replay the WAL.
-        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
+        // Reopen from the checkpoint and replay the WAL.  Drop the original
+        // tree, pool and WAL first so the directory lock is released.
         let meta = Meta::read(dir.path()).unwrap().unwrap();
+        drop(tree);
+        drop(pool);
+        drop(wal);
+        drop(alloc);
+
+        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
         let pool2 = Arc::new(
             BufferPool::new(
                 64,
@@ -3566,6 +3615,7 @@ mod tests {
 
         // Drop without flushing dirty pages.  The WAL has already fsynced.
         drop(tree);
+        drop(wal);
 
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
         let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
@@ -3611,6 +3661,7 @@ mod tests {
         );
         let meta = cp.run().unwrap();
         assert!(meta.checkpoint_lsn > NULL_LSN);
+        drop(cp);
 
         // These post-checkpoint inserts are only in the WAL (and buffer pool).
         let extra: Vec<String> = (40u64..50).map(|i| format!("{:08x}", i)).collect();
@@ -3618,9 +3669,15 @@ mod tests {
             tree.insert(key.as_bytes(), key.as_bytes()).unwrap();
         }
 
-        // Reopen from the checkpoint META and replay the WAL.
-        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
+        // Reopen from the checkpoint META and replay the WAL.  Drop the
+        // original tree, pool and WAL so the directory lock is released.
         let meta = Meta::read(dir.path()).unwrap().unwrap();
+        drop(tree);
+        drop(pool);
+        drop(wal);
+        drop(alloc);
+
+        let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
         let pool2 = Arc::new(
             BufferPool::new(
                 64,
@@ -3655,6 +3712,7 @@ mod tests {
 
         tree.insert(b"x", b"9").unwrap();
         drop(tree);
+        drop(wal);
 
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 512).unwrap());
         let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
@@ -3888,11 +3946,20 @@ mod tests {
 
     #[test]
     fn large_value_persists_after_recovery() {
-        let (tree, _pool, _wal, _value_log, _alloc, dir) =
-            make_tree_with_wal_and_value_log(4096, 1);
-        let big = vec![b'z'; 2048];
-        tree.insert(b"k", &big).unwrap();
-        drop(tree);
+        // Keep the temp dir and the expected value alive, but drop everything
+        // else (including the WAL) so recovery can reopen the log directory.
+        let (dir, big) = {
+            let (tree, pool, wal, value_log, alloc, dir) =
+                make_tree_with_wal_and_value_log(4096, 1);
+            let big = vec![b'z'; 2048];
+            tree.insert(b"k", &big).unwrap();
+            drop(tree);
+            drop(pool);
+            drop(wal);
+            drop(value_log);
+            drop(alloc);
+            (dir, big)
+        };
 
         let disk = Arc::new(PagedFile::open(dir.path().join("pages.dat"), 4096).unwrap());
         let alloc = Arc::new(SyncMutex::new(PageAllocator::new(PageId::new(1))));
@@ -4063,6 +4130,88 @@ mod tests {
 
         tree.unpin_root(snapshot_root);
         tree.compact().unwrap();
+        tree.check_integrity().unwrap();
+    }
+
+    #[test]
+    fn writer_pins_leaf_frame_during_optimistic_traversal() {
+        let (tree, _dir) = make_tree(512, 1);
+        tree.insert(b"k", b"v").unwrap();
+
+        let target = tree.optimistic_path_to_leaf(b"k").unwrap().unwrap();
+        let leaf_id = target.leaf_arc.id;
+        let pin_count = tree.pool().frame_pin_count(leaf_id).unwrap();
+        assert!(
+            pin_count > 0,
+            "leaf frame must be pinned while the optimistic path is held"
+        );
+
+        drop(target);
+        let pin_count = tree.pool().frame_pin_count(leaf_id).unwrap();
+        assert_eq!(pin_count, 0, "leaf pin must be released when path is dropped");
+    }
+
+    #[test]
+    fn rollback_txn_restores_previous_value() {
+        let (tree, _pool, _wal, _alloc, _dir) = make_tree_with_wal(4096, 1);
+        tree.insert(b"k", b"old").unwrap();
+
+        let txn = tree.begin_txn(IsolationLevel::Snapshot).unwrap();
+        tree.insert_txn(&txn, b"k", b"new").unwrap();
+        tree.rollback_txn(&txn).unwrap();
+
+        assert_eq!(tree.get(b"k").unwrap(), Some(b"old".to_vec()));
+    }
+
+    #[test]
+    #[cfg(not(miri))]
+    fn rollback_concurrent_with_readers_and_writers() {
+        // Exercise rollback while other threads read and write disjoint keys.
+        // The rollbacker holds per-page OLC write latches, so this must not
+        // deadlock or corrupt the tree structure.
+        let (tree, _pool, _wal, _alloc, _dir) = make_tree_with_wal(512, 1);
+        let tree = Arc::new(tree);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut handles = Vec::new();
+
+        let t = Arc::clone(&tree);
+        let b = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            b.wait();
+            for i in 0..100u64 {
+                let key = format!("w{:04}", i);
+                let value = format!("writer-{i}");
+                t.insert(key.as_bytes(), value.as_bytes()).unwrap();
+            }
+        }));
+
+        let t = Arc::clone(&tree);
+        let b = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            b.wait();
+            for i in 0..100u64 {
+                let key = format!("w{:04}", i);
+                let _ = t.get(key.as_bytes());
+            }
+        }));
+
+        let t = Arc::clone(&tree);
+        let b = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            b.wait();
+            for i in 0..50 {
+                let txn = t.begin_txn(IsolationLevel::Snapshot).unwrap();
+                let key = format!("r{:04}", i);
+                t.insert_txn(&txn, key.as_bytes(), format!("rollback-{i}").as_bytes())
+                    .unwrap();
+                t.rollback_txn(&txn).unwrap();
+            }
+        }));
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
         tree.check_integrity().unwrap();
     }
 }

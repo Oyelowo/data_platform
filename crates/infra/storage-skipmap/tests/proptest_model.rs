@@ -49,7 +49,7 @@ proptest! {
         }
 
         prop_assert_eq!(
-            map.iter(),
+            map.iter().collect::<Vec<_>>(),
             model.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>()
         );
     }

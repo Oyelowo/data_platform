@@ -284,8 +284,10 @@ fn drop_appends_loses_unsynced_value() {
     let mut txn = engine.begin(TxnOptions::default()).unwrap();
     txn.put(b"big", &value).unwrap();
     txn.commit().unwrap();
-    // The append returned Ok but the bytes were dropped. Forgetting the engine
-    // without an explicit fsync leaves the value unrecoverable.
+    // The append returned Ok but the bytes were dropped. Crash to release the
+    // WAL lock, then forget the engine without an explicit fsync so the value
+    // remains unrecoverable.
+    engine.crash();
     std::mem::forget(engine);
 
     let engine2 = BtreeEngine::open(dir.path(), BtreeOptions::default()).unwrap();

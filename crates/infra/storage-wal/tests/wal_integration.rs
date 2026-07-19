@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use storage_wal::{Durability, Wal, WalOptions};
+use storage_wal::{Durability, Error, Wal, WalOptions};
 
 #[test]
 fn reopen_and_recover_records() {
@@ -196,4 +196,127 @@ fn reopen_truncates_torn_tail() {
         .collect::<Vec<_>>();
     assert_eq!(after.len(), 2);
     wal.close().unwrap();
+}
+
+
+#[test]
+fn second_open_on_same_directory_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
+
+    let result = Wal::open(dir.path(), WalOptions::default());
+    assert!(
+        matches!(result, Err(Error::Locked)),
+        "expected Locked error, got {:?}",
+        result
+    );
+
+    wal.close().unwrap();
+
+    // After close, reopen succeeds.
+    let wal2 = Wal::open(dir.path(), WalOptions::default()).unwrap();
+    wal2.close().unwrap();
+}
+
+#[test]
+fn iterator_from_before_first_segment_does_not_underflow() {
+    let dir = tempfile::tempdir().unwrap();
+    let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
+    wal.append(&b"first"[..], Durability::Immediate).unwrap();
+    wal.close().unwrap();
+
+    let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
+    // Request an iterator starting before the first record. It should clamp to
+    // the start of the WAL rather than underflowing or panicking.
+    let records: Vec<_> = wal.iter(0).unwrap().map(|r| r.unwrap()).collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].payload, &b"first"[..]);
+    wal.close().unwrap();
+}
+
+#[test]
+fn truncate_before_preserves_active_segment() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = WalOptions {
+        segment_size: 128,
+        durability: Durability::Immediate,
+    };
+    let wal = Wal::open(dir.path(), opts).unwrap();
+
+    // Fill several segments.
+    for i in 0..20u8 {
+        wal.append(vec![i; 32], Durability::Immediate).unwrap();
+    }
+    wal.close().unwrap();
+
+    let wal = Wal::open(dir.path(), opts).unwrap();
+    let segments_before: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map_or(false, |e| e == "log"))
+        .collect();
+    assert!(
+        segments_before.len() > 2,
+        "need multiple segments for this test"
+    );
+
+    // Truncate before a large LSN. The active (last) segment must remain.
+    wal.truncate_before(u64::MAX).unwrap();
+
+    let segments_after: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map_or(false, |e| e == "log"))
+        .collect();
+    assert_eq!(
+        segments_after.len(),
+        1,
+        "active segment must be preserved"
+    );
+
+    // Appending after truncation still works.
+    wal.append(&b"after-truncate"[..], Durability::Immediate)
+        .unwrap();
+    wal.close().unwrap();
+}
+
+#[test]
+fn reader_detects_lsn_mismatch() {
+    use storage_wal::{Record, RecordType};
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // Manually create a segment file with a valid record whose stored LSN does
+    // not match its byte offset. This simulates a mis-addressed read.
+    let segment_path = dir.path().join("wal-00000000000000000000.log");
+    let mut record = Record::new(RecordType::Put, &b"payload"[..]);
+    record.lsn = 999; // LSN claims to be at byte offset 999, but file offset is 0.
+    let mut buf = Vec::new();
+    record.encode(&mut buf).unwrap();
+    std::fs::write(&segment_path, &buf).unwrap();
+
+    let wal = Wal::open(dir.path(), WalOptions::default()).unwrap();
+    // Reading at the byte offset (0) should decode the record but see LSN 999.
+    let result = wal.reader().read(0);
+    assert!(
+        matches!(result, Err(Error::CorruptRecord { .. })),
+        "expected LSN mismatch to be reported as corruption, got {:?}",
+        result
+    );
+    wal.close().unwrap();
+}
+
+#[test]
+fn invalid_segment_size_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = WalOptions {
+        segment_size: 1,
+        durability: Durability::Immediate,
+    };
+    let result = Wal::open(dir.path(), opts);
+    assert!(
+        matches!(result, Err(Error::InvalidArgument(_))),
+        "expected InvalidArgument for tiny segment size, got {:?}",
+        result
+    );
 }

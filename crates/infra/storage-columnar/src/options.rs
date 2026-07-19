@@ -17,6 +17,8 @@ pub struct ColumnarOptions {
     pub background_compaction: bool,
     /// Whether to fsync after every flush.
     pub sync_on_flush: bool,
+    /// Target output file size for compaction in bytes. 0 disables splitting.
+    pub target_file_size: u64,
 }
 
 impl Default for ColumnarOptions {
@@ -29,6 +31,7 @@ impl Default for ColumnarOptions {
             compaction_threshold_bytes: 256 * 1024 * 1024,
             background_compaction: true,
             sync_on_flush: true,
+            target_file_size: 256 * 1024 * 1024,
         }
     }
 }
