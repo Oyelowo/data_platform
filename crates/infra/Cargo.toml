@@ -20,6 +20,7 @@ members = [
     "storage-art",
     "storage-vector",
     "storage-time-series",
+    "storage-search",
     # "object_store",
     # "distributed_storages",
     # "consensus",
