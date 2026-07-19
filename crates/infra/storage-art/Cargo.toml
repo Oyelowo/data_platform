@@ -11,6 +11,8 @@ bytes = "1.10"
 thiserror = "2.0"
 storage-traits = { path = "../storage-traits" }
 storage-format = { path = "../storage-format" }
+storage-wal = { path = "../storage-wal" }
+storage-file = { path = "../storage-file" }
 
 [dev-dependencies]
 storage-testkit = { path = "../storage-testkit" }
