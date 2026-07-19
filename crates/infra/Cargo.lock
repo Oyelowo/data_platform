@@ -1685,8 +1685,12 @@ name = "storage-art"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "loom",
  "proptest",
+ "storage-format",
+ "storage-memory",
  "storage-testkit",
+ "storage-traits",
  "tempfile",
  "thiserror",
 ]

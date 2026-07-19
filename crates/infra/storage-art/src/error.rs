@@ -27,4 +27,8 @@ pub enum Error {
     /// Map has reached its configured entry limit.
     #[error("map entry limit {0} reached")]
     EntryLimitReached(usize),
+
+    /// Snapshot data is corrupted or malformed.
+    #[error("corruption detected: {0}")]
+    Corruption(String),
 }

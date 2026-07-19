@@ -9,8 +9,15 @@ license.workspace = true
 [dependencies]
 bytes = "1.10"
 thiserror = "2.0"
+storage-traits = { path = "../storage-traits" }
+storage-format = { path = "../storage-format" }
 
 [dev-dependencies]
 storage-testkit = { path = "../storage-testkit" }
+storage-memory = { path = "../storage-memory" }
 tempfile = "3.19"
 proptest = "1.6"
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
