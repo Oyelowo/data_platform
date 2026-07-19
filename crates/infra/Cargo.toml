@@ -19,6 +19,7 @@ members = [
     "storage-index",
     "storage-art",
     "storage-vector",
+    "storage-time-series",
     # "object_store",
     # "distributed_storages",
     # "consensus",

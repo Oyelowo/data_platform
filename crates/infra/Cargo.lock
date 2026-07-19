@@ -1903,6 +1903,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "storage-time-series"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bytes",
+ "crossbeam-channel",
+ "parking_lot",
+ "proptest",
+ "serde",
+ "serde_json",
+ "storage-compression",
+ "storage-file",
+ "storage-format",
+ "storage-metrics",
+ "storage-testkit",
+ "storage-traits",
+ "storage-wal",
+ "tempfile",
+ "thiserror",
+ "zstd",
+]
+
+[[package]]
 name = "storage-traits"
 version = "0.1.0"
 dependencies = [
