@@ -3,74 +3,68 @@
 // `Queryable` is the optimizable, backend-agnostic pipeline interface. The
 // compiler recognizes the trait via `@lang("queryable")` and lowers calls to
 // its methods into QIR logical operators.
+//
+// Each `Queryable` method body calls `@intrinsic(query_*, ...)` so Phase 3 can
+// extract the operator shape from typed THIR. The canonical wrapper type is
+// `QueryArray<T>`.
+//
+// NOTE: The bootstrap compiler does not yet fully support `impl Trait` in
+// return position or struct fields, so the signatures below use the trait path
+// `Queryable<U>` instead of `impl Queryable<U>`. Once existential return types
+// are supported, these should be rewritten to `impl Queryable<U>`.
 
 @lang("queryable")
 trait Queryable<T> {
     // Lazy transformations.
-    fn filter(self, pred: fn(T) -> bool) -> Self;
     fn map<U>(self, f: fn(T) -> U) -> Queryable<U>;
+    fn filter(self, pred: fn(&T) -> bool) -> Queryable<T>;
     fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U>;
 
     // Ordering, grouping, slicing.
     fn order_by<K>(self, key: fn(T) -> K) -> Seq<T>;
     fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>>;
-    fn distinct(self) -> Self;
-    fn take(self, n: usize) -> Self;
-    fn skip(self, n: usize) -> Self;
+    fn distinct(self) -> Queryable<T>;
+    fn take(self, n: usize) -> Queryable<T>;
+    fn skip(self, n: usize) -> Queryable<T>;
 
     // Core aggregation hook. Explicit `Acc`/`Out` parameters avoid associated
     // types in the bootstrap pipeline.
     fn aggregate<A, Acc, Out>(self, agg: A) -> Out
-    where
-        A: Aggregate<T, Acc, Out>;
+    where A: Aggregate<T, Acc, Out>;
 
     // Sugar methods. The QIR lowering inlines their default bodies, which all
     // reduce to `self.aggregate(Marker)`. User overrides are respected.
     fn sum(self) -> T
-    where
-        Self: Sized,
+    where Self: Sized
     {
         self.aggregate(Sum {})
     }
 
-    fn product(self) -> T
-    where
-        Self: Sized,
-    {
-        self.aggregate(Product {})
-    }
-
     fn count(self) -> usize
-    where
-        Self: Sized,
+    where Self: Sized
     {
         self.aggregate(Count {})
     }
 
     fn avg(self) -> f64
-    where
-        Self: Sized,
+    where Self: Sized
     {
         self.aggregate(Avg {})
     }
 
     fn min(self) -> Option<T>
-    where
-        Self: Sized,
+    where Self: Sized
     {
         self.aggregate(Min {})
     }
 
     fn max(self) -> Option<T>
-    where
-        Self: Sized,
+    where Self: Sized
     {
         self.aggregate(Max {})
     }
 
-    // Eager fold/reduce. These are declared without default bodies for now
-    // because the bootstrap compiler does not yet support method-level
-    // generics in trait default bodies in all configurations.
+    // Eager fold/reduce.
     fn fold<Acc>(self, init: Acc, f: fn(Acc, T) -> Acc) -> Acc;
     fn reduce(self, f: fn(T, T) -> T) -> Option<T>;
 
@@ -78,21 +72,92 @@ trait Queryable<T> {
     fn execute(self) -> Vec<T>;
 }
 
-// Placeholder impl for the built-in `Array<T>` type.  The QIR lowering intercepts
-// calls to these methods and emits logical operators; the bodies are never
-// executed as written.
+// Wrapper type: an array-backed lazy query plan. Each method body forwards to
+// a compiler-recognized `@intrinsic` so the QIR extractor can emit the matching
+// logical operator in Phase 3.
+struct QueryArray<T> {
+    plan: PlanId,
+}
+
+impl<T> Queryable<T> for QueryArray<T> {
+    fn map<U>(self, f: fn(T) -> U) -> Queryable<U> {
+        let plan: PlanId = @intrinsic(query_map(self.plan, f));
+        QueryArray { plan }
+    }
+
+    fn filter(self, pred: fn(&T) -> bool) -> Queryable<T> {
+        let plan: PlanId = @intrinsic(query_filter(self.plan, pred));
+        QueryArray { plan }
+    }
+
+    fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U> {
+        let plan: PlanId = @intrinsic(query_flat_map(self.plan, f));
+        QueryArray { plan }
+    }
+
+    fn order_by<K>(self, key: fn(T) -> K) -> Seq<T> {
+        let plan: PlanId = @intrinsic(query_order_by(self.plan, key));
+        Seq { inner: QueryArray { plan } }
+    }
+
+    fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>> {
+        let plan: PlanId = @intrinsic(query_group_by(self.plan, key));
+        QueryArray { plan }
+    }
+
+    fn distinct(self) -> Queryable<T> {
+        let plan: PlanId = @intrinsic(query_distinct(self.plan));
+        QueryArray { plan }
+    }
+
+    fn take(self, n: usize) -> Queryable<T> {
+        let plan: PlanId = @intrinsic(query_take(self.plan, n));
+        QueryArray { plan }
+    }
+
+    fn skip(self, n: usize) -> Queryable<T> {
+        let plan: PlanId = @intrinsic(query_skip(self.plan, n));
+        QueryArray { plan }
+    }
+
+    fn aggregate<A, Acc, Out>(self, agg: A) -> Out
+    where A: Aggregate<T, Acc, Out>
+    {
+        @intrinsic(query_aggregate(self.plan, agg))
+    }
+
+    fn fold<Acc>(self, init: Acc, f: fn(Acc, T) -> Acc) -> Acc {
+        @intrinsic(query_fold(self.plan, init, f))
+    }
+
+    fn reduce(self, f: fn(T, T) -> T) -> Option<T> {
+        @intrinsic(query_reduce(self.plan, f))
+    }
+
+    fn execute(self) -> Vec<T> {
+        @intrinsic(query_execute(self.plan))
+    }
+}
+
+// Transitional impl for the built-in `Array<T>` type. This keeps existing code
+// that calls aggregate methods directly on arrays working while the canonical
+// `QueryArray<T>` wrapper is being adopted. The bodies are placeholders; QIR
+// lowering intercepts calls on `Array<T>` and emits logical operators.
 impl<T> Queryable<T> for Array<T> {
-    fn filter(self, pred: fn(T) -> bool) -> Self { self }
+    fn filter(self, pred: fn(&T) -> bool) -> Queryable<T> { self }
     fn map<U>(self, f: fn(T) -> U) -> Queryable<U> { self }
     fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U> { self }
     fn order_by<K>(self, key: fn(T) -> K) -> Seq<T> { Seq { inner: self } }
     fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>> { self }
-    fn distinct(self) -> Self { self }
-    fn take(self, n: usize) -> Self { self }
-    fn skip(self, n: usize) -> Self { self }
-    fn aggregate<A, Acc, Out>(self, agg: A) -> Out where A: Aggregate<T, Acc, Out> { 0 }
+    fn distinct(self) -> Queryable<T> { self }
+    fn take(self, n: usize) -> Queryable<T> { self }
+    fn skip(self, n: usize) -> Queryable<T> { self }
+    fn aggregate<A, Acc, Out>(self, agg: A) -> Out
+    where A: Aggregate<T, Acc, Out>
+    {
+        loop {}
+    }
     fn sum(self) -> T where Self: Sized { self.aggregate(Sum {}) }
-    fn product(self) -> T where Self: Sized { self.aggregate(Product {}) }
     fn count(self) -> usize where Self: Sized { self.aggregate(Count {}) }
     fn avg(self) -> f64 where Self: Sized { self.aggregate(Avg {}) }
     fn min(self) -> Option<T> where Self: Sized { self.aggregate(Min {}) }
@@ -102,9 +167,39 @@ impl<T> Queryable<T> for Array<T> {
     fn execute(self) -> Vec<T> { self }
 }
 
-// Result type of `order_by`. A `Seq` is an ordered collection; logical `Slice`
-// requires a `Seq` input.
+// Opaque plan handle. The compiler/runtime decides its representation.
+struct PlanId;
+
+// Ordered collection marker. `order_by` returns a `Seq` because only ordered
+// inputs support range/slice without an explicit sort.
 struct Seq<T> { inner: Queryable<T> }
 
 // Result type of `group_by`. Each row is `{ key: K, items: Queryable<T> }`.
 struct Group<K, T> { key: K, items: Queryable<T> }
+
+// ---------------------------------------------------------------------------
+// Intrinsic placeholders.
+//
+// The bodies above call `@intrinsic(query_*(...))`. During Phase 2 the
+// bootstrap compiler still resolves the inner call expression, so we provide
+// trivial placeholder functions with matching signatures. Phase 3 will intercept
+// these `@intrinsic` calls in THIR and lower them to logical operators instead
+// of invoking the placeholders.
+// ---------------------------------------------------------------------------
+
+fn query_map<T, U, F>(plan: PlanId, f: F) -> PlanId { plan }
+fn query_filter<T, F>(plan: PlanId, pred: F) -> PlanId { plan }
+fn query_flat_map<T, U, F>(plan: PlanId, f: F) -> PlanId { plan }
+fn query_order_by<T, K, F>(plan: PlanId, key: F) -> PlanId { plan }
+fn query_group_by<T, K, F>(plan: PlanId, key: F) -> PlanId { plan }
+fn query_distinct<T>(plan: PlanId) -> PlanId { plan }
+fn query_take<T>(plan: PlanId, n: usize) -> PlanId { plan }
+fn query_skip<T>(plan: PlanId, n: usize) -> PlanId { plan }
+fn query_aggregate<T, A, Acc, Out>(plan: PlanId, agg: A) -> Out
+where A: Aggregate<T, Acc, Out>
+{
+    loop {}
+}
+fn query_fold<T, Acc, F>(plan: PlanId, seed: Acc, f: F) -> Acc { seed }
+fn query_reduce<T, F>(plan: PlanId, f: F) -> Option<T> { Option::None }
+fn query_execute<T>(plan: PlanId) -> Vec<T> { loop {} }

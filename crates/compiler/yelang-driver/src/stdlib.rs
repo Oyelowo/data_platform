@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 
 /// Names of the `.ye` files that make up the core prelude, in dependency order.
-pub const CORE_STDLIB_FILES: &[&str] = &["iter.ye", "aggregate.ye", "query.ye"];
+pub const CORE_STDLIB_FILES: &[&str] = &["iter.ye", "aggregate.ye", "aggregate_impls.ye", "query.ye"];
 
 /// Locate the core stdlib directory relative to this crate's manifest.
 pub fn core_stdlib_dir() -> PathBuf {

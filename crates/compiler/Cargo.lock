@@ -886,6 +886,7 @@ version = "0.1.0"
 dependencies = [
  "insta",
  "rstest",
+ "slotmap",
  "thiserror",
  "yelang-arena",
  "yelang-ast",
@@ -893,6 +894,7 @@ dependencies = [
  "yelang-interner",
  "yelang-lexer",
  "yelang-resolve",
+ "yelang-thir",
  "yelang-ty",
  "yelang-tycheck",
 ]

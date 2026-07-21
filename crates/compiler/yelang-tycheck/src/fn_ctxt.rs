@@ -21,8 +21,8 @@ use yelang_ty::predicate::{
 };
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{
-    AdtDef, Const, ConstId, ConstVid, FloatVid, ImplPolarity, InferTy, IntVid, Mutability, Ty,
-    TyId, TyVid, TypeAndMut,
+    AdtDef, Const, ConstId, ConstVid, FloatVid, ImplPolarity, InferTy, IntVid, Mutability, ParamTy,
+    Ty, TyId, TyVid, TypeAndMut,
 };
 
 use crate::lower_ctx::TyLowerCtxt;
@@ -115,10 +115,24 @@ pub struct FnCtxt<'a> {
     pub errors: Vec<(Span, TypeError)>,
     /// Stack of active query scopes. Only the topmost scope is active.
     pub query_scopes: Vec<QueryScope>,
+    /// Map from generic parameter `DefId` to its `Ty::Param` inside this body.
+    param_map: FxHashMap<DefId, TyId>,
 }
 
 impl<'a> FnCtxt<'a> {
     pub fn new(tcx: &'a TyCtxt, def_id: DefId, return_ty: TyId) -> Self {
+        let mut param_map = FxHashMap::default();
+        if let Some(generics) = tcx.generics_of(def_id) {
+            for (idx, param) in generics.params.iter().enumerate() {
+                if let crate::tcx::GenericParamKind::Type = param.kind {
+                    let ty = tcx.interner().mk_ty(Ty::Param(ParamTy {
+                        index: idx as u32,
+                        name: param.ident.symbol,
+                    }));
+                    param_map.insert(param.def_id, ty);
+                }
+            }
+        }
         Self {
             tcx,
             infer: InferCtxt::new(),
@@ -132,6 +146,7 @@ impl<'a> FnCtxt<'a> {
             obligations: Vec::new(),
             errors: Vec::new(),
             query_scopes: Vec::new(),
+            param_map,
         }
     }
 
@@ -794,6 +809,10 @@ impl<'a> TyLowerCtxt for FnCtxt<'a> {
 
     fn item_ty(&self, def_id: DefId) -> Option<TyId> {
         self.tcx.item_ty(def_id)
+    }
+
+    fn param_ty(&self, def_id: DefId) -> Option<TyId> {
+        self.param_map.get(&def_id).copied()
     }
 
     fn self_ty(&self) -> Option<TyId> {

@@ -87,6 +87,7 @@ pub enum LangItem {
     Display,
     Iterator,
     IntoIterator,
+    FromIterator,
     Queryable,
     Aggregate,
 
@@ -178,6 +179,7 @@ impl LangItem {
             "display" => Display,
             "iterator" => Iterator,
             "into_iterator" => IntoIterator,
+            "from_iterator" => FromIterator,
             "queryable" => Queryable,
             "aggregate" => Aggregate,
 
@@ -254,6 +256,7 @@ impl LangItem {
             Display => "display",
             Iterator => "iterator",
             IntoIterator => "into_iterator",
+            FromIterator => "from_iterator",
             Queryable => "queryable",
             Aggregate => "aggregate",
             Box => "owned_box",
@@ -280,8 +283,8 @@ impl LangItem {
             | Deref | DerefMut | Index | IndexMut | EqTrait | PartialEq | OrdTrait | PartialOrd => {
                 "operator trait"
             }
-            Drop | Clone | Default | Debug | Display | Iterator | IntoIterator | Queryable
-            | Aggregate => "standard trait",
+            Drop | Clone | Default | Debug | Display | Iterator | IntoIterator | FromIterator
+            | Queryable | Aggregate => "standard trait",
             DerefTarget => "associated type",
             Box | PhantomData | Formatter | Array => "special type",
             Panic | PanicBoundsCheck | DropInPlace => "panic/unwinding item",

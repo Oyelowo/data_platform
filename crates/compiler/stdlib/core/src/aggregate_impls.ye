@@ -1,0 +1,194 @@
+// Built-in aggregate implementations.
+//
+// These are ordinary `impl Aggregate<...>` blocks. The compiler type-checks them
+// and extracts their `init`/`step`/`merge`/`finish` bodies as typed THIR for
+// QIR lowering in Phase 3.
+//
+// Concrete numeric impls are required until the bootstrap resolver can resolve
+// associated-item paths on generic type parameters (e.g. `T::zero()`).
+// User-defined aggregates may still be generic; the QIR lowering reads the
+// selected impl and extracts its closures regardless of whether the impl is
+// generic or concrete.
+
+struct Sum;
+struct SumAcc<T> { value: T }
+
+// Sum: distributive.
+impl Aggregate<i32, SumAcc<i32>, i32> for Sum {
+    fn init(&self) -> SumAcc<i32> { SumAcc { value: 0 } }
+    fn step(&self, acc: SumAcc<i32>, item: i32) -> SumAcc<i32> {
+        SumAcc { value: acc.value + item }
+    }
+    fn merge(&self, a: SumAcc<i32>, b: SumAcc<i32>) -> SumAcc<i32> {
+        SumAcc { value: a.value + b.value }
+    }
+    fn finish(&self, acc: SumAcc<i32>) -> i32 { acc.value }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+impl Aggregate<i64, SumAcc<i64>, i64> for Sum {
+    fn init(&self) -> SumAcc<i64> { SumAcc { value: 0 } }
+    fn step(&self, acc: SumAcc<i64>, item: i64) -> SumAcc<i64> {
+        SumAcc { value: acc.value + item }
+    }
+    fn merge(&self, a: SumAcc<i64>, b: SumAcc<i64>) -> SumAcc<i64> {
+        SumAcc { value: a.value + b.value }
+    }
+    fn finish(&self, acc: SumAcc<i64>) -> i64 { acc.value }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+impl Aggregate<f64, SumAcc<f64>, f64> for Sum {
+    fn init(&self) -> SumAcc<f64> { SumAcc { value: 0.0 } }
+    fn step(&self, acc: SumAcc<f64>, item: f64) -> SumAcc<f64> {
+        SumAcc { value: acc.value + item }
+    }
+    fn merge(&self, a: SumAcc<f64>, b: SumAcc<f64>) -> SumAcc<f64> {
+        SumAcc { value: a.value + b.value }
+    }
+    fn finish(&self, acc: SumAcc<f64>) -> f64 { acc.value }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+struct Product;
+struct ProductAcc<T> { value: T }
+
+// Product: distributive.
+impl Aggregate<i32, ProductAcc<i32>, i32> for Product {
+    fn init(&self) -> ProductAcc<i32> { ProductAcc { value: 1 } }
+    fn step(&self, acc: ProductAcc<i32>, item: i32) -> ProductAcc<i32> {
+        ProductAcc { value: acc.value * item }
+    }
+    fn merge(&self, a: ProductAcc<i32>, b: ProductAcc<i32>) -> ProductAcc<i32> {
+        ProductAcc { value: a.value * b.value }
+    }
+    fn finish(&self, acc: ProductAcc<i32>) -> i32 { acc.value }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+impl Aggregate<i64, ProductAcc<i64>, i64> for Product {
+    fn init(&self) -> ProductAcc<i64> { ProductAcc { value: 1 } }
+    fn step(&self, acc: ProductAcc<i64>, item: i64) -> ProductAcc<i64> {
+        ProductAcc { value: acc.value * item }
+    }
+    fn merge(&self, a: ProductAcc<i64>, b: ProductAcc<i64>) -> ProductAcc<i64> {
+        ProductAcc { value: a.value * b.value }
+    }
+    fn finish(&self, acc: ProductAcc<i64>) -> i64 { acc.value }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+impl Aggregate<f64, ProductAcc<f64>, f64> for Product {
+    fn init(&self) -> ProductAcc<f64> { ProductAcc { value: 1.0 } }
+    fn step(&self, acc: ProductAcc<f64>, item: f64) -> ProductAcc<f64> {
+        ProductAcc { value: acc.value * item }
+    }
+    fn merge(&self, a: ProductAcc<f64>, b: ProductAcc<f64>) -> ProductAcc<f64> {
+        ProductAcc { value: a.value * b.value }
+    }
+    fn finish(&self, acc: ProductAcc<f64>) -> f64 { acc.value }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+struct Count;
+struct CountAcc { count: usize }
+
+// Count over any element type: distributive.
+impl<T> Aggregate<T, CountAcc, usize> for Count {
+    fn init(&self) -> CountAcc { CountAcc { count: 0 } }
+    fn step(&self, acc: CountAcc, item: T) -> CountAcc {
+        CountAcc { count: acc.count + 1 }
+    }
+    fn merge(&self, a: CountAcc, b: CountAcc) -> CountAcc {
+        CountAcc { count: a.count + b.count }
+    }
+    fn finish(&self, acc: CountAcc) -> usize { acc.count }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+struct Avg;
+struct AvgAcc<T> { sum: T, count: usize }
+
+// Average: algebraic.
+impl Aggregate<i32, AvgAcc<i32>, f64> for Avg {
+    fn init(&self) -> AvgAcc<i32> { AvgAcc { sum: 0, count: 0 } }
+    fn step(&self, acc: AvgAcc<i32>, item: i32) -> AvgAcc<i32> {
+        AvgAcc { sum: acc.sum + item, count: acc.count + 1 }
+    }
+    fn merge(&self, a: AvgAcc<i32>, b: AvgAcc<i32>) -> AvgAcc<i32> {
+        AvgAcc { sum: a.sum + b.sum, count: a.count + b.count }
+    }
+    fn finish(&self, acc: AvgAcc<i32>) -> f64 {
+        acc.sum as f64 / acc.count as f64
+    }
+    fn class(&self) -> AggregateClass { AggregateClass::Algebraic }
+}
+
+impl Aggregate<i64, AvgAcc<i64>, f64> for Avg {
+    fn init(&self) -> AvgAcc<i64> { AvgAcc { sum: 0, count: 0 } }
+    fn step(&self, acc: AvgAcc<i64>, item: i64) -> AvgAcc<i64> {
+        AvgAcc { sum: acc.sum + item, count: acc.count + 1 }
+    }
+    fn merge(&self, a: AvgAcc<i64>, b: AvgAcc<i64>) -> AvgAcc<i64> {
+        AvgAcc { sum: a.sum + b.sum, count: a.count + b.count }
+    }
+    fn finish(&self, acc: AvgAcc<i64>) -> f64 {
+        acc.sum as f64 / acc.count as f64
+    }
+    fn class(&self) -> AggregateClass { AggregateClass::Algebraic }
+}
+
+impl Aggregate<f64, AvgAcc<f64>, f64> for Avg {
+    fn init(&self) -> AvgAcc<f64> { AvgAcc { sum: 0.0, count: 0 } }
+    fn step(&self, acc: AvgAcc<f64>, item: f64) -> AvgAcc<f64> {
+        AvgAcc { sum: acc.sum + item, count: acc.count + 1 }
+    }
+    fn merge(&self, a: AvgAcc<f64>, b: AvgAcc<f64>) -> AvgAcc<f64> {
+        AvgAcc { sum: a.sum + b.sum, count: a.count + b.count }
+    }
+    fn finish(&self, acc: AvgAcc<f64>) -> f64 {
+        acc.sum / acc.count as f64
+    }
+    fn class(&self) -> AggregateClass { AggregateClass::Algebraic }
+}
+
+struct Min;
+struct Max;
+
+// Minimum over any ordered type: distributive.
+impl<T: Ord> Aggregate<T, Option<T>, Option<T>> for Min {
+    fn init(&self) -> Option<T> { Option::None }
+    fn step(&self, acc: Option<T>, item: T) -> Option<T> {
+        match acc {
+            Option::None => Option::Some(item),
+            Option::Some(a) => if item < a { Option::Some(item) } else { acc }
+        }
+    }
+    fn merge(&self, a: Option<T>, b: Option<T>) -> Option<T> {
+        match (a, b) {
+            (Option::None, x) | (x, Option::None) => x,
+            (Option::Some(a), Option::Some(b)) => if b < a { Option::Some(b) } else { Option::Some(a) }
+        }
+    }
+    fn finish(&self, acc: Option<T>) -> Option<T> { acc }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}
+
+// Maximum over any ordered type: distributive.
+impl<T: Ord> Aggregate<T, Option<T>, Option<T>> for Max {
+    fn init(&self) -> Option<T> { Option::None }
+    fn step(&self, acc: Option<T>, item: T) -> Option<T> {
+        match acc {
+            Option::None => Option::Some(item),
+            Option::Some(a) => if item > a { Option::Some(item) } else { acc }
+        }
+    }
+    fn merge(&self, a: Option<T>, b: Option<T>) -> Option<T> {
+        match (a, b) {
+            (Option::None, x) | (x, Option::None) => x,
+            (Option::Some(a), Option::Some(b)) => if b > a { Option::Some(b) } else { Option::Some(a) }
+        }
+    }
+    fn finish(&self, acc: Option<T>) -> Option<T> { acc }
+    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+}

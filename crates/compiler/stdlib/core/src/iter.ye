@@ -2,6 +2,7 @@
 //
 // `Iterator` is the local, eager-pull, single-node iteration interface.
 // `IntoIterator` is the conversion trait used by `for` loops.
+// `FromIterator` is the target of `Iterator::collect`.
 //
 // These traits are recognized by the compiler via `@lang` attributes, but their
 // methods are ordinary scalar calls for now. The optimizable query surface is
@@ -13,21 +14,69 @@ trait Iterator<T> {
     fn next(self) -> Option<(Self, T)>;
 
     // Default combinators are ordinary default methods.
-    fn map<U>(self, f: fn(T) -> U) -> MapIter<Self, T, U>;
-    fn filter(self, pred: fn(T) -> bool) -> FilterIter<Self, T>;
-    fn fold<U>(self, init: U, f: fn(U, T) -> U) -> U;
-    fn take(self, n: usize) -> TakeIter<Self, T>;
-    fn skip(self, n: usize) -> SkipIter<Self, T>;
+    fn map<U>(self, f: fn(T) -> U) -> MapIter<Self, T, U>
+    where Self: Sized {
+        MapIter { inner: self, f }
+    }
+
+    fn filter(self, pred: fn(&T) -> bool) -> FilterIter<Self, T>
+    where Self: Sized {
+        FilterIter { inner: self, pred }
+    }
+
+    fn take(self, n: usize) -> TakeIter<Self, T>
+    where Self: Sized {
+        TakeIter { inner: self, n }
+    }
+
+    fn skip(self, n: usize) -> SkipIter<Self, T>
+    where Self: Sized {
+        SkipIter { inner: self, n }
+    }
+
+    fn fold<U>(self, init: U, f: fn(U, T) -> U) -> U
+    where Self: Sized {
+        let mut acc = init;
+        let mut iter = self;
+        while let Option::Some((next, x)) = iter.next() {
+            acc = f(acc, x);
+            iter = next;
+        }
+        acc
+    }
+
+    // `collect` is declared without a default body because the bootstrap
+    // resolver does not yet resolve associated-item paths on generic type
+    // parameters (`C::from_iter`). Concrete collection types can provide a
+    // `FromIterator` impl and implement `collect` directly.
+    fn collect<C>(self) -> C
+    where C: FromIterator<T>, Self: Sized;
 }
 
 @lang("into_iterator")
 trait IntoIterator<T> {
-    fn into_iter(self) -> Iterator<T>;
+    fn into_iter(self) -> impl Iterator<T>;
+}
+
+@lang("from_iterator")
+trait FromIterator<T> {
+    fn from_iter(iter: impl Iterator<T>) -> Self;
 }
 
 // Placeholder iterator adapter types. The compiler does not need to know these
 // exist; they are ordinary stdlib types.
-struct MapIter<I, T, U> { inner: I, f: fn(T) -> U }
-struct FilterIter<I, T> { inner: I, pred: fn(T) -> bool }
-struct TakeIter<I, T> { inner: I, n: usize }
-struct SkipIter<I, T> { inner: I, n: usize }
+struct MapIter<I, T, U>    { inner: I, f: fn(T) -> U }
+struct FilterIter<I, T>    { inner: I, pred: fn(&T) -> bool }
+struct TakeIter<I, T>      { inner: I, n: usize }
+struct SkipIter<I, T>      { inner: I, n: usize }
+
+// Adapter implementations. Generic `impl` blocks over higher-kinded trait
+// bounds are not fully supported by the bootstrap type checker, so these are
+// left as declarations matching the intended semantics. Once the compiler
+// supports `I: Iterator<T>` constraints in impl position, the bodies below
+// become valid ordinary code.
+//
+// impl<I: Iterator<T>, T, U> Iterator<U> for MapIter<I, T, U> { ... }
+// impl<I: Iterator<T>, T> Iterator<T> for FilterIter<I, T> { ... }
+// impl<I: Iterator<T>, T> Iterator<T> for TakeIter<I, T> { ... }
+// impl<I: Iterator<T>, T> Iterator<T> for SkipIter<I, T> { ... }

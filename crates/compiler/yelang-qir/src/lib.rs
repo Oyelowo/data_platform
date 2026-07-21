@@ -11,6 +11,7 @@ pub mod errors;
 pub mod exec;
 pub mod expr;
 pub mod ids;
+pub mod logical;
 pub mod lir;
 pub mod pir;
 pub mod rewrite;

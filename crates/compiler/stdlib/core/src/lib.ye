@@ -6,9 +6,11 @@
 pub mod iter;
 pub mod query;
 pub mod aggregate;
+pub mod aggregate_impls;
 
 // Re-export the query and aggregate traits so user code can say `Queryable[T]`
 // without importing.
-pub use iter::{Iterator, IntoIterator};
-pub use query::{Queryable, Seq, Group};
-pub use aggregate::{Aggregate, AggregateClass, Sum, Product, Count, Avg, Min, Max};
+pub use iter::{Iterator, IntoIterator, FromIterator};
+pub use query::{Queryable, QueryArray, Seq, Group};
+pub use aggregate::{Aggregate, AggregateClass};
+pub use aggregate_impls::{Sum, Product, Count, Avg, Min, Max};
