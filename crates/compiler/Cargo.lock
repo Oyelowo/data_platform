@@ -914,6 +914,22 @@ name = "yelang-stdlib-core"
 version = "0.1.0"
 
 [[package]]
+name = "yelang-thir"
+version = "0.1.0"
+dependencies = [
+ "slotmap",
+ "thiserror",
+ "yelang-arena",
+ "yelang-ast",
+ "yelang-hir",
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-resolve",
+ "yelang-ty",
+ "yelang-tycheck",
+]
+
+[[package]]
 name = "yelang-trait-solver"
 version = "0.1.0"
 dependencies = [

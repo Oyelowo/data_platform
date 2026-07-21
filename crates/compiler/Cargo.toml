@@ -10,6 +10,7 @@ members = [
     "yelang-infer",
     "yelang-trait-solver",
     "yelang-tycheck",
+    "yelang-thir",
     "yelang-qir",
     "yelang-driver",
     "stdlib/core",
