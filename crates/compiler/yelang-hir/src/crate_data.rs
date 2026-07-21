@@ -10,6 +10,10 @@ use yelang_lexer::Span;
 use crate::hir::core::{ForeignItem, Impl};
 use crate::ids::{BodyId, DefId, ExprId, HirTyId, PatId, QueryId, StmtId};
 
+// Re-export so callers can construct/inspect `Definition` values using the same
+// type stored in the shared arena.
+pub use yelang_resolve::def_collector::{DefKind, Definition};
+
 // Re-export so callers can query lang items without a separate dependency.
 pub use yelang_resolve::lang_items::LangItems;
 
@@ -19,6 +23,10 @@ pub struct Crate {
     pub root_module: DefId,
     /// All items keyed by `DefId`.
     pub items: IndexVec<DefId, Option<Item>>,
+    /// All definitions, including synthetic ones created during lowering.
+    /// This starts as a clone of `resolved.definitions` and is extended by
+    /// derived impl expansion.
+    pub definitions: IndexVec<DefId, Definition>,
     /// Trait definitions keyed by the trait's `DefId`.
     pub traits: IndexVec<DefId, Option<Trait>>,
     /// Impl blocks.
@@ -58,6 +66,7 @@ impl Crate {
         Self {
             root_module,
             items: IndexVec::new(),
+            definitions: IndexVec::new(),
             traits: IndexVec::new(),
             impls: Vec::new(),
             foreign_items: IndexVec::new(),
@@ -117,6 +126,16 @@ impl Crate {
         let id = self.queries.insert(Some(query));
         self.query_spans.insert(id, span);
         id
+    }
+
+    /// Look up a definition by `DefId`.
+    pub fn definition(&self, id: DefId) -> Option<&Definition> {
+        self.definitions.get(id)
+    }
+
+    /// Look up a mutable definition by `DefId`.
+    pub fn definition_mut(&mut self, id: DefId) -> Option<&mut Definition> {
+        self.definitions.get_mut(id)
     }
 
     /// Look up an expression node by `ExprId`.

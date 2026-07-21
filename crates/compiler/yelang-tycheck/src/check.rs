@@ -188,6 +188,16 @@ fn check_expr_value(fcx: &mut FnCtxt<'_>, expr: &Expr, _expr_id: ExprId) -> TyId
         Expr::ArrayRepeat { value, count } => {
             check_array_repeat(fcx, expr_span(fcx, _expr_id), *value, *count)
         }
+        Expr::Intrinsic { name: _, args } => {
+            // Phase 0: intrinsics are representable and well-formed. Their concrete
+            // type is inferred from the surrounding context (e.g. an assignment or
+            // return-type annotation). If the context does not constrain the result,
+            // writeback will turn the fresh variable into an error.
+            for arg in args {
+                let _ = check_expr(fcx, *arg);
+            }
+            fcx.new_ty_var()
+        }
         Expr::Err => fcx.mk_error(),
     }
 }

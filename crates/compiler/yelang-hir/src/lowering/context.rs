@@ -18,9 +18,6 @@ pub struct LoweringContext<'a> {
     pub interner: &'a Interner,
     pub resolved: &'a ResolvedCrate,
     pub crate_hir: Crate,
-    /// Number of synthetic `DefId`s allocated beyond the IDs produced during
-    /// name resolution. The first synthesized ID is `definitions.len() + 1`.
-    pub synthetic_def_count: u32,
     pub current_module: DefId,
     pub current_owner: DefId,
     /// Local variable bindings, scoped by block/function body. Each scope is a
@@ -37,11 +34,12 @@ pub struct LoweringContext<'a> {
 impl<'a> LoweringContext<'a> {
     pub fn new(interner: &'a Interner, resolved: &'a ResolvedCrate) -> Self {
         let root_module = resolved.module_tree.root.def_id;
+        let mut crate_hir = Crate::new(root_module);
+        crate_hir.definitions = resolved.definitions.clone();
         Self {
             interner,
             resolved,
-            crate_hir: Crate::new(root_module),
-            synthetic_def_count: 0,
+            crate_hir,
             current_module: root_module,
             current_owner: root_module,
             local_scopes: vec![yelang_arena::FxHashMap::new()],
@@ -50,13 +48,28 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Allocate a fresh synthetic `DefId` for compiler-generated items (e.g.
-    /// derived impls). Synthetic IDs are derived from the definition arena so
-    /// they never collide with user-defined or prelude definitions.
-    pub fn next_synthetic_def_id(&mut self) -> DefId {
-        let raw = self.resolved.definitions.len() as u32 + self.synthetic_def_count + 1;
-        self.synthetic_def_count += 1;
-        DefId::new(raw)
+    /// Allocate a fresh `DefId` for a compiler-generated definition (e.g. a
+    /// derived impl or its method) and push a `Definition` into the shared
+    /// arena. All downstream lookups can now resolve the synthetic item's name,
+    /// parent, and kind just like source items.
+    pub fn allocate_synthetic_def(
+        &mut self,
+        name: Symbol,
+        span: Span,
+        kind: yelang_resolve::DefKind,
+        visibility: Visibility,
+    ) -> DefId {
+        let def_id = self.crate_hir.definitions.push(yelang_resolve::Definition {
+            def_id: yelang_arena::DefId::new(1), // patched below
+            name,
+            span,
+            kind,
+            parent: Some(self.current_module),
+            visibility,
+            lang_item: None,
+        });
+        self.crate_hir.definitions[def_id].def_id = def_id;
+        def_id
     }
 
     /// Record a lowering error.
@@ -126,7 +139,12 @@ fn synthesize_array_item(ctx: &mut LoweringContext) {
         return;
     }
 
-    let t_param_id = ctx.next_synthetic_def_id();
+    let t_param_id = ctx.allocate_synthetic_def(
+        ctx.interner.get_or_intern("T"),
+        Span::default(),
+        yelang_resolve::DefKind::TypeParam,
+        Visibility::Public(Span::default()),
+    );
     let t_name = ctx.interner.get_or_intern("T");
     let t_ident = yelang_ast::Ident::new(t_name, Span::default());
     let t_ty = ctx.crate_hir.alloc_ty(
@@ -137,7 +155,12 @@ fn synthesize_array_item(ctx: &mut LoweringContext) {
         Span::default(),
     );
 
-    let field_def_id = ctx.next_synthetic_def_id();
+    let field_def_id = ctx.allocate_synthetic_def(
+        ctx.interner.get_or_intern("_phantom"),
+        Span::default(),
+        yelang_resolve::DefKind::Field,
+        Visibility::Private,
+    );
     let phantom_ident = yelang_ast::Ident::new(ctx.interner.get_or_intern("_phantom"), Span::default());
     let array_ident = yelang_ast::Ident::new(ctx.interner.get_or_intern("Array"), Span::default());
 
@@ -191,7 +214,7 @@ pub(crate) fn lookup_item_def_id(ctx: &LoweringContext, item: &AstItem) -> Optio
         .map(|(id, _)| id)
 }
 
-fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {
+pub(crate) fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {
     use yelang_resolve::DefKind;
     Some(match kind {
         AstItemKind::Fn(_) => DefKind::Fn,
@@ -207,7 +230,7 @@ fn item_def_kind(kind: &AstItemKind) -> Option<yelang_resolve::DefKind> {
     })
 }
 
-fn item_name(item: &AstItem) -> Option<Symbol> {
+pub(crate) fn item_name(item: &AstItem) -> Option<Symbol> {
     Some(match &item.kind {
         AstItemKind::Fn(f) => f.name.symbol,
         AstItemKind::Struct(s) => s.name.symbol,

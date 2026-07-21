@@ -545,6 +545,13 @@ pub fn walk_expr(f: &mut impl Folder, crate_hir: &mut Crate, expr: Expr) -> Expr
             value: fold_expr_id(f, crate_hir, value),
             count: fold_expr_id(f, crate_hir, count),
         },
+        Expr::Intrinsic { name, args } => Expr::Intrinsic {
+            name,
+            args: args
+                .into_iter()
+                .map(|arg| fold_expr_id(f, crate_hir, arg))
+                .collect(),
+        },
         Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => expr,
     }
 }

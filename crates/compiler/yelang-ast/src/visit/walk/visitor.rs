@@ -267,6 +267,10 @@ pub trait Visitor: Sized {
         walk_await_expr(self, expr)
     }
 
+    fn visit_intrinsic_expr(&mut self, intr: &crate::IntrinsicExpr) -> ControlFlow<()> {
+        walk_intrinsic_expr(self, intr)
+    }
+
     fn visit_grouped_expr(&mut self, grouped: &GroupedExpr) -> ControlFlow<()> {
         walk_grouped_expr(self, grouped)
     }

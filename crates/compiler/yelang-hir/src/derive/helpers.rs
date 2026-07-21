@@ -11,8 +11,8 @@ use crate::derive::context::DeriveContext;
 use crate::hir::adt::VariantData;
 use crate::hir::body::Body;
 use crate::hir::core::{
-    Arm, Block, Expr, FieldExpr, FnSig, ImplItem, ImplItemKind, Item, ItemKind, Lit, Param, Stmt,
-    TraitRef,
+    Arm, Attribute, Block, Expr, FieldExpr, FnSig, Generics, ImplItem, ImplItemKind, Item,
+    ItemKind, Lit, Param, Stmt, TraitRef,
 };
 use crate::hir::pat::{BindingMode, FieldPat, Pat};
 use crate::hir::ty::Ty;
@@ -418,21 +418,24 @@ pub fn method_impl_item(
     ctx: &mut DeriveContext<'_, '_>,
     name: &str,
     sig: FnSig,
+    generics: Generics,
+    attrs: Vec<Attribute>,
     body_id: BodyId,
 ) -> ImplItem {
     ImplItem {
-        def_id: ctx.next_synthetic_def_id(),
+        def_id: ctx.ctx.allocate_synthetic_def(
+            ctx.ctx.interner.get_or_intern(name),
+            ctx.derive_span,
+            yelang_resolve::DefKind::Fn,
+            ctx.hir_item.vis.clone(),
+        ),
         ident: ident(ctx, name),
         kind: ImplItemKind::Fn {
             sig,
-            generics: crate::hir::core::Generics {
-                params: vec![],
-                where_clause: None,
-                span: ctx.derive_span,
-            },
+            generics,
             body: body_id,
         },
-        attrs: vec![],
+        attrs,
         span: ctx.derive_span,
         defaultness: crate::hir::core::Defaultness::Final,
     }
@@ -448,13 +451,19 @@ pub fn impl_item(
     trait_def_id: DefId,
     self_ty: HirTyId,
     generics: crate::hir::core::Generics,
+    attrs: Vec<Attribute>,
     items: Vec<ImplItem>,
 ) -> Item {
-    let def_id = ctx.next_synthetic_def_id();
+    let def_id = ctx.ctx.allocate_synthetic_def(
+        ctx.ctx.interner.get_or_intern("<derived impl>"),
+        ctx.derive_span,
+        yelang_resolve::DefKind::Impl,
+        ctx.hir_item.vis.clone(),
+    );
     Item {
         def_id,
         ident: ident(ctx, "<derived impl>"),
-        attrs: vec![],
+        attrs,
         kind: ItemKind::Impl {
             items,
             generics,

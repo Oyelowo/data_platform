@@ -287,3 +287,35 @@ fn item_without_lang_attribute_has_none() {
         .expect("Foo definition");
     assert_eq!(foo_def.lang_item, None);
 }
+
+#[test]
+fn lang_queryable_trait_registers_lang_item() {
+    let src = r#"
+        @lang("queryable")
+        trait Queryable {}
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let collector = def_collector::DefCollector::new(&interner).collect(&program);
+
+    assert!(
+        collector.lang_items.contains(LangItem::Queryable),
+        "@lang(queryable) trait should register Queryable lang item"
+    );
+}
+
+#[test]
+fn lang_aggregate_trait_registers_lang_item() {
+    let src = r#"
+        @lang("aggregate")
+        trait Aggregate {}
+        fn main() {}
+    "#;
+    let (program, interner) = parse_program(src);
+    let collector = def_collector::DefCollector::new(&interner).collect(&program);
+
+    assert!(
+        collector.lang_items.contains(LangItem::Aggregate),
+        "@lang(aggregate) trait should register Aggregate lang item"
+    );
+}

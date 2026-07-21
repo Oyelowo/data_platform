@@ -11,11 +11,24 @@ use crate::ids::{DefId, HirTyId};
 use crate::lowering::LoweringContext;
 use yelang_resolve::lang_items::LangItem;
 
+/// Allocate a synthetic `DefId` for an AST item that name resolution did not
+/// assign a definition to (e.g. inline modules, certain impl blocks).
+fn allocate_item_def_id(ctx: &mut LoweringContext, item: &AstItem) -> DefId {
+    use crate::lowering::context::{item_def_kind, item_name};
+    let name = item_name(item).unwrap_or_else(|| match &item.kind {
+        AstItemKind::Impl(_) => ctx.interner.get_or_intern("<impl>"),
+        AstItemKind::Use(_) => ctx.interner.get_or_intern("<use>"),
+        _ => ctx.interner.get_or_intern("<item>"),
+    });
+    let kind = item_def_kind(&item.kind).unwrap_or(yelang_resolve::DefKind::Module);
+    ctx.allocate_synthetic_def(name, item.span, kind, item.visibility.clone())
+}
+
 /// Lower a single AST item into HIR.
 pub fn lower_item(ctx: &mut LoweringContext, item: &AstItem) -> Option<DefId> {
     // Try to reuse the DefId assigned during name resolution.
     let def_id = crate::lowering::context::lookup_item_def_id(ctx, item)
-        .unwrap_or_else(|| ctx.next_synthetic_def_id());
+        .unwrap_or_else(|| allocate_item_def_id(ctx, item));
     let prev_owner = ctx.current_owner;
     let prev_module = ctx.current_module;
     ctx.current_owner = def_id;
@@ -112,7 +125,12 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
             fields: fields
                 .iter()
                 .map(|f| FieldDef {
-                    def_id: ctx.next_synthetic_def_id(),
+                    def_id: ctx.allocate_synthetic_def(
+                        f.name.symbol,
+                        f.span,
+                        yelang_resolve::DefKind::Field,
+                        f.visibility.clone(),
+                    ),
                     ident: f.name,
                     ty: crate::lowering::ty::lower_ty(ctx, &f.ty),
                     span: f.span,
@@ -124,8 +142,14 @@ fn lower_struct_item(ctx: &mut LoweringContext, s: &AstStruct, _def_id: DefId) -
         yelang_ast::StructFields::Tuple(tys) => VariantData::Tuple {
             fields: tys
                 .iter()
-                .map(|ty| StructField {
-                    def_id: ctx.next_synthetic_def_id(),
+                .enumerate()
+                .map(|(i, ty)| StructField {
+                    def_id: ctx.allocate_synthetic_def(
+                        ctx.interner.get_or_intern(&format!("{i}")),
+                        ty.span,
+                        yelang_resolve::DefKind::Field,
+                        Visibility::Private,
+                    ),
                     ty: crate::lowering::ty::lower_ty(ctx, ty),
                     span: ty.span,
                     vis: Visibility::Private,
@@ -153,8 +177,14 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                 yelang_ast::VariantKind::Tuple(tys) => VariantData::Tuple {
                     fields: tys
                         .iter()
-                        .map(|ty| StructField {
-                            def_id: ctx.next_synthetic_def_id(),
+                        .enumerate()
+                        .map(|(i, ty)| StructField {
+                            def_id: ctx.allocate_synthetic_def(
+                                ctx.interner.get_or_intern(&format!("{i}")),
+                                ty.span,
+                                yelang_resolve::DefKind::Field,
+                                Visibility::Private,
+                            ),
                             ty: crate::lowering::ty::lower_ty(ctx, ty),
                             span: ty.span,
                             vis: Visibility::Private,
@@ -166,7 +196,12 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                     fields: fields
                         .iter()
                         .map(|f| FieldDef {
-                            def_id: ctx.next_synthetic_def_id(),
+                            def_id: ctx.allocate_synthetic_def(
+                                f.name.symbol,
+                                f.span,
+                                yelang_resolve::DefKind::Field,
+                                f.visibility.clone(),
+                            ),
                             ident: f.name,
                             ty: crate::lowering::ty::lower_ty(ctx, &f.ty),
                             span: f.span,
@@ -186,7 +221,16 @@ fn lower_enum_item(ctx: &mut LoweringContext, e: &AstEnum, _def_id: DefId) -> It
                 None => make_implicit_discriminant(ctx, v.span, &mut next_discriminant),
             };
             VariantDef {
-                def_id: ctx.next_synthetic_def_id(),
+                def_id: ctx.allocate_synthetic_def(
+                    v.name.symbol,
+                    v.span,
+                    yelang_resolve::DefKind::EnumVariant,
+                    // Variants inherit the parent enum's visibility. The AST
+                    // variant node does not carry visibility directly, so we
+                    // default to public; this path is only exercised for
+                    // source variants that already have a resolved definition.
+                    Visibility::Public(v.span),
+                ),
                 ident: v.name,
                 data,
                 discriminant: Some(discriminant),
@@ -250,7 +294,11 @@ fn lower_trait_item(
         .items
         .iter()
         .map(|item| {
-            let def_id = ctx.next_synthetic_def_id();
+            let ident = match &item.item {
+                yelang_ast::TraitItemKind::Method(m) => m.segment,
+                yelang_ast::TraitItemKind::Constant(c) => c.name,
+                yelang_ast::TraitItemKind::AssociatedType(t) => t.name,
+            };
             let kind = match &item.item {
                 yelang_ast::TraitItemKind::Method(m) => {
                     let inputs: Vec<HirTyId> = m
@@ -293,11 +341,18 @@ fn lower_trait_item(
                     }
                 }
             };
-            let ident = match &item.item {
-                yelang_ast::TraitItemKind::Method(m) => m.segment,
-                yelang_ast::TraitItemKind::Constant(c) => c.name,
-                yelang_ast::TraitItemKind::AssociatedType(t) => t.name,
+
+            let def_kind = match &kind {
+                crate::hir::core::TraitItemKind::Fn { .. } => yelang_resolve::DefKind::Fn,
+                crate::hir::core::TraitItemKind::Const { .. } => yelang_resolve::DefKind::Const,
+                crate::hir::core::TraitItemKind::Type { .. } => yelang_resolve::DefKind::TypeAlias,
             };
+            let def_id = ctx.allocate_synthetic_def(
+                ident.symbol,
+                item.span,
+                def_kind,
+                Visibility::Public(item.span),
+            );
 
             // If this is the `Target` associated type inside the lang-item `Deref`
             // trait, record its `DefId` so the type checker can build projection
@@ -359,7 +414,12 @@ fn lower_impl_item(
     i: &yelang_ast::item::Impl,
     _def_id: DefId,
 ) -> ItemKind {
-    let impl_def_id = ctx.next_synthetic_def_id();
+    let impl_def_id = ctx.allocate_synthetic_def(
+        ctx.interner.get_or_intern("<impl>"),
+        i.span,
+        yelang_resolve::DefKind::Impl,
+        Visibility::Public(i.span),
+    );
     let self_ty = crate::lowering::ty::lower_ty(ctx, &i.self_ty);
     let self_ty_def_id = ctx.crate_hir.ty(self_ty).and_then(|ty| match ty {
         crate::hir::ty::Ty::Path {
@@ -384,7 +444,11 @@ fn lower_impl_item(
         .items
         .iter()
         .map(|item| {
-            let def_id = ctx.next_synthetic_def_id();
+            let ident = match &item.item {
+                yelang_ast::ImplItemKind::Method(m) => m.name,
+                yelang_ast::ImplItemKind::AssociatedType(at) => at.name,
+                yelang_ast::ImplItemKind::Constant(c) => c.name,
+            };
             let kind = match &item.item {
                 yelang_ast::ImplItemKind::Method(m) => {
                     let inputs: Vec<HirTyId> = m
@@ -425,11 +489,17 @@ fn lower_impl_item(
                     crate::hir::core::ImplItemKind::Const { ty, body: body_id }
                 }
             };
-            let ident = match &item.item {
-                yelang_ast::ImplItemKind::Method(m) => m.name,
-                yelang_ast::ImplItemKind::AssociatedType(at) => at.name,
-                yelang_ast::ImplItemKind::Constant(c) => c.name,
+            let def_kind = match &kind {
+                crate::hir::core::ImplItemKind::Fn { .. } => yelang_resolve::DefKind::Fn,
+                crate::hir::core::ImplItemKind::Type { .. } => yelang_resolve::DefKind::TypeAlias,
+                crate::hir::core::ImplItemKind::Const { .. } => yelang_resolve::DefKind::Const,
             };
+            let def_id = ctx.allocate_synthetic_def(
+                ident.symbol,
+                item.span,
+                def_kind,
+                item.visibility.clone(),
+            );
             crate::hir::core::ImplItem {
                 def_id,
                 ident,
@@ -663,7 +733,14 @@ fn lower_generic_param(
                 .generic_param_defs
                 .get(&span)
                 .copied()
-                .unwrap_or_else(|| ctx.next_synthetic_def_id());
+                .unwrap_or_else(|| {
+                    ctx.allocate_synthetic_def(
+                        tp.name.symbol,
+                        span,
+                        yelang_resolve::DefKind::TypeParam,
+                        Visibility::Public(span),
+                    )
+                });
             GenericParam::Type {
                 def_id,
                 name: tp.name,
@@ -686,7 +763,14 @@ fn lower_generic_param(
                 .generic_param_defs
                 .get(&span)
                 .copied()
-                .unwrap_or_else(|| ctx.next_synthetic_def_id());
+                .unwrap_or_else(|| {
+                    ctx.allocate_synthetic_def(
+                        cp.name.symbol,
+                        span,
+                        yelang_resolve::DefKind::ConstParam,
+                        Visibility::Public(span),
+                    )
+                });
             GenericParam::Const {
                 def_id,
                 name: cp.name,

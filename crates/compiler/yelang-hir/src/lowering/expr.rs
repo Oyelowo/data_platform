@@ -314,6 +314,10 @@ pub fn lower_expr(ctx: &mut LoweringContext, expr: &AstExpr) -> ExprId {
         }
         AstExprKind::Err => Expr::Err,
         AstExprKind::Dummy => Expr::Err,
+        AstExprKind::Intrinsic(intr) => Expr::Intrinsic {
+            name: intr.name,
+            args: intr.args.iter().map(|e| lower_expr(ctx, e)).collect(),
+        },
     };
 
     ctx.crate_hir.alloc_expr(kind, span)
@@ -557,7 +561,12 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext, stmt: &yelang_ast::Stmt) -> 
             // just keeps a reference so the visitor can reach it.
             let def_id = match def_id {
                 Some(d) => d,
-                None => ctx.next_synthetic_def_id(),
+                None => ctx.allocate_synthetic_def(
+                    ctx.interner.get_or_intern("<stmt item>"),
+                    span,
+                    yelang_resolve::DefKind::Module,
+                    yelang_ast::Visibility::Private,
+                ),
             };
             Stmt::Item {
                 item: ctx

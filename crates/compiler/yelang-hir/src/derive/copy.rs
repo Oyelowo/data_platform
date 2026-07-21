@@ -47,7 +47,7 @@ pub fn derive_copy(
 
     let self_ty = adt.self_ty(ctx);
     let generics = derive_generics(ctx, &adt.generics, copy_trait);
-    Some(impl_item(ctx, copy_trait, self_ty, generics, vec![]))
+    Some(impl_item(ctx, copy_trait, self_ty, generics, vec![], vec![]))
 }
 
 /// Returns the name of the first field whose type is definitely not `Copy`.

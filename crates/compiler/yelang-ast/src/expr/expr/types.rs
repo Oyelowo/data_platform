@@ -530,6 +530,29 @@ pub enum ExprKind {
     /// let result = fetch_data().await;
     /// ```
     Await(Box<Expr>),
+
+    /// Compiler-known intrinsic call: `@intrinsic(name, args...)`.
+    ///
+    /// The leading `@` token is part of the surface syntax. The identifier after
+    /// `@` is the intrinsic namespace (usually `intrinsic`), and the
+    /// parenthesized arguments name the specific operation and its operands.
+    ///
+    /// # Example
+    /// ```
+    /// @intrinsic(query_map(self.plan, f))
+    /// ```
+    Intrinsic(IntrinsicExpr),
+}
+
+/// A compiler-known intrinsic expression: `@name(args)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntrinsicExpr {
+    /// Identifier after `@`, e.g. `intrinsic`.
+    pub name: crate::Ident,
+    /// Parenthesized arguments.
+    pub args: Vec<Expr>,
+    /// Source span covering the whole `@name(args)` expression.
+    pub span: Span,
 }
 
 /// Restrictions for parsing expressions.

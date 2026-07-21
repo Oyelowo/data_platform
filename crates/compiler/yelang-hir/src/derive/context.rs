@@ -168,11 +168,6 @@ impl<'a, 'b: 'a> DeriveContext<'a, 'b> {
         self.ctx.error(err.into());
     }
 
-    /// Allocate a fresh synthetic `DefId` for a compiler-generated item.
-    pub fn next_synthetic_def_id(&mut self) -> DefId {
-        self.ctx.next_synthetic_def_id()
-    }
-
     /// Intern a string into a symbol.
     pub fn intern(&self, s: &str) -> Symbol {
         self.ctx.interner.get_or_intern(s)

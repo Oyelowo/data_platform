@@ -55,6 +55,7 @@ pub fn walk_expr<V: Visitor>(v: &mut V, expr: &Expr) -> ControlFlow<()> {
         ExprKind::Dummy => ControlFlow::Continue(()),
         ExprKind::Gen(g) => v.visit_gen_expr(g),
         ExprKind::Await(a) => v.visit_await_expr(a),
+        ExprKind::Intrinsic(i) => v.visit_intrinsic_expr(i),
     }
 }
 
@@ -388,6 +389,16 @@ pub fn walk_gen_expr<V: Visitor>(v: &mut V, expr: &Expr) -> ControlFlow<()> {
 
 pub fn walk_await_expr<V: Visitor>(v: &mut V, expr: &Expr) -> ControlFlow<()> {
     v.visit_expr(expr)
+}
+
+pub fn walk_intrinsic_expr<V: Visitor>(
+    v: &mut V,
+    intr: &crate::IntrinsicExpr,
+) -> ControlFlow<()> {
+    for arg in &intr.args {
+        v.visit_expr(arg)?;
+    }
+    ControlFlow::Continue(())
 }
 
 pub fn walk_break_expr_full<V: Visitor>(

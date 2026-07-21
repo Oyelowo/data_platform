@@ -137,6 +137,18 @@ impl Codegen for Expr {
                 expr.codegen(f, interner)?;
                 write!(f, ".await")
             }
+            ExprKind::Intrinsic(intr) => {
+                write!(f, "@")?;
+                write!(f, "{}", interner.resolve(&intr.name.symbol))?;
+                write!(f, "(")?;
+                for (i, arg) in intr.args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    arg.codegen(f, interner)?;
+                }
+                write!(f, ")")
+            }
             ExprKind::Err => write!(f, "/* error */"),
             ExprKind::Dummy => write!(f, "/* dummy */"),
         }

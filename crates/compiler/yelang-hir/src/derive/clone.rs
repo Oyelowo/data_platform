@@ -40,14 +40,15 @@ pub fn derive_clone(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
         ctx.derive_span,
     );
 
-    let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty);
     let generics = derive_generics(ctx, &adt.generics, clone_trait);
+    let clone_method = clone_method(ctx, adt.def_id, &adt, ref_self_ty, self_ty, generics.clone());
 
     Some(impl_item(
         ctx,
         clone_trait,
         self_ty,
         generics,
+        vec![],
         vec![clone_method],
     ))
 }
@@ -58,6 +59,7 @@ fn clone_method(
     adt: &AdtInfo<'_>,
     ref_self_ty: HirTyId,
     receiver_ty: HirTyId,
+    generics: crate::hir::core::Generics,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let sig = fn_sig(vec![self_param.ty], receiver_ty);
@@ -68,7 +70,7 @@ fn clone_method(
     };
 
     let body_id = make_body(ctx, vec![self_param], body_value);
-    method_impl_item(ctx, "clone", sig, body_id)
+    method_impl_item(ctx, "clone", sig, generics, vec![], body_id)
 }
 
 fn clone_struct_expr(

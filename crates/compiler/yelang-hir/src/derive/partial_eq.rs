@@ -43,14 +43,15 @@ pub fn derive_partial_eq(
         ctx.derive_span,
     );
 
-    let eq_method = eq_method(ctx, adt.def_id, &adt, ref_self_ty);
     let generics = derive_generics(ctx, &adt.generics, partial_eq_trait);
+    let eq_method = eq_method(ctx, adt.def_id, &adt, ref_self_ty, generics.clone());
 
     Some(impl_item(
         ctx,
         partial_eq_trait,
         self_ty,
         generics,
+        vec![],
         vec![eq_method],
     ))
 }
@@ -60,6 +61,7 @@ fn eq_method(
     self_def_id: DefId,
     adt: &AdtInfo<'_>,
     ref_self_ty: HirTyId,
+    generics: crate::hir::core::Generics,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let other_param = other_param(ctx, self_def_id);
@@ -80,7 +82,7 @@ fn eq_method(
     };
 
     let body_id = make_body(ctx, vec![self_param, other_param], body_value);
-    method_impl_item(ctx, "eq", sig, body_id)
+    method_impl_item(ctx, "eq", sig, generics, vec![], body_id)
 }
 
 fn eq_struct_expression(

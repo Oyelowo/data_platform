@@ -1,4 +1,6 @@
 use super::*;
+use yelang_interner::Interner;
+use yelang_lexer::{Literal, TokenKind};
 
 #[test]
 fn test_parse_expr() {
@@ -205,4 +207,42 @@ where user[0..6].age[2] > 30
     // assert_eq!(visitor.ops, vec!["+", ">", ">", "<", ">", ">", ">"]);
     // assert_eq!(visitor.base, vec!["lowo", "user"]);
     // assert_eq!(visitor.visited, vec!["name", "age"]);
+}
+
+#[test]
+fn parse_intrinsic_expr() {
+    let input = r#"@intrinsic("x", 1, 2)"#;
+    let interner = Interner::new();
+    let mut stream = TokenKind::tokenize(input, &interner).expect("tokenize");
+    let expr = stream.parse::<Expr>().expect("parse expr");
+
+    let ExprKind::Intrinsic(intrinsic) = expr.kind else {
+        panic!("expected intrinsic expression, got {:?}", expr.kind);
+    };
+    assert_eq!(
+        interner.resolve(&intrinsic.name.symbol),
+        "intrinsic",
+        "expected intrinsic namespace"
+    );
+    assert_eq!(intrinsic.args.len(), 3, "expected three arguments");
+
+    let first = &intrinsic.args[0];
+    match &first.kind {
+        ExprKind::Literal(Literal::Str(s)) => {
+            assert_eq!(
+                interner.resolve(&s.value),
+                "x",
+                "first argument should be string literal 'x'"
+            );
+        }
+        _ => panic!("first argument should be string literal"),
+    }
+    assert!(
+        matches!(&intrinsic.args[1].kind, ExprKind::Literal(Literal::Int(_))),
+        "second argument should be integer literal"
+    );
+    assert!(
+        matches!(&intrinsic.args[2].kind, ExprKind::Literal(Literal::Int(_))),
+        "third argument should be integer literal"
+    );
 }

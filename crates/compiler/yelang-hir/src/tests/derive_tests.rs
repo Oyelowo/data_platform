@@ -37,7 +37,7 @@ fn find_impls_for_type<'a>(
     crate_hir: &'a Crate,
     type_name: &str,
     interner: &Interner,
-    resolved: &ResolvedCrate,
+    _resolved: &ResolvedCrate,
 ) -> Vec<&'a Item> {
     crate_hir
         .items
@@ -51,9 +51,8 @@ fn find_impls_for_type<'a>(
                 let ty = crate_hir.ty(*self_ty).expect("impl self type");
                 let name = match ty {
                     Ty::Path { res, .. } => match res {
-                        crate::res::Res::Def { def_id } => resolved
-                            .definitions
-                            .get(*def_id)
+                        crate::res::Res::Def { def_id } => crate_hir
+                            .definition(*def_id)
                             .map(|d| interner.resolve(&d.name))
                             .unwrap_or(""),
                         _ => "",
@@ -570,4 +569,62 @@ fn derive_all_mvp_generic_together() {
     assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     let impls = find_impls_for_type(&crate_hir, "Wrapper", &interner, &resolved);
     assert_eq!(impls.len(), 5, "expected five derived impls");
+}
+
+#[test]
+fn derive_clone_method_has_definition_entry() {
+    let src = r#"
+        @derive(Clone)
+        struct Point { x: i32, y: i32 }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "Point", &interner, &resolved);
+    let ItemKind::Impl { items, .. } = &impl_item.kind else {
+        panic!("expected impl item");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(interner.resolve(&items[0].ident.symbol), "clone");
+    assert!(
+        crate_hir.definition(items[0].def_id).is_some(),
+        "derived clone method def_id {:?} must have a Definition entry",
+        items[0].def_id
+    );
+    let def = crate_hir.definition(items[0].def_id).unwrap();
+    assert!(
+        matches!(def.kind, yelang_resolve::DefKind::Fn),
+        "derived clone method definition should be DefKind::Fn"
+    );
+}
+
+#[test]
+fn derive_clone_generic_preserves_adt_generics() {
+    let src = r#"
+        @derive(Clone)
+        struct Wrapper<T> { value: T }
+    "#;
+    let (crate_hir, interner, resolved, errors) = lower_with_derives(src);
+    assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    let impl_item = first_impl_for_type(&crate_hir, "Wrapper", &interner, &resolved);
+    assert_generic_self_ty(&crate_hir, impl_item, 1);
+    assert_impl_has_bound(&crate_hir, impl_item, &resolved, &interner, "Clone");
+
+    let ItemKind::Impl { items, generics, .. } = &impl_item.kind else {
+        panic!("expected impl item");
+    };
+    assert_eq!(items.len(), 1, "expected a single clone method");
+    assert_eq!(
+        generics.params.len(),
+        1,
+        "impl generics should preserve the ADT's single type parameter"
+    );
+    let param_name = match &generics.params[0] {
+        GenericParam::Type { name, .. } => *name,
+        _ => panic!("expected type generic parameter"),
+    };
+    assert_eq!(
+        param_name.symbol,
+        interner.get_or_intern("T"),
+        "impl generic parameter should be named T"
+    );
 }

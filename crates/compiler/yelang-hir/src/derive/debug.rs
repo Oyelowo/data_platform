@@ -83,6 +83,7 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
     );
     let result_ty = crate::derive::helpers::path_ty(ctx, result_def_id);
 
+    let generics = derive_generics(ctx, &adt.generics, debug_trait);
     let fmt_method = fmt_method(
         ctx,
         adt.def_id,
@@ -92,15 +93,16 @@ pub fn derive_debug(ctx: &mut DeriveContext<'_, '_>, _derives_in_attr: &[Symbol]
         result_ty,
         result_def_id,
         formatter_def_id,
+        generics.clone(),
     );
 
     let debug_self_ty = adt.self_ty(ctx);
-    let generics = derive_generics(ctx, &adt.generics, debug_trait);
     Some(impl_item(
         ctx,
         debug_trait,
         debug_self_ty,
         generics,
+        vec![],
         vec![fmt_method],
     ))
 }
@@ -123,6 +125,7 @@ fn fmt_method(
     result_ty: HirTyId,
     result_def_id: DefId,
     formatter_def_id: DefId,
+    generics: crate::hir::core::Generics,
 ) -> ImplItem {
     let self_param = self_param(ctx, ref_self_ty);
     let formatter_param = formatter_param(ctx, formatter_def_id);
@@ -145,7 +148,7 @@ fn fmt_method(
     };
 
     let body_id = make_body(ctx, vec![self_param, formatter_param], body_value);
-    method_impl_item(ctx, "fmt", sig, body_id)
+    method_impl_item(ctx, "fmt", sig, generics, vec![], body_id)
 }
 
 /// Build `Result::Ok(())`.

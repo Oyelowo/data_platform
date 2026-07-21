@@ -58,6 +58,7 @@ pub fn fold_expr<F: Folder + ?Sized>(f: &mut F, expr: Expr) -> Expr {
         ExprKind::MethodCall(m) => ExprKind::MethodCall(f.fold_method_call_expr(m)),
         ExprKind::Gen(g) => ExprKind::Gen(f.fold_gen_expr(g)),
         ExprKind::Await(a) => ExprKind::Await(f.fold_await_expr(a)),
+        ExprKind::Intrinsic(i) => ExprKind::Intrinsic(f.fold_intrinsic_expr(i)),
         ExprKind::Underscore => ExprKind::Underscore,
         ExprKind::Break(b) => ExprKind::Break(BreakExpr {
             label: b.label,
@@ -438,6 +439,17 @@ pub fn fold_gen_expr<F: Folder + ?Sized>(f: &mut F, expr: Box<Expr>) -> Box<Expr
 
 pub fn fold_await_expr<F: Folder + ?Sized>(f: &mut F, expr: Box<Expr>) -> Box<Expr> {
     Box::new(f.fold_expr(*expr))
+}
+
+pub fn fold_intrinsic_expr<F: Folder + ?Sized>(
+    f: &mut F,
+    node: crate::IntrinsicExpr,
+) -> crate::IntrinsicExpr {
+    crate::IntrinsicExpr {
+        name: node.name,
+        args: node.args.into_iter().map(|e| f.fold_expr(e)).collect(),
+        span: node.span,
+    }
 }
 
 pub fn fold_document_access<F: Folder + ?Sized>(f: &mut F, d: DocumentAccess) -> DocumentAccess {

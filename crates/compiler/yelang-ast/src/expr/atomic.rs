@@ -93,6 +93,31 @@ impl AtomicExpr {
             stream.restore(lambda_checkpoint);
         }
 
+        // Compiler-known intrinsic expression: `@name(args)`.
+        if stream
+            .peek()
+            .is_some_and(|token| token.kind() == &TokenKind::At)
+        {
+            stream.parse::<T![@]>()?;
+            let name = stream.parse::<crate::Ident>()?;
+            stream.parse::<T!['(']>()?;
+            let args = if stream
+                .peek()
+                .is_some_and(|t| t.kind() == &TokenKind::CloseParen)
+            {
+                vec![]
+            } else {
+                type SepExpr = yelang_lexer::SeparatedList<crate::Expr, T![,], true>;
+                stream.parse::<SepExpr>()?.value_owned()
+            };
+            stream.consume(crate::tokenizer::TokenKind::CloseParen)?;
+            let span = stream.span_since(checkpoint);
+            return Ok(Self(Expr {
+                kind: ExprKind::Intrinsic(crate::IntrinsicExpr { name, args, span }),
+                span,
+            }));
+        }
+
         // First try all non-path-based expressions
         let atomic = match_map!(
             stream,

@@ -135,6 +135,11 @@ pub enum Expr {
     Query(QueryId),
     /// Array repeat literal: `[value; count]`.
     ArrayRepeat { value: ExprId, count: ExprId },
+    /// Compiler-known intrinsic call: `@name(args)`.
+    Intrinsic {
+        name: yelang_ast::Ident,
+        args: Vec<ExprId>,
+    },
     /// Error recovery.
     Err,
 }

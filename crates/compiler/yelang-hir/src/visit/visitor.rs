@@ -474,6 +474,11 @@ pub fn walk_expr<'hir, V: Visitor<'hir>>(visitor: &mut V, expr: &'hir Expr) {
             visitor.visit_expr_by_id(*value);
             visitor.visit_expr_by_id(*count);
         }
+        Expr::Intrinsic { args, .. } => {
+            for arg in args {
+                visitor.visit_expr_by_id(*arg);
+            }
+        }
         Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
     }
 }

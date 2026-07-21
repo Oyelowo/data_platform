@@ -445,6 +445,11 @@ pub fn walk_expr_mut(v: &mut impl MutVisitor, crate_hir: &mut Crate, expr: &mut 
             visit_expr_id_mut(v, crate_hir, *value);
             visit_expr_id_mut(v, crate_hir, *count);
         }
+        Expr::Intrinsic { args, .. } => {
+            for arg in args {
+                visit_expr_id_mut(v, crate_hir, *arg);
+            }
+        }
         Expr::Lit { .. } | Expr::Path { .. } | Expr::Continue { .. } | Expr::Err => {}
     }
 }

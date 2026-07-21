@@ -529,6 +529,11 @@ impl<'a, 'b> LateResolver<'a, 'b> {
             ExprKind::Async(async_expr) => {
                 self.resolve_block_expr(&async_expr.block);
             }
+            ExprKind::Intrinsic(intrinsic) => {
+                for arg in &intrinsic.args {
+                    self.resolve_expr(arg);
+                }
+            }
         }
     }
 

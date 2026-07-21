@@ -280,6 +280,10 @@ pub trait Folder: Sized {
         fold_await_expr(self, expr)
     }
 
+    fn fold_intrinsic_expr(&mut self, node: crate::IntrinsicExpr) -> crate::IntrinsicExpr {
+        fold_intrinsic_expr(self, node)
+    }
+
     fn fold_grouped_expr(&mut self, node: GroupedExpr) -> GroupedExpr {
         fold_grouped_expr(self, node)
     }
