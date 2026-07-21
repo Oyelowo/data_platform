@@ -4,7 +4,7 @@ use yelang_ty::binder::{BoundTy, BoundTyKind, BoundVar, DebruijnIndex};
 use yelang_ty::generic::GenericArg;
 use yelang_ty::interner::Interner;
 use yelang_ty::predicate::TraitRef;
-use yelang_ty::primitive::{FloatTy, IntTy};
+use yelang_ty::primitive::{FloatTy, IntegerTy, IntTy};
 use yelang_ty::projection::ProjectionTy;
 use yelang_ty::ty::{Const, ConstValue, PlaceholderType, Ty, UniverseIndex};
 
@@ -60,8 +60,8 @@ fn eq_int_var_rejects_mismatch() {
     assert!(infcx.eq(&interner, var, t_i32).is_ok());
     match infcx.eq(&interner, var, t_i64) {
         Err(TypeError::IntMismatch { expected, found }) => {
-            assert_eq!(expected, IntTy::I32);
-            assert_eq!(found, IntTy::I64);
+            assert_eq!(expected, IntegerTy::Signed(IntTy::I32));
+            assert_eq!(found, IntegerTy::Signed(IntTy::I64));
         }
         other => panic!("expected IntMismatch, got {:?}", other),
     }

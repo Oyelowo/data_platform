@@ -25,11 +25,14 @@ use yelang_ty::generic::{GenericArg, Substitution};
 use yelang_ty::predicate::{Predicate, TraitPredicate, TraitRef};
 use yelang_ty::subst::substitute;
 use yelang_ty::ty::{ImplPolarity, PolyFnSig, Ty, TyId};
+use yelang_trait_solver::eval_ctxt::EvalCtxt;
+use yelang_trait_solver::goal::Goal;
+use yelang_trait_solver::response::Certainty;
 
 use crate::autoderef::{Adjustment, probe_types};
 use crate::check::check_expr;
 use crate::coerce::Coerce;
-use crate::fn_ctxt::FnCtxt;
+use crate::fn_ctxt::{FnCtxt, collect_body_infer_vars};
 use crate::tcx::{ImplDefId, ImplItemDefData, TraitItemDefData};
 use crate::typeck_results::MethodResolution;
 
@@ -205,6 +208,8 @@ fn pick_trait_candidate(
     // `&mut Self`.
     let self_ty = trait_self_ty_for_probe(interner, probe_ty, adjustments);
 
+    let mut candidates: Vec<MethodCandidate> = Vec::new();
+
     for (trait_def_id, trait_def) in fcx.tcx.trait_defs.iter_enumerated() {
         for item in &trait_def.items {
             let TraitItemDefData::Fn { def_id, ident, sig } = item else {
@@ -232,7 +237,7 @@ fn pick_trait_candidate(
                     args: interner.mk_generic_args(&trait_ref_args),
                 };
 
-                return Some(MethodCandidate {
+                candidates.push(MethodCandidate {
                     source: CandidateSource::Trait {
                         trait_def_id,
                         item_def_id: *def_id,
@@ -245,7 +250,59 @@ fn pick_trait_candidate(
         }
     }
 
-    None
+    // If multiple traits supply the same method name (e.g. both `Iterator` and
+    // `Queryable` define `filter`), we must pick the one whose trait obligation
+    // can actually be proven. A candidate whose trait bound is satisfiable wins
+    // over a candidate that merely unifies the receiver.
+    let mut best: Option<MethodCandidate> = None;
+    for candidate in candidates.iter().cloned() {
+        let snapshot = fcx.infer.snapshot();
+        if trait_pred_holds(fcx, &candidate) {
+            best = Some(candidate);
+            break;
+        }
+        fcx.infer.rollback_to(snapshot);
+    }
+
+    // If no candidate could be proven, fall back to the first one that
+    // structurally matched. This preserves error messages for genuinely
+    // unimplemented methods while letting the later obligation pass report
+    // the real problem.
+    best.or_else(|| candidates.into_iter().next())
+}
+
+/// Try to prove the trait obligation implied by a method candidate, applying
+/// any inferred substitutions back to the body inference context on success.
+/// Returns `true` only if the solver returns certainty `Yes`.
+fn trait_pred_holds(fcx: &mut FnCtxt<'_>, candidate: &MethodCandidate) -> bool {
+    let CandidateSource::Trait { trait_ref, .. } = &candidate.source else {
+        return false;
+    };
+
+    let pred = Predicate::Trait(TraitPredicate {
+        trait_ref: *trait_ref,
+        polarity: ImplPolarity::Positive,
+    });
+    let pred = fcx.resolve_predicate(pred);
+    let body_vars = collect_body_infer_vars(fcx.tcx.interner(), &mut fcx.infer, &pred);
+
+    let mut ecx = EvalCtxt::new(fcx.tcx.interner(), fcx.tcx);
+    let goal = Goal::new(fcx.param_env, pred);
+    let canonical_goal = yelang_trait_solver::canonicalize::canonicalize(
+        goal,
+        fcx.tcx.interner(),
+        &mut fcx.infer,
+        ecx.max_universe(),
+    );
+
+    match ecx.evaluate_canonical_goal(canonical_goal) {
+        Ok(response) if response.value.certainty == Certainty::Yes => {
+            fcx.apply_response_to_body(&body_vars, &response);
+            true
+        }
+        Ok(_) => false,
+        Err(_) => false,
+    }
 }
 
 /// Compute the `Self` type to use for trait method resolution given the probe
@@ -349,6 +406,7 @@ fn confirm_method(fcx: &mut FnCtxt<'_>, pick: &MethodPick, args: &[ExprId]) -> T
         } else {
             check_expr(fcx, *arg_expr)
         };
+        fcx.record_expr_ty(*arg_expr, arg_ty);
 
         if fcx.coerce(arg_ty, expected).is_err() {
             let span = crate::check::expr_span(fcx, *arg_expr);

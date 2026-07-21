@@ -8,7 +8,7 @@ use yelang_ty::existential::ExistentialPredicate;
 use yelang_ty::generic::GenericArg;
 use yelang_ty::interner::Interner;
 use yelang_ty::list::List;
-use yelang_ty::primitive::{FloatTy, IntTy};
+use yelang_ty::primitive::{FloatTy, IntegerTy, IntTy, UintTy};
 use yelang_ty::ty::{
     AnonStructDef, Const, ConstId, ConstVid, FloatVid, FnSig, InferTy, IntVid, Ty, TyId, TyVid,
 };
@@ -103,9 +103,14 @@ impl InferCtxt {
         self.tables.const_vars.probe_value(vid)
     }
 
-    /// Set an integral inference variable to a concrete integer type.
+    /// Set an integral inference variable to a concrete signed integer type.
     pub fn set_int_var(&mut self, vid: IntVid, it: IntTy) -> Result<(), TypeError> {
-        self.unify_int_var_value(vid, it)
+        self.unify_int_var_value(vid, IntegerTy::Signed(it))
+    }
+
+    /// Set an integral inference variable to a concrete unsigned integer type.
+    pub fn set_uint_var(&mut self, vid: IntVid, ut: UintTy) -> Result<(), TypeError> {
+        self.unify_int_var_value(vid, IntegerTy::Unsigned(ut))
     }
 
     /// Set a floating-point inference variable to a concrete float type.
@@ -166,17 +171,37 @@ impl InferCtxt {
             (Ty::Infer(InferTy::TyVar(vid_a)), Ty::Infer(InferTy::TyVar(vid_b))) => {
                 self.unify_var_var(interner, vid_a, vid_b)
             }
+
+            // Cross-kind unification: a general type variable with an integer
+            // variable. This must come before the generic TyVar/_other arms so
+            // that we resolve the integer variable to a concrete integer type
+            // rather than storing an IntVar TyId inside the type variable.
+            (Ty::Infer(InferTy::TyVar(tv)), Ty::Infer(InferTy::IntVar(iv)))
+            | (Ty::Infer(InferTy::IntVar(iv)), Ty::Infer(InferTy::TyVar(tv))) => {
+                self.unify_tyvar_with_intvar(interner, tv, iv)
+            }
+
             (Ty::Infer(InferTy::TyVar(vid)), _other) => self.unify_var_value(interner, vid, b),
             (_other, Ty::Infer(InferTy::TyVar(vid))) => self.unify_var_value(interner, vid, a),
 
-            // Int variables
+            // Int variables (may resolve to signed or unsigned concrete types)
             (Ty::Infer(InferTy::IntVar(vid_a)), Ty::Infer(InferTy::IntVar(vid_b))) => {
                 self.tables.int_vars.union(vid_a, vid_b);
                 Ok(())
             }
 
-            (Ty::Infer(InferTy::IntVar(vid)), Ty::Int(it)) => self.unify_int_var_value(vid, it),
-            (Ty::Int(it), Ty::Infer(InferTy::IntVar(vid))) => self.unify_int_var_value(vid, it),
+            (Ty::Infer(InferTy::IntVar(vid)), Ty::Int(it)) => {
+                self.unify_int_var_value(vid, IntegerTy::Signed(it))
+            }
+            (Ty::Int(it), Ty::Infer(InferTy::IntVar(vid))) => {
+                self.unify_int_var_value(vid, IntegerTy::Signed(it))
+            }
+            (Ty::Infer(InferTy::IntVar(vid)), Ty::Uint(ut)) => {
+                self.unify_int_var_value(vid, IntegerTy::Unsigned(ut))
+            }
+            (Ty::Uint(ut), Ty::Infer(InferTy::IntVar(vid))) => {
+                self.unify_int_var_value(vid, IntegerTy::Unsigned(ut))
+            }
 
             // Float variables
             (Ty::Infer(InferTy::FloatVar(vid_a)), Ty::Infer(InferTy::FloatVar(vid_b))) => {
@@ -417,7 +442,7 @@ impl InferCtxt {
         Ok(())
     }
 
-    fn unify_int_var_value(&mut self, vid: IntVid, it: IntTy) -> Result<(), TypeError> {
+    fn unify_int_var_value(&mut self, vid: IntVid, it: IntegerTy) -> Result<(), TypeError> {
         let root = self.tables.int_vars.find(vid);
         let existing = self.tables.int_vars.probe_value(root).clone();
         match existing {
@@ -455,6 +480,52 @@ impl InferCtxt {
             }
         }
         Ok(())
+    }
+
+    /// Unify a general type variable with an integer inference variable.
+    ///
+    /// If the type variable is already known to be an integer type, the integer
+    /// variable is set to that type. If the integer variable is known, the type
+    /// variable is set to that concrete integer type. If both are unknown, the
+    /// type variable is bound to the integer variable so that later fallback
+    /// (e.g. `i32` defaulting at writeback) can resolve it without prematurely
+    /// committing to a concrete type.
+    fn unify_tyvar_with_intvar(
+        &mut self,
+        interner: &Interner,
+        tv: TyVid,
+        iv: IntVid,
+    ) -> Result<(), TypeError> {
+        let tv_root = self.tables.ty_vars.find(tv);
+        let tv_existing = self.tables.ty_vars.probe_value(tv_root).clone();
+
+        if let TypeVarValue::Known(ty) = tv_existing {
+            return match interner.ty(ty) {
+                Ty::Int(it) => self.unify_int_var_value(iv, IntegerTy::Signed(it)),
+                Ty::Uint(ut) => self.unify_int_var_value(iv, IntegerTy::Unsigned(ut)),
+                _ => Err(TypeError::Mismatch {
+                    expected: interner.mk_ty(Ty::Infer(InferTy::TyVar(tv_root))),
+                    found: interner.mk_ty(Ty::Infer(InferTy::IntVar(iv))),
+                }),
+            };
+        }
+
+        let iv_root = self.tables.int_vars.find(iv);
+        let iv_existing = self.tables.int_vars.probe_value(iv_root).clone();
+
+        match iv_existing {
+            IntVarValue::Known(it) => {
+                let concrete_ty = match it {
+                    IntegerTy::Signed(it) => interner.mk_ty(Ty::Int(it)),
+                    IntegerTy::Unsigned(ut) => interner.mk_ty(Ty::Uint(ut)),
+                };
+                self.unify_var_value(interner, tv_root, concrete_ty)
+            }
+            IntVarValue::Unknown => {
+                let int_var_ty = interner.mk_ty(Ty::Infer(InferTy::IntVar(iv_root)));
+                self.unify_var_value(interner, tv_root, int_var_ty)
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -821,6 +821,7 @@ dependencies = [
  "yelang-lexer",
  "yelang-qir",
  "yelang-resolve",
+ "yelang-thir",
  "yelang-ty",
  "yelang-tycheck",
 ]

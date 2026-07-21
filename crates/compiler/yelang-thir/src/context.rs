@@ -6,6 +6,7 @@ use yelang_hir::Crate as HirCrate;
 use yelang_interner::Interner;
 use yelang_resolve::lang_items::LangItems;
 use yelang_tycheck::TypeckResults;
+use yelang_ty::ty::TyId;
 use slotmap::SlotMap;
 
 use crate::body::{ThirBodies, ThirBody};
@@ -23,6 +24,8 @@ pub struct LoweringContext<'a> {
     pub interner: &'a Interner,
     pub bodies: ThirBodies,
     pub exprs: SlotMap<ThirExprId, ThirExpr>,
+    /// Inferred type for each THIR expression, copied from `TypeckResults`.
+    pub expr_tys: slotmap::SecondaryMap<ThirExprId, TyId>,
     pub pats: SlotMap<ThirPatId, ThirPat>,
     pub stmts: SlotMap<ThirStmtId, ThirStmt>,
     /// Mapping from HIR pattern ids to THIR pattern ids for the current body.
@@ -43,6 +46,7 @@ impl<'a> LoweringContext<'a> {
             interner,
             bodies: ThirBodies::default(),
             exprs: SlotMap::with_key(),
+            expr_tys: slotmap::SecondaryMap::new(),
             pats: SlotMap::with_key(),
             stmts: SlotMap::with_key(),
             local_pats: FxHashMap::default(),
@@ -51,6 +55,25 @@ impl<'a> LoweringContext<'a> {
 
     pub fn alloc_expr(&mut self, expr: ThirExpr) -> ThirExprId {
         self.exprs.insert(expr)
+    }
+
+    /// Allocate a THIR expression and record its inferred type from the
+    /// type-check results for the source HIR expression.
+    pub fn alloc_expr_with_ty(
+        &mut self,
+        expr: ThirExpr,
+        source_hir_expr: ExprId,
+    ) -> ThirExprId {
+        let id = self.exprs.insert(expr);
+        if let Some(ty) = self.typeck_results.expr_ty(source_hir_expr) {
+            self.expr_tys.insert(id, ty);
+        }
+        id
+    }
+
+    /// Return the inferred type of a THIR expression, if known.
+    pub fn thir_expr_ty(&self, expr_id: ThirExprId) -> Option<TyId> {
+        self.expr_tys.get(expr_id).copied()
     }
 
     pub fn alloc_pat(&mut self, pat: ThirPat) -> ThirPatId {

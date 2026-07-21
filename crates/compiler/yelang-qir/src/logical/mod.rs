@@ -13,5 +13,5 @@ pub mod inline;
 pub mod intrinsic;
 pub mod query_syntax;
 
-pub use context::ExtractCtxt;
+pub use context::{ExtractCtxt, ThirView};
 pub use extract::lower_thir_body;

@@ -1,6 +1,6 @@
 /*! Type variable tables for general, int, and float variables. */
 
-use yelang_ty::primitive::{FloatTy, IntTy};
+use yelang_ty::primitive::{FloatTy, IntegerTy};
 use yelang_ty::ty::{FloatVid, IntVid, TyId, TyVid};
 
 use crate::const_variable::{ConstVarValue, ConstVariableTable};
@@ -22,7 +22,7 @@ impl Default for TypeVarValue {
 /// Value stored for an integral type variable.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IntVarValue {
-    Known(IntTy),
+    Known(IntegerTy),
     Unknown,
 }
 

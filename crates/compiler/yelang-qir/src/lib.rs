@@ -18,7 +18,7 @@ pub mod rewrite;
 pub mod util;
 pub mod volatility;
 
-pub use errors::{LoweringError, PlanError, QirResult};
+pub use errors::{LoweringError, PlanError, QirError, QirResult};
 
 use yelang_hir::ids::{BodyId, QueryId};
 use yelang_tycheck::tcx::TyCtxt;

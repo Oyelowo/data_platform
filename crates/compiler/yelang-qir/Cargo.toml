@@ -13,6 +13,7 @@ yelang-ty = { path = "../yelang-ty" }
 yelang-tycheck = { path = "../yelang-tycheck" }
 yelang-resolve = { path = "../yelang-resolve" }
 yelang-interner = { path = "../yelang-interner" }
+yelang-ast = { path = "../yelang-ast" }
 yelang-lexer = { path = "../yelang-lexer" }
 yelang-thir = { path = "../yelang-thir" }
 slotmap.workspace = true

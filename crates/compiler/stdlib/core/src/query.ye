@@ -167,6 +167,32 @@ impl<T> Queryable<T> for Array<T> {
     fn execute(self) -> Vec<T> { self }
 }
 
+// Transitional impl so that ordered sequences can continue a query pipeline
+// (e.g. `q.order_by(...).take(5)`). Methods forward to the inner queryable.
+impl<T> Queryable<T> for Seq<T> {
+    fn filter(self, pred: fn(&T) -> bool) -> Queryable<T> { self.inner.filter(pred) }
+    fn map<U>(self, f: fn(T) -> U) -> Queryable<U> { self.inner.map(f) }
+    fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U> { self.inner.flat_map(f) }
+    fn order_by<K>(self, key: fn(T) -> K) -> Seq<T> { self.inner.order_by(key) }
+    fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>> { self.inner.group_by(key) }
+    fn distinct(self) -> Queryable<T> { self.inner.distinct() }
+    fn take(self, n: usize) -> Queryable<T> { self.inner.take(n) }
+    fn skip(self, n: usize) -> Queryable<T> { self.inner.skip(n) }
+    fn aggregate<A, Acc, Out>(self, agg: A) -> Out
+    where A: Aggregate<T, Acc, Out>
+    {
+        self.inner.aggregate(agg)
+    }
+    fn sum(self) -> T where Self: Sized { self.inner.sum() }
+    fn count(self) -> usize where Self: Sized { self.inner.count() }
+    fn avg(self) -> f64 where Self: Sized { self.inner.avg() }
+    fn min(self) -> Option<T> where Self: Sized { self.inner.min() }
+    fn max(self) -> Option<T> where Self: Sized { self.inner.max() }
+    fn fold<Acc>(self, init: Acc, f: fn(Acc, T) -> Acc) -> Acc { self.inner.fold(init, f) }
+    fn reduce(self, f: fn(T, T) -> T) -> Option<T> { self.inner.reduce(f) }
+    fn execute(self) -> Vec<T> { self.inner.execute() }
+}
+
 // Opaque plan handle. The compiler/runtime decides its representation.
 struct PlanId;
 

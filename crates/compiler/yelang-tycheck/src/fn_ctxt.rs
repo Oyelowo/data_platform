@@ -31,6 +31,7 @@ use crate::typeck_results::TypeckResults;
 use yelang_infer::context::InferCtxt;
 use yelang_infer::type_variable::{FloatVarValue, IntVarValue, TypeVarValue};
 use yelang_trait_solver::eval_ctxt::EvalCtxt;
+use yelang_ty::primitive::IntegerTy;
 use yelang_trait_solver::goal::Goal;
 use yelang_trait_solver::response::Certainty;
 
@@ -406,7 +407,7 @@ impl<'a> FnCtxt<'a> {
 
     /// Resolve inference variables inside a predicate as far as possible using
     /// the body `InferCtxt`.
-    fn resolve_predicate(&mut self, pred: Predicate) -> Predicate {
+    pub(crate) fn resolve_predicate(&mut self, pred: Predicate) -> Predicate {
         use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
 
         struct Resolver<'a, 'b> {
@@ -420,7 +421,29 @@ impl<'a> FnCtxt<'a> {
 
             fn fold_ty(&mut self, ty: TyId) -> TyId {
                 let ty = self.fcx.resolve_ty(ty);
-                ty.super_fold_with(self)
+                // Trait selection cannot match type variables against impl
+                // parameters when the variable is an unresolved integer/float
+                // inference variable (e.g. `Array<?I0>: Queryable<?I0>`).
+                // Apply the standard fallback (`i32` / `f64`) before proving
+                // predicates so that selection can proceed, while leaving body
+                // expression types to be resolved by writeback.
+                match self.interner().ty(ty) {
+                    Ty::Infer(InferTy::IntVar(vid)) => {
+                        let root = self.fcx.infer.find_int_var(vid);
+                        if matches!(self.fcx.infer.probe_int_var(root), IntVarValue::Unknown) {
+                            let _ = self.fcx.infer.set_int_var(root, IntTy::I32);
+                        }
+                        self.fcx.resolve_ty(ty)
+                    }
+                    Ty::Infer(InferTy::FloatVar(vid)) => {
+                        let root = self.fcx.infer.find_float_var(vid);
+                        if matches!(self.fcx.infer.probe_float_var(root), FloatVarValue::Unknown) {
+                            let _ = self.fcx.infer.set_float_var(root, FloatTy::F64);
+                        }
+                        self.fcx.resolve_ty(ty)
+                    }
+                    _ => ty.super_fold_with(self),
+                }
             }
 
             fn fold_const(&mut self, ct: ConstId) -> ConstId {
@@ -610,6 +633,10 @@ impl<'a> FnCtxt<'a> {
                     let root = self.infer.find_int_var(*vid);
                     let _ = self.infer.set_int_var(root, *it);
                 }
+                (BodyInferVar::Int(vid), CanonicalVarValue::Uint(ut)) => {
+                    let root = self.infer.find_int_var(*vid);
+                    let _ = self.infer.set_uint_var(root, *ut);
+                }
                 (BodyInferVar::Float(vid), CanonicalVarValue::Float(ft)) => {
                     let root = self.infer.find_float_var(*vid);
                     let _ = self.infer.set_float_var(root, *ft);
@@ -782,7 +809,8 @@ impl<'a> FnCtxt<'a> {
             Ty::Infer(InferTy::IntVar(vid)) => {
                 let root = self.infer.find_int_var(vid);
                 match self.infer.probe_int_var(root).clone() {
-                    IntVarValue::Known(it) => self.mk_int(it),
+                    IntVarValue::Known(IntegerTy::Signed(it)) => self.mk_int(it),
+                    IntVarValue::Known(IntegerTy::Unsigned(ut)) => self.mk_uint(ut),
                     IntVarValue::Unknown => ty,
                 }
             }

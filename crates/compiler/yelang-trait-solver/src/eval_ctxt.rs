@@ -15,6 +15,7 @@
  */
 
 use yelang_infer::{ConstVarValue, FloatVarValue, InferCtxt, IntVarValue, TypeVarValue};
+use yelang_ty::primitive::IntegerTy;
 use yelang_ty::canonical::{
     Canonical, CanonicalVarKinds, CanonicalVarValue, Certainty, NoSolution, Response,
 };
@@ -1027,7 +1028,12 @@ impl<'a, C: SolverCtxt> EvalCtxt<'a, C> {
                     Some(CanonicalVarMapping::Int(vid)) => {
                         let root = self.infcx.find_int_var(vid);
                         match self.infcx.probe_int_var(root) {
-                            IntVarValue::Known(it) => CanonicalVarValue::Int(*it),
+                            IntVarValue::Known(IntegerTy::Signed(it)) => {
+                                CanonicalVarValue::Int(*it)
+                            }
+                            IntVarValue::Known(IntegerTy::Unsigned(ut)) => {
+                                CanonicalVarValue::Uint(*ut)
+                            }
                             IntVarValue::Unknown => CanonicalVarValue::Unknown,
                         }
                     }

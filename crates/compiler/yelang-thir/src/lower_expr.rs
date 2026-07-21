@@ -31,7 +31,11 @@ impl<'a> LoweringContext<'a> {
     pub fn lower_expr(&mut self, expr_id: ExprId) -> Result<ThirExprId, LoweringError> {
         let span = self.hir.expr_span(expr_id);
         let Some(expr) = self.hir.expr(expr_id) else {
-            return Ok(self.alloc_expr(ThirExpr::Err));
+            let id = self.alloc_expr(ThirExpr::Err);
+            if let Some(ty) = self.typeck_results.expr_ty(expr_id) {
+                self.expr_tys.insert(id, ty);
+            }
+            return Ok(id);
         };
 
         let thir_expr = match expr {
@@ -237,7 +241,11 @@ impl<'a> LoweringContext<'a> {
             _ => ThirExpr::Err,
         };
 
-        Ok(self.alloc_expr(thir_expr))
+        let id = self.alloc_expr(thir_expr);
+        if let Some(ty) = self.typeck_results.expr_ty(expr_id) {
+            self.expr_tys.insert(id, ty);
+        }
+        Ok(id)
     }
 
     pub(crate) fn lower_path(&self, res: &Res, _span: Span) -> ThirExpr {

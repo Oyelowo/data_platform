@@ -237,6 +237,10 @@ impl<'a, 'b> LateResolver<'a, 'b> {
         self.resolve_generic_params(&i.generics.params);
         if let Some(trait_path) = &i.trait_impl {
             self.resolve_type_path(trait_path);
+            // Generic arguments in the trait path (e.g. `Aggregate<T, Acc, Out>`)
+            // are not resolved by `resolve_type_path`; resolve them explicitly so
+            // type parameters like `T` are correctly bound.
+            self.resolve_path_generic_args(trait_path);
         }
         self.resolve_type(&i.self_ty);
         for item in &i.items {

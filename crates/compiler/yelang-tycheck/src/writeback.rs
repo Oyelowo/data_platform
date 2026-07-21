@@ -6,6 +6,8 @@
  */
 
 use yelang_hir::ids::{ExprId, PatId};
+use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
+use yelang_ty::interner::Interner;
 use yelang_ty::primitive::{FloatTy, IntTy};
 use yelang_ty::ty::{InferTy, Ty, TyId};
 
@@ -52,35 +54,58 @@ pub fn writeback_types(fcx: &mut FnCtxt<'_>) {
 
 /// Resolve a type, applying fallback for unresolved int/float variables.
 fn resolve_with_fallback(fcx: &mut FnCtxt<'_>, ty: TyId) -> TyId {
-    let interner = fcx.tcx.interner();
-    match interner.ty(ty) {
-        Ty::Infer(InferTy::IntVar(vid)) => {
-            // Integer fallback: i32. Also commit the fallback to the inference
-            // tables so that other references to the same variable resolve
-            // consistently (e.g. an inferred return type).
-            let root = fcx.infer.find_int_var(vid);
-            let _ = fcx.infer.set_int_var(root, IntTy::I32);
-            fcx.mk_int(IntTy::I32)
-        }
-        Ty::Infer(InferTy::FloatVar(vid)) => {
-            // Float fallback: f64.
-            let root = fcx.infer.find_float_var(vid);
-            let _ = fcx.infer.set_float_var(root, FloatTy::F64);
-            fcx.mk_float(FloatTy::F64)
-        }
-        Ty::Infer(InferTy::TyVar(_)) => {
-            // General type variable: try to resolve. If it resolves to another
-            // inference variable (e.g. a TyVar unified with an IntVar because
-            // of an unannotated closure parameter), apply the corresponding
-            // fallback. Otherwise report an error.
-            let resolved = fcx.resolve_ty(ty);
-            match interner.ty(resolved) {
-                Ty::Infer(InferTy::TyVar(_)) => fcx.mk_error(),
-                Ty::Infer(InferTy::IntVar(_)) => resolve_with_fallback(fcx, resolved),
-                Ty::Infer(InferTy::FloatVar(_)) => resolve_with_fallback(fcx, resolved),
-                _ => resolved,
+    let mut folder = ResolveFolder { fcx };
+    ty.fold_with(&mut folder)
+}
+
+struct ResolveFolder<'a, 'b> {
+    fcx: &'a mut FnCtxt<'b>,
+}
+
+impl TypeFolder for ResolveFolder<'_, '_> {
+    fn interner(&self) -> &Interner {
+        self.fcx.tcx.interner()
+    }
+
+    fn fold_ty(&mut self, ty: TyId) -> TyId {
+        let interner = self.interner();
+        match interner.ty(ty) {
+            Ty::Infer(InferTy::TyVar(vid)) => {
+                let root = self.fcx.infer.find_ty_var(vid);
+                match self.fcx.infer.probe_ty_var(root).clone() {
+                    yelang_infer::type_variable::TypeVarValue::Known(known) => known.fold_with(self),
+                    yelang_infer::type_variable::TypeVarValue::Unknown => {
+                        // Unresolved general type variable: report as error.
+                        self.fcx.mk_error()
+                    }
+                }
             }
+            Ty::Infer(InferTy::IntVar(vid)) => {
+                let root = self.fcx.infer.find_int_var(vid);
+                match self.fcx.infer.probe_int_var(root).clone() {
+                    yelang_infer::type_variable::IntVarValue::Known(it) => match it {
+                        yelang_ty::primitive::IntegerTy::Signed(it) => self.fcx.mk_int(it),
+                        yelang_ty::primitive::IntegerTy::Unsigned(ut) => self.fcx.mk_uint(ut),
+                    },
+                    yelang_infer::type_variable::IntVarValue::Unknown => {
+                        // Integer fallback: i32.
+                        let _ = self.fcx.infer.set_int_var(root, IntTy::I32);
+                        self.fcx.mk_int(IntTy::I32)
+                    }
+                }
+            }
+            Ty::Infer(InferTy::FloatVar(vid)) => {
+                let root = self.fcx.infer.find_float_var(vid);
+                match self.fcx.infer.probe_float_var(root).clone() {
+                    yelang_infer::type_variable::FloatVarValue::Known(ft) => self.fcx.mk_float(ft),
+                    yelang_infer::type_variable::FloatVarValue::Unknown => {
+                        // Float fallback: f64.
+                        let _ = self.fcx.infer.set_float_var(root, FloatTy::F64);
+                        self.fcx.mk_float(FloatTy::F64)
+                    }
+                }
+            }
+            _ => ty.super_fold_with(self),
         }
-        _ => fcx.resolve_ty(ty),
     }
 }

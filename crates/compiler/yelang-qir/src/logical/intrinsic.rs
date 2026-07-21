@@ -19,8 +19,7 @@ pub enum QueryableIntrinsic {
 
 impl QueryableIntrinsic {
     /// Parse an intrinsic name of the form `query_*`.
-    pub fn from_symbol(sym: yelang_interner::Symbol, interner: &yelang_interner::Interner) -> Option<Self> {
-        let s = interner.resolve(&sym);
+    pub fn from_str(s: &str) -> Option<Self> {
         Some(match s {
             "query_map" => Self::Map,
             "query_filter" => Self::Filter,

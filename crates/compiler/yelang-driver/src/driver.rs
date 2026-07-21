@@ -15,6 +15,7 @@ use yelang_qir::backend::MemoryBackend;
 use yelang_qir::exec::{MemoryExecutor, QueryExecutor, Value};
 use yelang_qir::lir::plan::LogicalPlan;
 use yelang_qir::{lower_query, plan_logical as plan_logical_fn};
+use yelang_thir::context::LoweringContext as ThirLoweringContext;
 use yelang_resolve::resolve_crate;
 use yelang_tycheck::tcx::TyCtxt;
 use yelang_tycheck::type_check_crate;
@@ -42,6 +43,52 @@ impl CompiledCrate {
     /// Return the `main` function's `DefId`.
     pub fn main_def(&self) -> Option<yelang_arena::DefId> {
         find_main(&self.tcx)
+    }
+
+    /// Lower a typed function body through the THIR → LIR extractor and return
+    /// the resulting logical plan.
+    ///
+    /// This is the entry point for Phase 3 tests that inspect the logical plan
+    /// produced from `Queryable` method-call pipelines.
+    pub fn lower_thir_function(&self, name: &str) -> Result<LogicalPlan> {
+        let def_id = find_function_by_name(&self.tcx, name).ok_or(DriverError::MissingMain)?;
+        let body_id = function_body(&self.tcx, def_id).ok_or(DriverError::MainHasNoBody)?;
+        let results = self
+            .tcx
+            .typeck_results
+            .get(def_id)
+            .cloned()
+            .ok_or_else(|| DriverError::TypeCheck(vec![]))?;
+
+        // THIR lowering needs an interner, but the HIR already contains resolved
+        // symbols. A fresh interner is sufficient for the structural lowering.
+        let interner = yelang_interner::Interner::new();
+        let mut thir_ctx = ThirLoweringContext::new(
+            self.tcx.crate_hir(),
+            &results,
+            &self.tcx.crate_hir().lang_items,
+            &interner,
+        );
+        let thir_body_id = thir_ctx
+            .lower_body(body_id)
+            .map_err(|_| DriverError::QirLowering(yelang_qir::LoweringError::UnsupportedExpr))?;
+
+        let thir_view = yelang_qir::logical::ThirView {
+            bodies: &thir_ctx.bodies,
+            exprs: &thir_ctx.exprs,
+            expr_tys: &thir_ctx.expr_tys,
+            pats: &thir_ctx.pats,
+            stmts: &thir_ctx.stmts,
+        };
+
+        yelang_qir::logical::lower_thir_body(&self.tcx, thir_view, thir_body_id, &results)
+            .map_err(|e| {
+                eprintln!("QIR lowering failed: {:?}", e);
+                match e {
+                    yelang_qir::QirError::Lowering(le) => DriverError::QirLowering(le),
+                    _ => DriverError::QirLowering(yelang_qir::LoweringError::UnsupportedExpr),
+                }
+            })
     }
 
     /// Plan this compiled crate's logical plan for the in-memory backend and
@@ -250,6 +297,32 @@ fn parse_program(src: &str) -> Result<(Program, Interner)> {
 }
 
 /// Find the `main` function in the HIR crate.
+fn find_function_by_name(tcx: &TyCtxt, name: &str) -> Option<yelang_arena::DefId> {
+    tcx.crate_hir()
+        .items
+        .iter_enumerated()
+        .find_map(|(def_id, item)| {
+            let item = item.as_ref()?;
+            match &item.kind {
+                ItemKind::Fn { .. } if tcx.resolve_symbol(item.ident.symbol) == Some(name) => {
+                    Some(def_id)
+                }
+                _ => None,
+            }
+        })
+}
+
+fn function_body(tcx: &TyCtxt, def_id: yelang_arena::DefId) -> Option<BodyId> {
+    tcx.crate_hir()
+        .items
+        .get(def_id)
+        .and_then(|i| i.as_ref())
+        .and_then(|i| match &i.kind {
+            ItemKind::Fn { body, .. } => Some(*body),
+            _ => None,
+        })
+}
+
 fn find_main(tcx: &TyCtxt) -> Option<yelang_arena::DefId> {
     tcx.crate_hir()
         .items

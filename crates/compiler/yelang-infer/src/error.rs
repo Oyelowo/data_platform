@@ -4,7 +4,7 @@ use std::fmt;
 
 use yelang_interner::Symbol;
 use yelang_ty::predicate::{ProjectionPredicate, TraitPredicate};
-use yelang_ty::primitive::{FloatTy, IntTy};
+use yelang_ty::primitive::{FloatTy, IntegerTy};
 use yelang_ty::ty::{ConstId, TyId, TyVid};
 
 /// An error that occurred during type inference or unification.
@@ -33,7 +33,7 @@ pub enum TypeError {
     /// Generic argument kind mismatch at the given index (e.g. type vs const).
     GenericArgKindMismatch { index: usize },
     /// Integral type mismatch (e.g. `i32` vs `i64`).
-    IntMismatch { expected: IntTy, found: IntTy },
+    IntMismatch { expected: IntegerTy, found: IntegerTy },
     /// Floating-point type mismatch (e.g. `f32` vs `f64`).
     FloatMismatch { expected: FloatTy, found: FloatTy },
     /// Constant value mismatch.

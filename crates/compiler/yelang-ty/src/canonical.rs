@@ -6,7 +6,7 @@
  */
 
 use crate::list::List;
-use crate::primitive::{FloatTy, IntTy};
+use crate::primitive::{FloatTy, IntTy, UintTy};
 use crate::ty::{ConstId, PlaceholderType, TyId, UniverseIndex};
 
 /// A canonicalized value: all inference vars are bound.
@@ -97,8 +97,10 @@ pub enum CanonicalVarValue {
     Ty(TyId),
     /// The variable resolved to a concrete const.
     Const(ConstId),
-    /// The variable resolved to a concrete integer type.
+    /// The variable resolved to a concrete signed integer type.
     Int(IntTy),
+    /// The variable resolved to a concrete unsigned integer type.
+    Uint(UintTy),
     /// The variable resolved to a concrete float type.
     Float(FloatTy),
 }

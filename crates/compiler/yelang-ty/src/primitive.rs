@@ -22,6 +22,16 @@ pub enum UintTy {
     Usize,
 }
 
+/// Either a signed or an unsigned integer type.
+///
+/// Used for the known value of an integer inference variable, which may resolve
+/// to either family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IntegerTy {
+    Signed(IntTy),
+    Unsigned(UintTy),
+}
+
 /// Floating-point types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FloatTy {

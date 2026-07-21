@@ -8,6 +8,7 @@
 
 use yelang_arena::FxHashMap;
 use yelang_infer::{ConstVarValue, FloatVarValue, InferCtxt, IntVarValue, TypeVarValue};
+use yelang_ty::primitive::IntegerTy;
 use yelang_ty::binder::{BoundTy, BoundTyKind, BoundVar, DebruijnIndex};
 use yelang_ty::canonical::{Canonical, CanonicalTyVarKind, CanonicalVarKind};
 use yelang_ty::fold::{TypeFoldable, TypeFolder, TypeSuperFoldable};
@@ -109,7 +110,10 @@ impl<'a> TypeFolder for Canonicalizer<'a> {
             Ty::Infer(InferTy::IntVar(vid)) => {
                 let root = self.infcx.find_int_var(vid);
                 match self.infcx.probe_int_var(root) {
-                    IntVarValue::Known(it) => self.interner.mk_ty(Ty::Int(*it)),
+                    IntVarValue::Known(IntegerTy::Signed(it)) => self.interner.mk_ty(Ty::Int(*it)),
+                    IntVarValue::Known(IntegerTy::Unsigned(ut)) => {
+                        self.interner.mk_ty(Ty::Uint(*ut))
+                    }
                     IntVarValue::Unknown => {
                         let index = self.canonical_var(CanonicalVarKey::IntVar(root));
                         self.interner.mk_ty(Ty::Bound(

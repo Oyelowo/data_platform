@@ -967,6 +967,14 @@ fn check_path(fcx: &mut FnCtxt<'_>, res: &Res) -> TyId {
 // Binary operator checking
 // ---------------------------------------------------------------------------
 
+/// Strip one immutable or mutable reference layer, if present.
+fn auto_deref_ty(fcx: &FnCtxt<'_>, ty: TyId) -> TyId {
+    match fcx.tcx.interner().ty(ty) {
+        Ty::Ref(inner, _) => inner,
+        _ => ty,
+    }
+}
+
 fn check_binary(fcx: &mut FnCtxt<'_>, op: BinaryOp, left: ExprId, right: ExprId) -> TyId {
     let left_ty = check_expr(fcx, left);
     let right_ty = check_expr(fcx, right);
@@ -980,11 +988,15 @@ fn check_binary(fcx: &mut FnCtxt<'_>, op: BinaryOp, left: ExprId, right: ExprId)
         | BinaryOp::Divide
         | BinaryOp::Modulo
         | BinaryOp::Power => {
+            let left_ty = auto_deref_ty(fcx, left_ty);
+            let right_ty = auto_deref_ty(fcx, right_ty);
             fcx.demand_eq(right_span, left_ty, right_ty);
             left_ty
         }
         // Bitwise: both operands must be integer, result is same type
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
+            let left_ty = auto_deref_ty(fcx, left_ty);
+            let right_ty = auto_deref_ty(fcx, right_ty);
             fcx.demand_eq(right_span, left_ty, right_ty);
             left_ty
         }
@@ -1000,11 +1012,15 @@ fn check_binary(fcx: &mut FnCtxt<'_>, op: BinaryOp, left: ExprId, right: ExprId)
         | BinaryOp::Regex
         | BinaryOp::In
         | BinaryOp::NotIn => {
+            let left_ty = auto_deref_ty(fcx, left_ty);
+            let right_ty = auto_deref_ty(fcx, right_ty);
             fcx.demand_eq(right_span, left_ty, right_ty);
             fcx.mk_bool()
         }
         // Logical: both operands must be bool, result is bool
         BinaryOp::And | BinaryOp::Or => {
+            let left_ty = auto_deref_ty(fcx, left_ty);
+            let right_ty = auto_deref_ty(fcx, right_ty);
             fcx.demand_eq(expr_span(fcx, left), left_ty, fcx.mk_bool());
             fcx.demand_eq(right_span, right_ty, fcx.mk_bool());
             fcx.mk_bool()
