@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::ids::LirId;
-use crate::logical::LogicalPlan;
+use crate::lir::LogicalPlan;
 
 /// Return the set of operator ids reachable from `root`.
 pub fn reachable(plan: &LogicalPlan, root: LirId) -> HashSet<LirId> {
@@ -20,8 +20,8 @@ pub fn reachable(plan: &LogicalPlan, root: LirId) -> HashSet<LirId> {
     seen
 }
 
-fn collect_children(op: &crate::logical::operator::LirOp, out: &mut Vec<LirId>) {
-    use crate::logical::operator::LirOp;
+fn collect_children(op: &crate::lir::operator::LirOp, out: &mut Vec<LirId>) {
+    use crate::lir::operator::LirOp;
     match op {
         LirOp::Scan { .. } | LirOp::Values { .. } | LirOp::Expr(_) => {}
         LirOp::Filter { input, .. }

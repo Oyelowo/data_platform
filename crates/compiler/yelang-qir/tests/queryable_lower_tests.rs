@@ -17,10 +17,10 @@ use yelang_lexer::{Ident, Literal, Span};
 use yelang_qir::errors::LoweringError;
 use yelang_qir::expr::{AggregateClass, QExpr};
 use yelang_qir::ids::LirId;
-use yelang_qir::logical::lower::LoweringCtxt;
-use yelang_qir::logical::operator::LirOp;
-use yelang_qir::logical::plan::LogicalPlan;
-use yelang_qir::logical::queryable::QueryableMethod;
+use yelang_qir::lir::lower::LoweringCtxt;
+use yelang_qir::lir::operator::LirOp;
+use yelang_qir::lir::plan::LogicalPlan;
+use yelang_qir::lir::lower::queryable::QueryableMethod;
 use yelang_resolve::lang_items::LangItem;
 use yelang_tycheck::tcx::TyCtxt;
 use yelang_tycheck::typeck_results::{MethodResolution, TypeckResults};
@@ -253,7 +253,7 @@ fn try_lower_single_expr(
     }
 
     let mut plan = LogicalPlan::empty();
-    let qexpr = yelang_qir::logical::lower_expr::lower_hir_expr(&mut plan, &mut ctx, expr_id)?;
+    let qexpr = yelang_qir::lir::lower::expr::lower_hir_expr(&mut plan, &mut ctx, expr_id)?;
     Ok((plan, qexpr))
 }
 
@@ -721,7 +721,7 @@ fn select_query_where_lowers_to_filter() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -777,7 +777,7 @@ fn select_query_order_by_lowers_to_order_by() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -834,7 +834,7 @@ fn select_query_range_lowers_to_slice() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -895,7 +895,7 @@ fn select_query_group_by_lowers_to_group_by() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1315,7 +1315,7 @@ fn select_query_where_order_range() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1391,7 +1391,7 @@ fn select_query_group_order() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1461,7 +1461,7 @@ fn select_query_where_group() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1524,7 +1524,7 @@ fn select_from_with_per_root_filter() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1645,7 +1645,7 @@ fn missing_aggregate_class_returns_missing_aggregate() {
         .with_queryable_method(DefId::new(209), QueryableMethod::Sum);
 
     let mut plan = LogicalPlan::empty();
-    let err = yelang_qir::logical::lower_expr::lower_hir_expr(&mut plan, &mut ctx, call)
+    let err = yelang_qir::lir::lower::expr::lower_hir_expr(&mut plan, &mut ctx, call)
         .expect_err("should fail");
     assert!(matches!(err, LoweringError::MissingAggregate(_)));
 }
@@ -1715,7 +1715,7 @@ fn slice_on_unordered_returns_error() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let err = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let err = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect_err("should fail because source is unordered");
     assert!(matches!(err, LoweringError::SliceOnUnordered));
 }
@@ -1879,7 +1879,7 @@ fn select_empty_where_clause_no_filter() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1937,7 +1937,7 @@ fn select_range_start_only() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -1999,7 +1999,7 @@ fn select_range_end_only() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -2066,7 +2066,7 @@ fn multiple_from_nodes_use_first_root() {
 
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(&tcx, BodyId::default(), &results);
-    let lir = yelang_qir::logical::lower_query::lower_query(&mut plan, &mut ctx, &query)
+    let lir = yelang_qir::lir::lower::query::lower_query(&mut plan, &mut ctx, &query)
         .expect("lower query");
     plan.set_root(lir);
 
@@ -2078,7 +2078,7 @@ fn multiple_from_nodes_use_first_root() {
     };
     match plan.operator(input) {
         LirOp::Scan { source, .. } => {
-            assert!(matches!(source, yelang_qir::logical::operator::ScanSource::Expr(_)));
+            assert!(matches!(source, yelang_qir::lir::operator::ScanSource::Expr(_)));
         }
         other => panic!("expected Scan, got {:?}", other),
     }

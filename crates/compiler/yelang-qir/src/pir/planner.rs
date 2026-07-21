@@ -10,12 +10,12 @@
 
 use yelang_arena::FxHashMap;
 
-use crate::backend::capability::{BackendCapability, Support};
+use crate::pir::capability::{BackendCapability, Support};
 use crate::errors::PlanError;
 use crate::expr::{OrderKey, QBinaryOp, QExpr, QExprId, QLit};
 use crate::ids::{BinderId, LirId, PirId};
-use crate::logical::operator::{AggregateOp, ConstructKind, JoinKind, LirOp, ScanSource, SetOpKind};
-use crate::logical::plan::LogicalPlan;
+use crate::lir::operator::{AggregateOp, ConstructKind, JoinKind, LirOp, ScanSource, SetOpKind};
+use crate::lir::plan::LogicalPlan;
 use crate::pir::cost::{compute_cost, estimate_cardinality};
 use crate::pir::operator::{AggMode, ExchangeKind, PhysicalAggregateOp, PirOp};
 use crate::pir::plan::PhysicalPlan;
@@ -312,7 +312,7 @@ impl<'a> Planner<'a> {
         &mut self,
         input: LirId,
         edge: yelang_hir::ids::DefId,
-        direction: crate::logical::operator::EdgeDirection,
+        direction: crate::lir::operator::EdgeDirection,
         predicate: Option<QExprId>,
         _required: &PhysicalProps,
     ) -> Result<Candidate, PlanError> {

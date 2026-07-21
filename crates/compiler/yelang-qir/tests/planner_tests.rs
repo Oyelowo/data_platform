@@ -1,9 +1,9 @@
 //! Tests for the physical planner.
 
-use yelang_qir::backend::memory_backend::MemoryBackend;
+use yelang_qir::backend::memory::MemoryBackend;
 use yelang_qir::expr::{QBinaryOp, QExpr, QLit};
-use yelang_qir::logical::operator::ScanSource;
-use yelang_qir::logical::plan::LogicalPlan;
+use yelang_qir::lir::operator::ScanSource;
+use yelang_qir::lir::plan::LogicalPlan;
 use yelang_qir::pir::operator::PirOp;
 use yelang_qir::pir::planner::plan_logical;
 use yelang_ty::ty::TyId;

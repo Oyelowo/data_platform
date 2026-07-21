@@ -3,8 +3,8 @@
 use yelang_interner::Symbol;
 use yelang_qir::backend::MemoryBackend;
 use yelang_qir::expr::{QExpr, QLit};
-use yelang_qir::logical::operator::ScanSource;
-use yelang_qir::logical::plan::LogicalPlan;
+use yelang_qir::lir::operator::ScanSource;
+use yelang_qir::lir::plan::LogicalPlan;
 use yelang_qir::pir::planner::plan_logical;
 use yelang_ty::ty::TyId;
 

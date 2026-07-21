@@ -3,8 +3,8 @@
 use yelang_interner::Symbol;
 use yelang_qir::expr::{QBinaryOp, QExpr, QLit};
 use yelang_qir::ids::BinderId;
-use yelang_qir::logical::operator::{ConstructKind, LirOp, ScanSource};
-use yelang_qir::logical::plan::LogicalPlan;
+use yelang_qir::lir::operator::{ConstructKind, LirOp, ScanSource};
+use yelang_qir::lir::plan::LogicalPlan;
 use yelang_qir::rewrite::{
     DecorrelatePass, MergeMapsPass, NormalizePass, PredicatePushdownPass, ProjectionPushdownPass,
     PushFilterPass, PushProjectPass, SimplifyPass, apply_rewrites, pass::RewritePass,
@@ -439,7 +439,7 @@ fn predicate_pushdown_merges_nested_filters() {
 
 #[test]
 fn predicate_pushdown_cross_join_to_inner_join() {
-    use yelang_qir::logical::operator::JoinKind;
+    use yelang_qir::lir::operator::JoinKind;
 
     let mut plan = LogicalPlan::empty();
     let left = make_scan(&mut plan);
@@ -475,7 +475,7 @@ fn predicate_pushdown_cross_join_to_inner_join() {
 
 #[test]
 fn predicate_pushdown_merges_inner_join_predicate() {
-    use yelang_qir::logical::operator::JoinKind;
+    use yelang_qir::lir::operator::JoinKind;
 
     let mut plan = LogicalPlan::empty();
     let left = make_scan(&mut plan);
@@ -518,7 +518,7 @@ fn predicate_pushdown_merges_inner_join_predicate() {
 
 #[test]
 fn decorrelate_uncorrelated_to_cross_join() {
-    use yelang_qir::logical::operator::JoinKind;
+    use yelang_qir::lir::operator::JoinKind;
 
     let mut plan = LogicalPlan::empty();
     let outer_scan = make_scan(&mut plan);
@@ -558,7 +558,7 @@ fn decorrelate_uncorrelated_to_cross_join() {
 
 #[test]
 fn decorrelate_uncorrelated_filter_to_cross_join() {
-    use yelang_qir::logical::operator::JoinKind;
+    use yelang_qir::lir::operator::JoinKind;
 
     let mut plan = LogicalPlan::empty();
     let outer_scan = make_scan(&mut plan);
@@ -666,8 +666,8 @@ fn decorrelate_keeps_correlated_map() {
 
 #[test]
 fn unnest_uncorrelated_scalar_subplan_to_cross_join() {
-    use yelang_qir::logical::operator::JoinKind;
-    use yelang_qir::logical::props::CardinalityClass;
+    use yelang_qir::lir::operator::JoinKind;
+    use yelang_qir::lir::props::CardinalityClass;
     use yelang_qir::rewrite::UnnestSubqueriesPass;
 
     let mut plan = LogicalPlan::empty();

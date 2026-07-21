@@ -1,7 +1,7 @@
 //! Visitors over LIR and PIR operator trees.
 
 use crate::ids::LirId;
-use crate::logical::plan::LogicalPlan;
+use crate::lir::plan::LogicalPlan;
 
 /// A visitor over logical operators.
 pub trait LirVisitor {

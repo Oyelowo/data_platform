@@ -13,9 +13,9 @@ use yelang_arena::FxHashMap;
 use crate::errors::LoweringError;
 use crate::expr::{QExpr, QLit};
 use crate::ids::LirId;
-use crate::logical::operator::LirOp;
-use crate::logical::plan::LogicalPlan;
-use crate::logical::props::LogicalProps;
+use crate::lir::operator::LirOp;
+use crate::lir::plan::LogicalPlan;
+use crate::lir::props::LogicalProps;
 use crate::rewrite::pass::RewritePass;
 use crate::rewrite::apply_id_rewrites;
 

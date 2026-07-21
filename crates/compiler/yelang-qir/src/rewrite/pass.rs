@@ -1,7 +1,7 @@
 //! Rewrite-pass driver.
 
 use crate::errors::LoweringError;
-use crate::logical::plan::LogicalPlan;
+use crate::lir::plan::LogicalPlan;
 
 /// A single logical rewrite pass.
 pub trait RewritePass {

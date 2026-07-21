@@ -21,8 +21,8 @@ use yelang_ty::ty::TyId;
 use crate::errors::LoweringError;
 use crate::expr::{QBinaryOp, QExpr, QExprId};
 use crate::ids::{BinderId, LirId};
-use crate::logical::operator::{JoinKind, LirOp};
-use crate::logical::plan::LogicalPlan;
+use crate::lir::operator::{JoinKind, LirOp};
+use crate::lir::plan::LogicalPlan;
 use crate::rewrite::pass::RewritePass;
 use crate::rewrite::{apply_id_rewrites, as_closure, reachable_ids};
 

@@ -55,7 +55,7 @@ pub enum ExecOp {
 
 #[derive(Debug)]
 pub struct ScanKernel {
-    pub source: crate::logical::operator::ScanSource,
+    pub source: crate::lir::operator::ScanSource,
     pub predicate: Option<crate::ids::QExprId>,
     pub projection: crate::demand::DemandSet,
 }
@@ -151,13 +151,13 @@ pub struct DistinctExec {
 pub struct EdgeExpandExec {
     pub input: ExecId,
     pub edge: DefId,
-    pub direction: crate::logical::operator::EdgeDirection,
+    pub direction: crate::lir::operator::EdgeDirection,
     pub predicate: Option<crate::ids::QExprId>,
 }
 
 #[derive(Debug)]
 pub struct ConstructExec {
-    pub kind: crate::logical::operator::ConstructKind,
+    pub kind: crate::lir::operator::ConstructKind,
     pub field_inputs: Vec<(Symbol, ExecId)>,
 }
 

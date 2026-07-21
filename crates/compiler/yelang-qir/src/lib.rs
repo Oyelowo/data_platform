@@ -11,7 +11,7 @@ pub mod errors;
 pub mod exec;
 pub mod expr;
 pub mod ids;
-pub mod logical;
+pub mod lir;
 pub mod pir;
 pub mod rewrite;
 pub mod util;
@@ -23,8 +23,8 @@ use yelang_hir::ids::{BodyId, QueryId};
 use yelang_tycheck::tcx::TyCtxt;
 use yelang_tycheck::typeck_results::TypeckResults;
 
-use crate::logical::lower::LoweringCtxt;
-use crate::logical::plan::LogicalPlan;
+use crate::lir::lower::LoweringCtxt;
+use crate::lir::plan::LogicalPlan;
 
 /// Lower a typed HIR query to a logical QIR plan.
 ///
@@ -39,8 +39,8 @@ pub fn lower_query(
     let mut plan = LogicalPlan::empty();
     let mut ctx = LoweringCtxt::new(tcx, body_id, results);
     ctx.populate_stdlib_tables()?;
-    logical::lower::populate_local_values(&mut plan, &mut ctx, body_id)?;
-    logical::lower::lower_query(&mut plan, &mut ctx, query_id)?;
+    lir::lower::populate_local_values(&mut plan, &mut ctx, body_id)?;
+    lir::lower::lower_query(&mut plan, &mut ctx, query_id)?;
     rewrite::apply_rewrites(&mut plan)?;
     Ok(plan)
 }
@@ -48,7 +48,7 @@ pub fn lower_query(
 /// Plan a logical plan into a physical plan for the given backend.
 pub fn plan_logical(
     logical: &LogicalPlan,
-    backend: &dyn backend::capability::BackendCapability,
+    backend: &dyn pir::capability::BackendCapability,
 ) -> QirResult<pir::PhysicalPlan> {
     Ok(pir::planner::plan_logical(logical, backend)?)
 }

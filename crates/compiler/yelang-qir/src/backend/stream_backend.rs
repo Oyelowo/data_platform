@@ -1,8 +1,8 @@
 //! Streaming / event-bus backend.
 
-use crate::backend::capability::{BackendCapability, Cardinality, Support};
+use crate::pir::capability::{BackendCapability, Cardinality, Support};
 use crate::expr::{AggregateClass, QExprId};
-use crate::logical::operator::ScanSource;
+use crate::lir::operator::ScanSource;
 use crate::pir::operator::ExchangeKind;
 
 /// Backend for an unbounded event stream.

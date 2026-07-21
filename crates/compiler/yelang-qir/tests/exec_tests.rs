@@ -10,8 +10,8 @@ use yelang_qir::exec::{
     value::ArrowSchema,
 };
 use yelang_qir::expr::{AggregateClass, QExpr, QLit};
-use yelang_qir::logical::operator::AggregateOp;
-use yelang_qir::logical::plan::LogicalPlan;
+use yelang_qir::lir::operator::AggregateOp;
+use yelang_qir::lir::plan::LogicalPlan;
 use yelang_qir::pir::operator::ExchangeKind;
 use yelang_qir::pir::plan::PhysicalPlan;
 use yelang_qir::pir::planner::plan_logical;

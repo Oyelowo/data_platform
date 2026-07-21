@@ -3,6 +3,7 @@
 
 pub mod arena;
 pub mod equivalence;
+pub mod explain;
 pub mod graph;
 pub mod print;
 pub mod subst;

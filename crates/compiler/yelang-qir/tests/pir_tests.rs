@@ -2,7 +2,7 @@
 
 use yelang_qir::backend::{MemoryBackend, StreamBackend, supports_aggregate_op};
 use yelang_qir::expr::{AggregateClass, QExprId};
-use yelang_qir::logical::operator::AggregateOp;
+use yelang_qir::lir::operator::AggregateOp;
 use yelang_qir::pir::operator::{AggMode, PirOp};
 use yelang_qir::pir::plan::PhysicalPlan;
 use yelang_qir::pir::props::{Partitioning, PhysicalProps};
@@ -54,7 +54,7 @@ fn scalar_distributive_aggregate_plan() {
         acc_ty: ty(),
         out_ty: ty(),
     };
-    let root = yelang_qir::pir::aggregations::plan_scalar_aggregate(&mut plan, input, agg).unwrap();
+    let root = yelang_qir::pir::rules::aggregate::plan_scalar_aggregate(&mut plan, input, agg).unwrap();
     assert!(matches!(plan.operator(root), PirOp::HashAggregate { mode: AggMode::Final, .. }));
 }
 

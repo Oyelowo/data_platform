@@ -13,7 +13,7 @@ use yelang_interner::Interner;
 use yelang_lexer::TokenKind;
 use yelang_qir::backend::MemoryBackend;
 use yelang_qir::exec::{MemoryExecutor, QueryExecutor, Value};
-use yelang_qir::logical::plan::LogicalPlan;
+use yelang_qir::lir::plan::LogicalPlan;
 use yelang_qir::{lower_query, plan_logical as plan_logical_fn};
 use yelang_resolve::resolve_crate;
 use yelang_tycheck::tcx::TyCtxt;
@@ -70,10 +70,10 @@ impl CompiledCrate {
             .ok_or_else(|| DriverError::TypeCheck(vec![]))?;
 
         let mut plan = LogicalPlan::empty();
-        let mut ctx = yelang_qir::logical::lower::LoweringCtxt::new(&self.tcx, body_id, results);
+        let mut ctx = yelang_qir::lir::lower::LoweringCtxt::new(&self.tcx, body_id, results);
         ctx.populate_stdlib_tables()
             .map_err(|e| DriverError::QirLowering(e))?;
-        yelang_qir::logical::lower::populate_local_values(&mut plan, &mut ctx, body_id)
+        yelang_qir::lir::lower::populate_local_values(&mut plan, &mut ctx, body_id)
             .map_err(|e| DriverError::QirLowering(e))?;
 
         let body = self.tcx.crate_hir().body(body_id).ok_or(DriverError::MainHasNoBody)?;
@@ -102,7 +102,7 @@ impl CompiledCrate {
         };
 
         let eval_expr_id = eval_expr_id.ok_or(DriverError::MissingQuery)?;
-        let qexpr = yelang_qir::logical::lower_expr::lower_hir_expr(&mut plan, &mut ctx, eval_expr_id)
+        let qexpr = yelang_qir::lir::lower::expr::lower_hir_expr(&mut plan, &mut ctx, eval_expr_id)
             .map_err(|e| DriverError::QirLowering(e))?;
 
         let root = match plan.expr(qexpr) {

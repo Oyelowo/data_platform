@@ -6,9 +6,9 @@ use yelang_ty::ty::TyId;
 
 use crate::expr::{OrderKey, QExprId, WindowFrame, WindowFunc};
 use crate::ids::PirId;
-pub use crate::logical::operator::JoinKind;
-use crate::logical::operator::{ConstructKind, EdgeDirection};
-use crate::logical::operator::ScanSource;
+pub use crate::lir::operator::JoinKind;
+use crate::lir::operator::{ConstructKind, EdgeDirection};
+use crate::lir::operator::ScanSource;
 
 /// Kind of data exchange between physical operators.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

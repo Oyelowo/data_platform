@@ -7,10 +7,18 @@ use yelang_arena::FxHashMap;
 use crate::errors::LoweringError;
 use crate::expr::QExpr;
 use crate::ids::{BinderId, LirId, QExprId};
-use crate::logical::plan::LogicalPlan;
-use crate::logical::props::LogicalProps;
+use crate::lir::plan::LogicalPlan;
+use crate::lir::props::LogicalProps;
 
 pub mod decorrelate;
+pub mod decorrelate_agg;
+pub mod decorrelate_rules;
+pub mod decorrelate_window;
+pub mod distinct;
+pub mod elision;
+pub mod equiv;
+pub mod fold;
+pub mod groupjoin;
 pub mod merge_maps;
 pub mod normalize;
 pub mod pass;
@@ -18,7 +26,9 @@ pub mod predicate_pushdown;
 pub mod projection_pushdown;
 pub mod push_filter;
 pub mod push_project;
+pub mod pushdown;
 pub mod simplify;
+pub mod topn;
 pub mod unnest_subqueries;
 
 pub use pass::{RewritePass, apply_to_fixpoint};
@@ -38,7 +48,7 @@ pub fn apply_rewrites(plan: &mut LogicalPlan) -> Result<LirId, LoweringError> {
         let ty = plan.exprs.get(crate::ids::QExprId(0)).map(|e| e.ty()).unwrap_or_else(|| yelang_ty::ty::TyId::new(1));
         let expr = plan.alloc_expr(crate::expr::QExpr::Error(ty));
         let props = LogicalProps::new(ty);
-        let id = plan.alloc_operator(crate::logical::operator::LirOp::Expr(expr), props);
+        let id = plan.alloc_operator(crate::lir::operator::LirOp::Expr(expr), props);
         plan.set_root(id);
         id
     });

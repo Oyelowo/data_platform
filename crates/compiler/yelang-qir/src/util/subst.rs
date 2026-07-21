@@ -11,7 +11,7 @@ use yelang_arena::FxHashSet;
 
 use crate::expr::{AggregateCall, MatchArm, Pattern, QExpr, QExprId};
 use crate::ids::BinderId;
-use crate::logical::plan::LogicalPlan;
+use crate::lir::plan::LogicalPlan;
 
 /// Replace every occurrence of the binders in `subst` by the corresponding
 /// expression.  Local binders shadow the substitution in the obvious way.

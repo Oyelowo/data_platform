@@ -2,9 +2,9 @@
 
 use yelang_interner::Symbol;
 use yelang_qir::expr::{QExpr, QExprId, QLit};
-use yelang_qir::logical::operator::{ConstructKind, JoinKind, LirOp, ScanSource};
-use yelang_qir::logical::plan::LogicalPlan;
-use yelang_qir::logical::props::{Boundedness, CardinalityClass};
+use yelang_qir::lir::operator::{ConstructKind, JoinKind, LirOp, ScanSource};
+use yelang_qir::lir::plan::LogicalPlan;
+use yelang_qir::lir::props::{Boundedness, CardinalityClass};
 use yelang_ty::ty::TyId;
 
 fn ty() -> TyId {
@@ -42,7 +42,7 @@ fn logical_plan_aggregate_sets_cardinality_one() {
     let source_expr = plan.alloc_expr(QExpr::Lit(QLit::Int(1), ty()));
     let scan = plan.scan(ScanSource::Expr(source_expr), ty());
     let unit = plan.alloc_expr(QExpr::Record(vec![], ty()));
-    let agg = yelang_qir::logical::operator::AggregateOp {
+    let agg = yelang_qir::lir::operator::AggregateOp {
         agg_def: yelang_arena::DefId::new(1),
         impl_def: yelang_arena::DefId::new(2),
         class: yelang_qir::expr::AggregateClass::Distributive,
