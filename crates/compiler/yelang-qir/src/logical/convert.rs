@@ -228,41 +228,64 @@ fn lower_block(
     ty: TyId,
 ) -> Result<QExprId, LoweringError> {
     ctx.push_binder_scope();
-    let mut result_expr = None;
+
+    // Forward pass: allocate binders and lower initializers in statement order.
+    // Local values are recorded immediately so that later statements can inline
+    // them when extracting query subplans.
+    let mut let_bindings: Vec<(crate::ids::BinderId, crate::ids::QExprId)> = Vec::new();
+    let mut expr_statements: Vec<crate::ids::QExprId> = Vec::new();
+
     for &stmt_id in stmts {
         let Some(stmt) = ctx.thir.stmts.get(stmt_id) else { continue };
         match stmt {
             yelang_thir::ThirStmt::Let { pat, init, .. } => {
                 let binder = plan.fresh_binder();
                 ctx.insert_binder(*pat, binder);
-                if let Some(init_expr) = init {
-                    let value = lower_scalar_expr(plan, ctx, *init_expr)?;
-                    let body = if let Some(tail_expr) = tail {
-                        lower_scalar_expr(plan, ctx, tail_expr)?
-                    } else {
-                        plan.alloc_expr(QExpr::Tuple(vec![], ty))
-                    };
-                    result_expr = Some(plan.alloc_expr(QExpr::Let {
-                        name: binder,
-                        value,
-                        body,
-                        ty,
-                    }));
-                }
+                let value = if let Some(init_expr) = init {
+                    extract_expr(plan, ctx, *init_expr)?
+                } else {
+                    plan.alloc_expr(QExpr::Tuple(vec![], ty))
+                };
+                ctx.insert_binder_local_value(binder, value);
+                let_bindings.push((binder, value));
             }
             yelang_thir::ThirStmt::Expr { expr } => {
-                result_expr = Some(lower_scalar_expr(plan, ctx, *expr)?);
+                let value = extract_expr(plan, ctx, *expr)?;
+                expr_statements.push(value);
             }
             _ => {}
         }
     }
-    let expr = if let Some(tail_expr) = tail {
-        lower_scalar_expr(plan, ctx, tail_expr)?
+
+    // Build the nested `Let` tree from the tail backwards so that the first
+    // statement is the outermost binder.
+    let mut body = if let Some(tail_expr) = tail {
+        extract_expr(plan, ctx, tail_expr)?
     } else {
-        result_expr.unwrap_or_else(|| plan.alloc_expr(QExpr::Tuple(vec![], ty)))
+        plan.alloc_expr(QExpr::Tuple(vec![], ty))
     };
+
+    for (binder, value) in let_bindings.into_iter().rev() {
+        body = plan.alloc_expr(QExpr::Let {
+            name: binder,
+            value,
+            body,
+            ty,
+        });
+    }
+
+    for value in expr_statements.into_iter().rev() {
+        let discard = plan.fresh_binder();
+        body = plan.alloc_expr(QExpr::Let {
+            name: discard,
+            value,
+            body,
+            ty,
+        });
+    }
+
     ctx.pop_binder_scope();
-    Ok(expr)
+    Ok(body)
 }
 
 /// Convert a QExpr that wraps a subplan into the underlying LirId.
@@ -277,6 +300,21 @@ pub fn expr_to_lir(
 ) -> Result<LirId, LoweringError> {
     match plan.expr(expr) {
         QExpr::Subplan(lir, _) => Ok(*lir),
+        QExpr::Column(binder, _ty) => {
+            // If the column references a let-bound local value, inline that
+            // value as the scan source so the subplan remains self-contained
+            // when it is extracted from its surrounding `let` context.
+            let source_expr = ctx
+                .lookup_binder_local_value(*binder)
+                .unwrap_or(expr);
+            let source_ty = plan.expr(source_expr).ty();
+            if let Some(elem_ty) = ctx.queryable_element_ty(source_ty) {
+                let source = crate::lir::operator::ScanSource::Expr(source_expr);
+                Ok(plan.scan(source, elem_ty))
+            } else {
+                Err(LoweringError::UnsupportedExpr)
+            }
+        }
         other => {
             let ty = other.ty();
             if let Some(elem_ty) = ctx.queryable_element_ty(ty) {

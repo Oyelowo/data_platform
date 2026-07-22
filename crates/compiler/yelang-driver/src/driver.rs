@@ -14,7 +14,7 @@ use yelang_lexer::TokenKind;
 use yelang_qir::backend::MemoryBackend;
 use yelang_qir::exec::{MemoryExecutor, QueryExecutor, Value};
 use yelang_qir::lir::plan::LogicalPlan;
-use yelang_qir::{lower_query, plan_logical as plan_logical_fn};
+use yelang_qir::plan_logical as plan_logical_fn;
 use yelang_thir::context::LoweringContext as ThirLoweringContext;
 use yelang_resolve::resolve_crate;
 use yelang_tycheck::tcx::TyCtxt;
@@ -79,100 +79,24 @@ impl CompiledCrate {
             expr_tys: &thir_ctx.expr_tys,
             pats: &thir_ctx.pats,
             stmts: &thir_ctx.stmts,
+            local_pats: &thir_ctx.local_pats,
         };
 
-        yelang_qir::logical::lower_thir_body(&self.tcx, thir_view, thir_body_id, &results)
-            .map_err(|e| {
-                eprintln!("QIR lowering failed: {:?}", e);
-                match e {
-                    yelang_qir::QirError::Lowering(le) => DriverError::QirLowering(le),
-                    _ => DriverError::QirLowering(yelang_qir::LoweringError::UnsupportedExpr),
-                }
+        yelang_qir::logical::lower_thir_body(&self.tcx, thir_view, body_id, thir_body_id, &results)
+            .map_err(|e| match e {
+                yelang_qir::QirError::Lowering(le) => DriverError::QirLowering(le),
+                _ => DriverError::QirLowering(yelang_qir::LoweringError::UnsupportedExpr),
             })
     }
 
     /// Plan this compiled crate's logical plan for the in-memory backend and
-    /// execute it. If the crate was compiled without a query expression, the
-    /// `main` body is evaluated directly.
+    /// execute it.
     pub fn run(&self) -> Result<Value> {
-        if self.plan.root.is_some() {
-            let physical = plan_logical_fn(&self.plan, &MemoryBackend::new())?;
-            return MemoryExecutor::new()
-                .execute(&physical)
-                .map_err(|e| DriverError::Execution(format!("{:?}", e)));
-        }
-        self.eval_main()
-    }
-
-    /// Evaluate the `main` function body directly when it contains no query.
-    ///
-    /// Looks for a tail expression or a `let _ = <expr>;` binding and lowers it
-    /// to a single-node physical plan.
-    fn eval_main(&self) -> Result<Value> {
-        let main_def = self.main_def().ok_or(DriverError::MissingMain)?;
-        let body_id = main_body(&self.tcx, main_def).ok_or(DriverError::MainHasNoBody)?;
-        let results = self.tcx
-            .typeck_results
-            .get(main_def)
-            .ok_or_else(|| DriverError::TypeCheck(vec![]))?;
-
-        let mut plan = LogicalPlan::empty();
-        let mut ctx = yelang_qir::lir::lower::LoweringCtxt::new(&self.tcx, body_id, results);
-        ctx.populate_stdlib_tables()
-            .map_err(|e| DriverError::QirLowering(e))?;
-        yelang_qir::lir::lower::populate_local_values(&mut plan, &mut ctx, body_id)
-            .map_err(|e| DriverError::QirLowering(e))?;
-
-        let body = self.tcx.crate_hir().body(body_id).ok_or(DriverError::MainHasNoBody)?;
-        let body_expr = self.tcx.crate_hir().expr(body.value).ok_or(DriverError::MissingQuery)?;
-        let eval_expr_id = match body_expr {
-            Expr::Block { block } => {
-                // Prefer the block's tail expression.
-                if let Some(tail) = block.expr {
-                    Some(tail)
-                } else {
-                    // Otherwise use the last `let _ = <expr>;` binding.
-                    block.stmts.iter().rev().find_map(|stmt_id| {
-                        let stmt = self.tcx.crate_hir().stmt(*stmt_id)?;
-                        match stmt {
-                            yelang_hir::hir::core::Stmt::Let { pat, init, .. }
-                                if is_discard_pattern(&self.tcx, *pat) =>
-                            {
-                                *init
-                            }
-                            _ => None,
-                        }
-                    })
-                }
-            }
-            _ => Some(body.value),
-        };
-
-        let eval_expr_id = eval_expr_id.ok_or(DriverError::MissingQuery)?;
-        let qexpr = yelang_qir::lir::lower::expr::lower_hir_expr(&mut plan, &mut ctx, eval_expr_id)
-            .map_err(|e| DriverError::QirLowering(e))?;
-
-        let root = match plan.expr(qexpr) {
-            yelang_qir::expr::QExpr::Subplan(lir, _) => *lir,
-            _ => {
-                let ty = plan.expr(qexpr).ty();
-                plan.expr_op(qexpr, ty)
-            }
-        };
-        plan.set_root(root);
-
-        let physical = plan_logical_fn(&plan, &MemoryBackend::new())?;
+        let physical = plan_logical_fn(&self.plan, &MemoryBackend::new())?;
         MemoryExecutor::new()
             .execute(&physical)
             .map_err(|e| DriverError::Execution(format!("{:?}", e)))
     }
-}
-
-fn is_discard_pattern(tcx: &TyCtxt, pat_id: yelang_hir::ids::PatId) -> bool {
-    tcx.crate_hir()
-        .pat(pat_id)
-        .map(|p| matches!(p, yelang_hir::hir::pat::Pat::Wild))
-        .unwrap_or(false)
 }
 
 /// Entry point for compiling and running small snippets of Yelang source.
@@ -220,13 +144,9 @@ impl Driver {
 
         let main_def = find_main(&tcx).ok_or(DriverError::MissingMain)?;
         let body_id = main_body(&tcx, main_def).ok_or(DriverError::MainHasNoBody)?;
-        let query_loc = find_query(&tcx, body_id).ok_or(DriverError::MissingQuery)?;
-        let results = tcx
-            .typeck_results
-            .get(main_def)
-            .ok_or_else(|| DriverError::TypeCheck(vec![]))?;
-
-        let plan = lower_query(&tcx, query_loc.body_id, query_loc.query_id, results)?;
+        // `compile` keeps the old contract: `main` must contain a query expression.
+        let _query_loc = find_query(&tcx, body_id).ok_or(DriverError::MissingQuery)?;
+        let plan = lower_main_to_plan(&tcx, main_def, body_id)?;
 
         Ok(CompiledCrate { tcx, plan })
     }
@@ -261,15 +181,7 @@ impl Driver {
 
         let main_def = find_main(&tcx).ok_or(DriverError::MissingMain)?;
         let body_id = main_body(&tcx, main_def).ok_or(DriverError::MainHasNoBody)?;
-        let results = tcx
-            .typeck_results
-            .get(main_def)
-            .ok_or_else(|| DriverError::TypeCheck(vec![]))?;
-
-        let mut plan = LogicalPlan::empty();
-        if let Some(query_loc) = find_query(&tcx, body_id) {
-            plan = lower_query(&tcx, query_loc.body_id, query_loc.query_id, results)?;
-        }
+        let plan = lower_main_to_plan(&tcx, main_def, body_id)?;
 
         Ok(CompiledCrate { tcx, plan })
     }
@@ -351,6 +263,43 @@ fn main_body(tcx: &TyCtxt, def_id: yelang_arena::DefId) -> Option<BodyId> {
         .and_then(|i| match &i.kind {
             ItemKind::Fn { body, .. } => Some(*body),
             _ => None,
+        })
+}
+
+/// Lower the body of `main` (or any function) through THIR into a QIR logical plan.
+fn lower_main_to_plan(tcx: &TyCtxt, def_id: yelang_arena::DefId, body_id: BodyId) -> Result<LogicalPlan> {
+    let results = tcx
+        .typeck_results
+        .get(def_id)
+        .cloned()
+        .ok_or_else(|| DriverError::TypeCheck(vec![]))?;
+
+    // THIR lowering needs an interner, but the HIR already contains resolved
+    // symbols. A fresh interner is sufficient for the structural lowering.
+    let interner = yelang_interner::Interner::new();
+    let mut thir_ctx = ThirLoweringContext::new(
+        tcx.crate_hir(),
+        &results,
+        &tcx.crate_hir().lang_items,
+        &interner,
+    );
+    let thir_body_id = thir_ctx
+        .lower_body(body_id)
+        .map_err(|_| DriverError::QirLowering(yelang_qir::LoweringError::UnsupportedExpr))?;
+
+    let thir_view = yelang_qir::logical::ThirView {
+        bodies: &thir_ctx.bodies,
+        exprs: &thir_ctx.exprs,
+        expr_tys: &thir_ctx.expr_tys,
+        pats: &thir_ctx.pats,
+        stmts: &thir_ctx.stmts,
+        local_pats: &thir_ctx.local_pats,
+    };
+
+    yelang_qir::logical::lower_thir_body(tcx, thir_view, body_id, thir_body_id, &results)
+        .map_err(|e| match e {
+            yelang_qir::QirError::Lowering(le) => DriverError::QirLowering(le),
+            _ => DriverError::QirLowering(yelang_qir::LoweringError::UnsupportedExpr),
         })
 }
 

@@ -76,10 +76,19 @@ pub fn lower_aggregate_with_config(
     let impl_info = find_or_resolve_aggregate_impl(ctx, agg_def, elem_ty)?;
 
     // The per-row input is the element produced by the upstream operator.
-    let input_binder = plan.props[input]
+    let _input_binder = plan.props[input]
         .output_binder
         .unwrap_or_else(|| plan.fresh_binder());
-    let per_row = plan.alloc_expr(QExpr::Column(input_binder, elem_ty));
+    // Wrap the per-row element as a closure `|row| row` so the executor can
+    // apply it to each input row uniformly with init/step/merge/finish.
+    let row_binder = plan.fresh_binder();
+    let per_row_body = plan.alloc_expr(QExpr::Column(row_binder, elem_ty));
+    let per_row = plan.alloc_expr(QExpr::Closure {
+        params: vec![row_binder],
+        body: per_row_body,
+        captures: vec![],
+        ty: elem_ty,
+    });
 
     let init = build_aggregate_closure(plan, ctx, impl_info.init, &[], impl_info.acc_ty)?;
     let step = build_aggregate_closure(
@@ -339,9 +348,10 @@ fn build_aggregate_closure(
     let mut pat_to_binder: std::collections::HashMap<PatId, BinderId> =
         std::collections::HashMap::new();
 
-    // Map HIR body params to fresh QIR binders by position. The built-in
-    // aggregate bodies use `acc`, `item`, `a`, `b` consistently.
-    for (hir_param, (_name, _ty)) in body.params.iter().zip(params.iter()) {
+    // Map HIR body params to fresh QIR binders by position. Aggregate method
+    // bodies have `self` as the first parameter; the supplied `params` are the
+    // non-`self` parameters, so we skip the HIR `self` param.
+    for (hir_param, (_name, _ty)) in body.params.iter().skip(1).zip(params.iter()) {
         let binder = plan.fresh_binder();
         param_binders.push(binder);
         pat_to_binder.insert(hir_param.pat, binder);
@@ -554,13 +564,30 @@ fn hir_ty_to_ty(
     ctx: &super::ExtractCtxt<'_>,
     hir_ty_id: yelang_hir::ids::HirTyId,
 ) -> Option<TyId> {
+    use yelang_resolve::lang_items::LangItem;
+    use yelang_ty::primitive::{FloatTy, IntTy};
+
     let hir_ty = ctx.tcx.crate_hir().ty(hir_ty_id)?;
     match hir_ty {
         yelang_hir::hir::ty::Ty::Path { res, .. } => match res {
-            Res::Def { def_id } => Some(ctx.tcx.interner().mk_ty(yelang_ty::ty::Ty::Adt(
-                yelang_ty::ty::AdtDef { def_id: *def_id },
-                yelang_ty::list::List::empty(),
-            ))),
+            Res::Def { def_id } => {
+                let interner = ctx.tcx.interner();
+                // Primitive types are registered as lang items; map them to the
+                // canonical primitive `Ty` instead of an ADT wrapper.
+                if Some(*def_id) == ctx.tcx.lang_item(LangItem::I32) {
+                    return Some(interner.mk_ty(Ty::Int(IntTy::I32)));
+                }
+                if Some(*def_id) == ctx.tcx.lang_item(LangItem::I64) {
+                    return Some(interner.mk_ty(Ty::Int(IntTy::I64)));
+                }
+                if Some(*def_id) == ctx.tcx.lang_item(LangItem::F64) {
+                    return Some(interner.mk_ty(Ty::Float(FloatTy::F64)));
+                }
+                Some(interner.mk_ty(yelang_ty::ty::Ty::Adt(
+                    yelang_ty::ty::AdtDef { def_id: *def_id },
+                    yelang_ty::list::List::empty(),
+                )))
+            }
             _ => None,
         },
         _ => None,
@@ -570,24 +597,16 @@ fn hir_ty_to_ty(
 /// Classify a cast into a `CastKind` the executor can interpret.
 fn classify_cast(
     interner: &yelang_ty::interner::Interner,
-    from: TyId,
+    _from: TyId,
     to: TyId,
 ) -> crate::expr::CastKind {
-    use yelang_ty::primitive::IntTy;
     use yelang_ty::ty::Ty;
-    let from_kind = match interner.ty(from) {
-        Ty::Int(IntTy::I32) | Ty::Int(IntTy::I64) | Ty::Int(IntTy::I128) | Ty::Uint(_) => "int",
-        Ty::Float(_) => "float",
-        _ => "other",
-    };
-    let to_kind = match interner.ty(to) {
-        Ty::Int(_) | Ty::Uint(_) => "int",
-        Ty::Float(_) => "float",
-        _ => "other",
-    };
-    match (from_kind, to_kind) {
-        ("int", "float") => crate::expr::CastKind::IntToFloat,
-        ("float", "int") => crate::expr::CastKind::FloatToInt,
+    // Casts to a floating-point target are lowered as IntToFloat; the executor
+    // passes Float values through unchanged. Likewise for Int targets. This is
+    // robust against incomplete type inference for the source expression.
+    match interner.ty(to) {
+        Ty::Float(_) => crate::expr::CastKind::IntToFloat,
+        Ty::Int(_) | Ty::Uint(_) => crate::expr::CastKind::FloatToInt,
         _ => crate::expr::CastKind::Numeric,
     }
 }

@@ -9,6 +9,7 @@ pub mod aggregate;
 pub mod context;
 pub mod convert;
 pub mod extract;
+pub mod hir_expr;
 pub mod inline;
 pub mod intrinsic;
 pub mod query_syntax;

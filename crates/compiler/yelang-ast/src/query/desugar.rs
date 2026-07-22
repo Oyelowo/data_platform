@@ -46,6 +46,36 @@ struct QueryAggregateFolder<'a> {
 }
 
 impl Folder for QueryAggregateFolder<'_> {
+    fn fold_expr(&mut self, node: Expr) -> Expr {
+        // Detect `select aggregate(x) from source@x` and replace the whole query
+        // expression with the equivalent `Queryable` method-call chain. This
+        // preserves the semantics (a single scalar result) instead of leaving a
+        // query that projects the aggregate once per row.
+        let is_aggregate_query = if let ExprKind::Query(q) = &node.kind {
+            matches!(&q.kind, crate::query::QueryKind::Select(sq)
+                if sq.from.len() == 1 && as_aggregate_call(self.interner, &sq.projection).is_some())
+        } else {
+            false
+        };
+
+        let folded = crate::visit::fold::expr::fold_expr(self, node);
+
+        if is_aggregate_query {
+            if let ExprKind::Query(q) = folded.kind {
+                if let crate::query::QueryKind::Select(sq) = q.kind {
+                    return sq.projection;
+                }
+                // Not a select after folding; reconstruct the query expression.
+                return Expr {
+                    kind: ExprKind::Query(q),
+                    span: folded.span,
+                };
+            }
+        }
+
+        folded
+    }
+
     fn fold_select_stmt(&mut self, stmt: SelectQ) -> SelectQ {
         // Fold all non-projection parts first so that any nested queries inside
         // where/group/order clauses are also desugared.

@@ -43,6 +43,11 @@ impl KernelRegistry {
                 (Value::Float(l), Value::Float(r)) if r != 0.0 => Value::Float(l / r),
                 _ => Value::Null,
             },
+            QBinaryOp::Mod => match (left, right) {
+                (Value::Int(l), Value::Int(r)) if r != 0 => Value::Int(l.rem_euclid(r)),
+                (Value::Float(l), Value::Float(r)) if r != 0.0 => Value::Float(l.rem_euclid(r)),
+                _ => Value::Null,
+            },
             QBinaryOp::Gt => match (left, right) {
                 (Value::Int(l), Value::Int(r)) => Value::Bool(l > r),
                 (Value::Float(l), Value::Float(r)) => Value::Bool(l > r),

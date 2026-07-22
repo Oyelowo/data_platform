@@ -1,6 +1,7 @@
 //! Main THIR → LIR extraction pass.
 
 use yelang_arena::DefId;
+use yelang_hir::ids::BodyId;
 use yelang_interner::Symbol;
 use yelang_thir::{ThirBodyId, ThirExpr, ThirExprId};
 use yelang_tycheck::tcx::TyCtxt;
@@ -9,7 +10,7 @@ use yelang_ty::ty::{Ty, TyId};
 
 use crate::errors::{LoweringError, QirResult};
 use crate::expr::{Direction, OrderKey, QExpr};
-use crate::ids::{LirId, QExprId};
+use crate::ids::{BinderId, LirId, QExprId};
 use crate::lir::plan::LogicalPlan;
 use crate::rewrite;
 
@@ -19,9 +20,14 @@ use super::convert::{expr_to_lir, lower_scalar_expr};
 use super::intrinsic::QueryableIntrinsic;
 
 /// Lower a typed THIR body to a QIR logical plan.
+///
+/// `hir_body_id` is the source HIR body. It is needed so that `let`-bound
+/// locals and function parameters can be mapped to QIR fragments before the
+/// query-syntax lowering resolves variables like `from xs@x`.
 pub fn lower_thir_body(
     tcx: &TyCtxt,
     thir: ThirView<'_>,
+    hir_body_id: BodyId,
     body_id: ThirBodyId,
     results: &TypeckResults,
 ) -> QirResult<LogicalPlan> {
@@ -34,18 +40,106 @@ pub fn lower_thir_body(
         .get(body_id)
         .ok_or(LoweringError::UnsupportedExpr)?;
 
+    // Build a reverse map from THIR pattern id to the source HIR pattern id.
+    let mut thir_to_hir_pat: yelang_arena::FxHashMap<yelang_thir::ThirPatId, yelang_hir::ids::PatId> =
+        yelang_arena::FxHashMap::with_capacity(ctx.thir.local_pats.len());
+    for (&hir_pat, &thir_pat) in ctx.thir.local_pats.iter() {
+        thir_to_hir_pat.insert(thir_pat, hir_pat);
+    }
+
     // Introduce binders for the body's parameters. Queryable parameters become
     // the roots of pipeline scans.
     for &param in &body.params {
         let binder = plan.fresh_binder();
         ctx.insert_binder(param, binder);
+        if let Some(hir_pat) = thir_to_hir_pat.get(&param).copied() {
+            ctx.insert_hir_binder(hir_pat, binder);
+            let param_ty = ctx.results.local_ty(hir_pat).or_else(|| ctx.results.pat_ty(hir_pat)).unwrap_or_else(unit_ty_id);
+            let param_expr = plan.alloc_expr(QExpr::Column(binder, param_ty));
+            ctx.insert_hir_local_value(hir_pat, param_expr);
+        }
     }
 
+    // Scan HIR let-bindings and make their initializers available to query
+    // syntax lowering as inline QExpr fragments.
+    populate_hir_local_values(&mut plan, &mut ctx, hir_body_id)?;
+
     let root_expr = extract_expr(&mut plan, &mut ctx, body.value)?;
-    let root_lir = expr_to_lir(&mut plan, &mut ctx, root_expr)?;
+    // If the function body is a block containing `let` bindings before a query
+    // expression, the returned expression is a `QExpr::Let` wrapping a subplan.
+    // The `let` initializers have already been inlined into the query (e.g. as
+    // the scan source), so we unwrap to the subplan for the plan root.
+    let root_expr = unwrap_subplan_from_let(&plan, root_expr);
+    let root_lir = match expr_to_lir(&mut plan, &mut ctx, root_expr) {
+        Ok(lir) => lir,
+        Err(_) => {
+            // The root is an ordinary scalar expression (no query pipeline).
+            // Wrap it in a single expression operator so the same execution
+            // path can handle it.
+            let ty = plan.expr(root_expr).ty();
+            plan.expr_op(root_expr, ty)
+        }
+    };
     plan.set_root(root_lir);
     rewrite::apply_rewrites(&mut plan)?;
     Ok(plan)
+}
+
+fn unwrap_subplan_from_let(plan: &LogicalPlan, expr_id: crate::ids::QExprId) -> crate::ids::QExprId {
+    fn search(plan: &LogicalPlan, expr_id: crate::ids::QExprId) -> Option<crate::ids::QExprId> {
+        match plan.expr(expr_id) {
+            crate::expr::QExpr::Subplan(_, _) => Some(expr_id),
+            crate::expr::QExpr::Let { value, body, .. } => {
+                search(plan, *value).or_else(|| search(plan, *body))
+            }
+            _ => None,
+        }
+    }
+    search(plan, expr_id).unwrap_or(expr_id)
+}
+
+fn populate_hir_local_values(
+    plan: &mut LogicalPlan,
+    ctx: &mut ExtractCtxt<'_>,
+    hir_body_id: BodyId,
+) -> Result<(), LoweringError> {
+    let hir = ctx.tcx.crate_hir();
+    let body = hir.body(hir_body_id).ok_or(LoweringError::UnsupportedExpr)?;
+    let mut binder_map = yelang_arena::FxHashMap::<yelang_hir::ids::PatId, BinderId>::default();
+    collect_let_inits(plan, ctx, body.value, &mut binder_map)
+}
+
+fn collect_let_inits(
+    plan: &mut LogicalPlan,
+    ctx: &mut ExtractCtxt<'_>,
+    expr_id: yelang_hir::ids::ExprId,
+    binder_map: &mut yelang_arena::FxHashMap<yelang_hir::ids::PatId, BinderId>,
+) -> Result<(), LoweringError> {
+    let hir = ctx.tcx.crate_hir();
+    let Some(expr) = hir.expr(expr_id) else { return Ok(()) };
+    let block = match expr {
+        yelang_hir::hir::expr::Expr::Block { block } => block,
+        _ => return Ok(()),
+    };
+    for stmt_id in &block.stmts {
+        let Some(stmt) = hir.stmt(*stmt_id) else { continue };
+        if let yelang_hir::hir::core::Stmt::Let { pat, init, .. } = stmt {
+            if let Some(init_id) = init {
+                // Query-syntax expressions are lowered by the THIR extractor, not
+                // inlined as local values. Only store scalar/collection fragments.
+                if matches!(hir.expr(*init_id), Some(yelang_hir::hir::expr::Expr::Query { .. })) {
+                    continue;
+                }
+                let init_expr = super::hir_expr::lower_hir_expr(plan, ctx, *init_id, binder_map)?;
+                ctx.insert_hir_local_value(*pat, init_expr);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn unit_ty_id() -> TyId {
+    yelang_ty::ty::TyId::new(1)
 }
 
 /// Lower a single THIR expression to a QExpr.

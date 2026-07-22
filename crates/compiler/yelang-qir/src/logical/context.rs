@@ -64,6 +64,8 @@ pub struct ThirView<'a> {
     pub expr_tys: &'a slotmap::SecondaryMap<yelang_thir::ThirExprId, yelang_ty::ty::TyId>,
     pub pats: &'a slotmap::SlotMap<yelang_thir::ThirPatId, yelang_thir::ThirPat>,
     pub stmts: &'a slotmap::SlotMap<yelang_thir::ThirStmtId, yelang_thir::ThirStmt>,
+    /// Mapping from HIR pattern ids to THIR pattern ids for the current body.
+    pub local_pats: &'a yelang_arena::FxHashMap<yelang_hir::ids::PatId, yelang_thir::ThirPatId>,
 }
 
 /// Context for lowering a THIR body to LIR.
@@ -81,6 +83,17 @@ pub struct ExtractCtxt<'a> {
     /// Stack of binder scopes. Each scope maps a THIR pattern id to the QIR
     /// binder id used for pipeline columns and closure parameters.
     binder_scopes: Vec<FxHashMap<yelang_thir::ThirPatId, crate::ids::BinderId>>,
+    /// HIR pattern ids that reference `let`-bound local values, mapped to the
+    /// QExpr fragment that should be inlined when the variable is referenced
+    /// from query syntax (e.g. `from xs@x` where `xs` is a local array).
+    pub hir_local_values: FxHashMap<yelang_hir::ids::PatId, crate::ids::QExprId>,
+    /// Stack of binder scopes keyed by HIR pattern id. Used by query-syntax
+    /// lowering for `from`, `group by`, and nested closures.
+    hir_binder_scopes: Vec<FxHashMap<yelang_hir::ids::PatId, crate::ids::BinderId>>,
+    /// QIR expressions that a binder is bound to in the current THIR body.
+    /// This is used to inline local array sources when a subplan is extracted
+    /// from its surrounding `let` context.
+    binder_local_values: FxHashMap<crate::ids::BinderId, crate::ids::QExprId>,
 }
 
 impl<'a> ExtractCtxt<'a> {
@@ -99,6 +112,9 @@ impl<'a> ExtractCtxt<'a> {
             aggregate_impls: FxHashMap::default(),
             aggregate_method_name: None,
             binder_scopes: vec![FxHashMap::default()],
+            hir_local_values: FxHashMap::default(),
+            hir_binder_scopes: vec![FxHashMap::default()],
+            binder_local_values: FxHashMap::default(),
         };
         ctx.discover_lang_items();
         ctx.discover_queryable_methods()?;
@@ -503,6 +519,75 @@ impl<'a> ExtractCtxt<'a> {
     /// Pop the current binder scope.
     pub fn pop_binder_scope(&mut self) {
         self.binder_scopes.pop();
+    }
+
+    /// Register a HIR pattern as an inlined local value (e.g. a `let`-bound
+    /// source collection).
+    pub fn insert_hir_local_value(
+        &mut self,
+        pat_id: yelang_hir::ids::PatId,
+        expr: crate::ids::QExprId,
+    ) {
+        self.hir_local_values.insert(pat_id, expr);
+    }
+
+    /// Look up the QExpr fragment for a HIR local variable, if any.
+    pub fn lookup_hir_local_value(
+        &self,
+        pat_id: yelang_hir::ids::PatId,
+    ) -> Option<crate::ids::QExprId> {
+        self.hir_local_values.get(&pat_id).copied()
+    }
+
+    /// Register a HIR pattern as a pipeline row binder.
+    pub fn insert_hir_binder(
+        &mut self,
+        pat_id: yelang_hir::ids::PatId,
+        binder: crate::ids::BinderId,
+    ) {
+        if let Some(scope) = self.hir_binder_scopes.last_mut() {
+            scope.insert(pat_id, binder);
+        }
+    }
+
+    /// Look up the QIR binder for a HIR pattern id.
+    pub fn lookup_hir_binder(
+        &self,
+        pat_id: yelang_hir::ids::PatId,
+    ) -> Option<crate::ids::BinderId> {
+        for scope in self.hir_binder_scopes.iter().rev() {
+            if let Some(binder) = scope.get(&pat_id) {
+                return Some(*binder);
+            }
+        }
+        None
+    }
+
+    /// Register the QIR expression that a binder is bound to.
+    pub fn insert_binder_local_value(
+        &mut self,
+        binder: crate::ids::BinderId,
+        expr: crate::ids::QExprId,
+    ) {
+        self.binder_local_values.insert(binder, expr);
+    }
+
+    /// Look up the QIR expression that a binder is bound to, if any.
+    pub fn lookup_binder_local_value(
+        &self,
+        binder: crate::ids::BinderId,
+    ) -> Option<crate::ids::QExprId> {
+        self.binder_local_values.get(&binder).copied()
+    }
+
+    /// Push a new HIR-pattern binder scope.
+    pub fn push_hir_binder_scope(&mut self) {
+        self.hir_binder_scopes.push(FxHashMap::default());
+    }
+
+    /// Pop the current HIR-pattern binder scope.
+    pub fn pop_hir_binder_scope(&mut self) {
+        self.hir_binder_scopes.pop();
     }
 
 }

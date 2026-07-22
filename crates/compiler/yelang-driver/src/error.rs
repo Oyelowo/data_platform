@@ -65,6 +65,7 @@ pub enum DriverError {
 /// This is used internally by the driver so that `run` can lower and execute
 /// the first query found in `main` without exposing HIR IDs in the public API.
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub(crate) struct QueryLocation {
     pub(crate) body_id: BodyId,
     pub(crate) query_id: QueryId,
