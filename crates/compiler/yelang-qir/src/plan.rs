@@ -1,9 +1,9 @@
 //! Logical query plan — the algebraic operator tree.
 //!
-//! This is NOT a new IR. It is a *view* of typed THIR expressions that makes
+//! This is NOT a new IR. It is a *view* of typed expressions that makes
 //! the relational/collection algebra explicit so the optimizer can rewrite it.
-//! Every predicate, projection, and closure body is a [`ThirExprId`] reference
-//! back into the THIR — the plan tree never duplicates expression structure.
+//! Every predicate, projection, and closure body is an [`ExprRef`] reference
+//! back into the HIR — the plan tree never duplicates expression structure.
 //!
 //! Two entry points produce the same plan tree:
 //! - `ThirExpr::Query(QueryId)` — from `select … from …` syntax
@@ -15,9 +15,19 @@
 use std::sync::Arc;
 
 use yelang_arena::{DefId, Id, IndexVec, SecondaryMap};
-use yelang_hir::ids::QueryId;
+use yelang_hir::ids::{ExprId, QueryId};
 use yelang_interner::Symbol;
-use yelang_thir::ids::ThirExprId;
+
+/// Expression reference used throughout the plan tree.
+///
+/// Currently HIR [`ExprId`] because:
+/// - HIR query nodes (`SelectQuery`, etc.) use `ExprId` for sub-expressions
+/// - Type information is available from tycheck results keyed by `ExprId`
+/// - HIR expressions are resolved and desugared
+///
+/// This may migrate to `ExprRef` once query sub-expressions are lowered
+/// to THIR. The alias makes the switch a one-line change.
+pub type ExprRef = ExprId;
 
 // ---------------------------------------------------------------------------
 // PlanId
@@ -133,9 +143,9 @@ pub enum PlanOrigin {
     /// From `select … from …` / `create` / `update` / etc. syntax.
     QuerySyntax(QueryId),
     /// From a `Queryable` method call in THIR (`.filter()`, `.map()`, …).
-    MethodCall(ThirExprId),
+    MethodCall(ExprRef),
     /// From an `@intrinsic(query_*)` call.
-    Intrinsic(ThirExprId),
+    Intrinsic(ExprRef),
     /// Created by an optimization pass (e.g. decorrelation introduced a join).
     Synthetic,
 }
@@ -157,7 +167,7 @@ pub enum Plan {
     Scan {
         source: SourceRef,
         /// Predicate pushed into the scan (optimizer may add/remove).
-        filter: Option<ThirExprId>,
+        filter: Option<ExprRef>,
         /// Field list pushed into the scan (optimizer may trim).
         projection: Option<Vec<Symbol>>,
         /// Row range pushed into the scan.
@@ -170,7 +180,7 @@ pub enum Plan {
     /// Lowered from: `[where …]`, `.filter(…)`, pipeline `where`.
     Filter {
         input: PlanId,
-        pred: ThirExprId,
+        pred: ExprRef,
     },
 
     /// Compute new output columns from expressions.
@@ -180,7 +190,7 @@ pub enum Plan {
     Project {
         input: PlanId,
         /// `(output_name, expression)` pairs.
-        exprs: Vec<(Symbol, ThirExprId)>,
+        exprs: Vec<(Symbol, ExprRef)>,
     },
 
     /// Apply a closure to each element, optionally flattening.
@@ -193,7 +203,7 @@ pub enum Plan {
     Map {
         input: PlanId,
         /// The closure body — a THIR expression referencing the element binder.
-        func: ThirExprId,
+        func: ExprRef,
         /// How many nesting levels to flatten. 0 = no flatten (plain map).
         flatten_depth: usize,
     },
@@ -208,9 +218,9 @@ pub enum Plan {
         right: PlanId,
         kind: JoinKind,
         /// Equi-join key pairs: `(left_key_expr, right_key_expr)`.
-        on: Vec<(ThirExprId, ThirExprId)>,
+        on: Vec<(ExprRef, ExprRef)>,
         /// Residual (non-equi) predicate applied after the join.
-        filter: Option<ThirExprId>,
+        filter: Option<ExprRef>,
     },
 
     // ── Aggregation ────────────────────────────────────────────────────
@@ -221,7 +231,7 @@ pub enum Plan {
     Aggregate {
         input: PlanId,
         /// Grouping keys: `(output_name, key_expression)`.
-        keys: Vec<(Symbol, ThirExprId)>,
+        keys: Vec<(Symbol, ExprRef)>,
         /// Aggregate computations per group.
         aggs: Vec<AggCall>,
         /// The `into <label>` name for the resulting group collection.
@@ -243,9 +253,9 @@ pub enum Plan {
     Limit {
         input: PlanId,
         /// Number of rows to skip (offset). `None` = 0.
-        skip: Option<ThirExprId>,
+        skip: Option<ExprRef>,
         /// Maximum number of rows to return. `None` = unbounded.
-        fetch: Option<ThirExprId>,
+        fetch: Option<ExprRef>,
     },
 
     /// Remove duplicate rows, optionally by key.
@@ -254,7 +264,7 @@ pub enum Plan {
     Distinct {
         input: PlanId,
         /// If `Some`, distinct by these key expressions. If `None`, by all columns.
-        on: Option<Vec<ThirExprId>>,
+        on: Option<Vec<ExprRef>>,
     },
 
     // ── Set operations ─────────────────────────────────────────────────
@@ -295,7 +305,7 @@ pub enum Plan {
         outer: PlanId,
         inner: PlanId,
         /// Join/filter predicate (may reference outer symbols).
-        pred: Option<ThirExprId>,
+        pred: Option<ExprRef>,
         kind: DepJoinKind,
     },
 
@@ -308,7 +318,7 @@ pub enum Plan {
         left: PlanId,
         right: PlanId,
         /// Equi-join key pairs.
-        on: Vec<(ThirExprId, ThirExprId)>,
+        on: Vec<(ExprRef, ExprRef)>,
         /// Aggregates computed per join group.
         aggs: Vec<AggCall>,
     },
@@ -342,7 +352,7 @@ pub enum Plan {
     Repeat {
         input: PlanId,
         /// `λ(iteration_state, collection) -> (new_collection, continue: bool)`
-        func: ThirExprId,
+        func: ExprRef,
         /// Safety bound. `None` = iterate until fixpoint.
         max_iters: Option<usize>,
     },
@@ -361,7 +371,7 @@ pub enum Plan {
     // ── Leaves ─────────────────────────────────────────────────────────
     /// A constant/literal value (e.g. `select 1 from …`).
     Constant {
-        value: ThirExprId,
+        value: ExprRef,
     },
 
     /// An empty relation. `produce_one_row: true` emits a single empty
@@ -384,7 +394,7 @@ pub enum SourceRef {
     /// A local variable holding a collection value.
     Local { name: Symbol },
     /// A function/method call that returns a collection.
-    Call { func: ThirExprId },
+    Call { func: ExprRef },
 }
 
 // ---------------------------------------------------------------------------
@@ -452,9 +462,9 @@ pub struct TraverseSegment {
     /// The target node type reached via this edge.
     pub target: NodeRef,
     /// Optional predicate on the edge element.
-    pub edge_pred: Option<ThirExprId>,
+    pub edge_pred: Option<ExprRef>,
     /// Optional predicate on the target node element.
-    pub target_pred: Option<ThirExprId>,
+    pub target_pred: Option<ExprRef>,
     /// For variable-length hops: `{1..3}`.
     pub hop_range: Option<PlanRange>,
 }
@@ -510,10 +520,10 @@ pub struct AggCall {
 pub enum AggKind {
     // ── Tier 1: compiler-known (full optimization) ─────────────────────
     Count,
-    Sum { expr: ThirExprId },
-    Avg { expr: ThirExprId },
-    Min { expr: ThirExprId },
-    Max { expr: ThirExprId },
+    Sum { expr: ExprRef },
+    Avg { expr: ExprRef },
+    Min { expr: ExprRef },
+    Max { expr: ExprRef },
 
     // ── Tier 2: user-defined via `Aggregate` trait (partial opt) ───────
     /// The compiler knows this is an aggregate (init/accumulate/merge/finish)
@@ -523,15 +533,15 @@ pub enum AggKind {
         /// The `DefId` of the `Aggregate` trait impl.
         impl_def: DefId,
         /// Constructor arguments (e.g. `Percentile { p: 0.99 }`).
-        args: Vec<ThirExprId>,
+        args: Vec<ExprRef>,
         /// The expression being aggregated (input to `accumulate`).
-        input_expr: Option<ThirExprId>,
+        input_expr: Option<ExprRef>,
     },
 
     // ── Tier 3: fully opaque (no optimization through it) ──────────────
     /// A method the compiler doesn't recognize as an aggregate.
     /// Treated as a black box.
-    Opaque { call: ThirExprId },
+    Opaque { call: ExprRef },
 }
 
 // ---------------------------------------------------------------------------
@@ -542,7 +552,7 @@ pub enum AggKind {
 #[derive(Debug, Clone)]
 pub struct OrderSpec {
     /// The expression to sort by.
-    pub expr: ThirExprId,
+    pub expr: ExprRef,
     /// `true` for descending.
     pub desc: bool,
 }
@@ -551,9 +561,9 @@ pub struct OrderSpec {
 #[derive(Debug, Clone)]
 pub struct PlanRange {
     /// Start offset (inclusive). `None` = 0.
-    pub start: Option<ThirExprId>,
+    pub start: Option<ExprRef>,
     /// End bound. `None` = unbounded.
-    pub end: Option<ThirExprId>,
+    pub end: Option<ExprRef>,
     /// Whether the end bound is inclusive (`..=`) or exclusive (`..`).
     pub inclusive: bool,
 }
@@ -619,7 +629,7 @@ pub trait UserDefinedPlanNode: std::fmt::Debug + Send + Sync {
     fn output_fields(&self) -> Vec<Symbol>;
 
     /// Can the optimizer push a filter below this node?
-    fn supports_filter_pushdown(&self, _pred: &ThirExprId) -> bool {
+    fn supports_filter_pushdown(&self, _pred: &ExprRef) -> bool {
         false
     }
 

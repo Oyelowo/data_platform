@@ -21,10 +21,12 @@
 //! - [`PlanMeta`] — per-node algebraic metadata (correlation, partitioning, ordering)
 //! - [`AggKind`] — three-tier aggregate recognition (known / trait-based / opaque)
 
+pub mod extract;
 pub mod plan;
 
+pub use extract::extract_query;
 pub use plan::{
-    AggCall, AggKind, DepJoinKind, Direction, EdgeRef, JoinKind, NodeRef, OrderSpec,
+    AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec,
     Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin, PlanRange, SourceRef,
     TraversePath, TraverseSegment, UserDefinedPlanNode,
 };
