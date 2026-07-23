@@ -15,6 +15,8 @@
 //! storage/execution backends. Each backend (in-memory, single-node,
 //! distributed) implements the [`Executor`] trait to interpret it.
 
+pub mod planner;
+
 use std::sync::Arc;
 
 use yelang_arena::{Id, IndexVec};

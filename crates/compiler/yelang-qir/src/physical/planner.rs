@@ -6,13 +6,11 @@
 //! The planner consults the [`Executor`] trait to make backend-specific
 //! decisions (scan strategy, join algorithm, Exchange insertion).
 
-use yelang_hir::Crate;
-
 use crate::physical::{
-    AggAlgorithm, ExchangeKind, Executor, JoinAlgorithm, PhysArena, PhysId, PhysOp, ScanStrategy,
-    SortAlgorithm, TraverseStrategy,
+    ExchangeKind, Executor, JoinAlgorithm, PhysArena, PhysId, PhysOp,
+    TraverseStrategy,
 };
-use crate::plan::{JoinKind, Plan, PlanArena, PlanId};
+use crate::plan::{Plan, PlanArena, PlanId};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -290,8 +288,8 @@ fn insert_join_exchanges(
     left: PhysId,
     right: PhysId,
     algorithm: JoinAlgorithm,
-    on: &[(crate::plan::ExprRef, crate::plan::ExprRef)],
-    executor: &dyn Executor,
+    _on: &[(crate::plan::ExprRef, crate::plan::ExprRef)],
+    _executor: &dyn Executor,
     phys: &mut PhysArena,
 ) -> (PhysId, PhysId) {
     match algorithm {

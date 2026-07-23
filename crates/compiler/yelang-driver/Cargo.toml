@@ -10,3 +10,14 @@ documentation.workspace = true
 doctest = false
 
 [dependencies]
+yelang-arena = { path = "../yelang-arena" }
+yelang-ast = { path = "../yelang-ast" }
+yelang-hir = { path = "../yelang-hir" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-lexer = { path = "../yelang-lexer" }
+yelang-qir = { path = "../yelang-qir" }
+yelang-resolve = { path = "../yelang-resolve" }
+yelang-thir = { path = "../yelang-thir" }
+yelang-ty = { path = "../yelang-ty" }
+yelang-tycheck = { path = "../yelang-tycheck" }
+thiserror = { workspace = true }
