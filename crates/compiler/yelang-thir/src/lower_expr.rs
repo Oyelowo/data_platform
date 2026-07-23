@@ -228,7 +228,12 @@ impl<'a> LoweringContext<'a> {
                 expr: self.lower_expr(*expr)?,
             },
 
-            yelang_hir::hir::expr::Expr::Query(query_id) => ThirExpr::Query(*query_id),
+            yelang_hir::hir::expr::Expr::Query(query_id) => {
+                // Lower the query's sub-expressions and store them in the
+                // query_lowerings side table for the plan extraction to use.
+                self.lower_query_subexprs(*query_id)?;
+                ThirExpr::Query(*query_id)
+            }
 
             yelang_hir::hir::expr::Expr::Intrinsic { name, args } => ThirExpr::Intrinsic {
                 name: name.symbol,
@@ -298,5 +303,98 @@ impl<'a> LoweringContext<'a> {
         let body = self.lower_expr_body(arm.body)?;
         self.local_pats = saved;
         Ok(ThirArm { pat, guard, body })
+    }
+
+    /// Lower a query's sub-expressions to THIR and store them in the
+    /// `query_lowerings` side table.
+    ///
+    /// This makes the typed THIR expressions available to the plan
+    /// extraction pass, so the plan tree can reference THIR expr IDs
+    /// instead of HIR expr IDs.
+    fn lower_query_subexprs(&mut self, query_id: yelang_hir::ids::QueryId) -> Result<(), LoweringError> {
+        use crate::body::QueryLowering;
+        use yelang_hir::hir::query::QueryKind;
+
+        let Some(query) = self.hir.query(query_id) else {
+            return Ok(());
+        };
+
+        let QueryKind::Select(select) = &query.kind else {
+            return Ok(()); // Mutations not yet lowered.
+        };
+
+        // Lower the projection.
+        let projection = self.lower_expr(select.projection)?;
+
+        // Lower the pipeline where clause.
+        let where_clause = self.lower_opt_expr(select.where_clause)?;
+
+        // Lower order by expressions.
+        let order_by: Vec<_> = select
+            .order_by
+            .iter()
+            .map(|part| self.lower_expr(part.expr))
+            .collect::<Result<_, _>>()?;
+
+        // Lower group by keys.
+        let group_by_keys: Vec<_> = select
+            .group_by
+            .as_ref()
+            .map(|gb| {
+                gb.keys
+                    .iter()
+                    .map(|key| {
+                        let name = key
+                            .name
+                            .map(|id| id.symbol)
+                            .unwrap_or_else(|| yelang_interner::Symbol::from(1u32));
+                        self.lower_expr(key.expr).map(|expr| (name, expr))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        // Lower from source expressions.
+        let from_sources: Vec<_> = select
+            .from
+            .iter()
+            .map(|node| self.lower_expr(node.source))
+            .collect::<Result<_, _>>()?;
+
+        // Lower per-root filters.
+        let from_filters: Vec<_> = select
+            .from
+            .iter()
+            .map(|node| self.lower_opt_expr(node.filter))
+            .collect::<Result<_, _>>()?;
+
+        // Lower range expressions.
+        let (range_start, range_end) = select
+            .range
+            .as_ref()
+            .map(|r| {
+                let start = r.start.map(|e| self.lower_expr(e)).transpose()?;
+                let end = r.end.map(|e| self.lower_expr(e)).transpose()?;
+                Ok::<_, LoweringError>((start, end))
+            })
+            .transpose()?
+            .unwrap_or((None, None));
+
+        self.bodies.query_lowerings.insert(
+            query_id,
+            QueryLowering {
+                projection,
+                where_clause,
+                order_by,
+                group_by_keys,
+                from_sources,
+                from_filters,
+                range_start,
+                range_end,
+            },
+        );
+
+        Ok(())
     }
 }

@@ -29,6 +29,7 @@ use yelang_hir::hir::query::{
 use yelang_hir::ids::{ExprId, PatId, QueryId};
 use yelang_hir::Crate;
 use yelang_interner::{Interner, Symbol};
+use yelang_resolve::lang_items::{LangItem, LangItems};
 
 use crate::plan::{
     AggCall, AggKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec, Plan, PlanArena,
@@ -46,12 +47,14 @@ pub fn extract_query(
     query_id: QueryId,
     hir: &Crate,
     interner: &Interner,
+    lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     let query = hir.query(query_id)?;
     match &query.kind {
-        QueryKind::Select(select) => Some(extract_select(select, query_id, hir, interner, arena)),
-        // Mutations are not yet handled by the logical plan.
+        QueryKind::Select(select) => {
+            Some(extract_select(select, query_id, hir, interner, lang_items, arena))
+        }
         QueryKind::Create(_)
         | QueryKind::Update(_)
         | QueryKind::Upsert(_)
@@ -70,6 +73,7 @@ fn extract_select(
     query_id: QueryId,
     hir: &Crate,
     interner: &Interner,
+    _lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> PlanId {
     let origin = PlanOrigin::QuerySyntax(query_id);
@@ -601,6 +605,7 @@ pub fn extract_expr_as_plan(
     expr_id: ExprId,
     hir: &Crate,
     interner: &Interner,
+    lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     let expr = hir.expr(expr_id)?;
@@ -612,8 +617,33 @@ pub fn extract_expr_as_plan(
             receiver,
             method,
             args,
-            trait_def_id: _,
-        } => extract_method_call(expr_id, *receiver, method.symbol, args, hir, interner, arena),
+            trait_def_id,
+        } => {
+            // Verify this is a Queryable trait method via lang items.
+            let is_queryable = trait_def_id
+                .and_then(|tid| lang_items.get(LangItem::Queryable).map(|qid| tid == qid))
+                .unwrap_or(false);
+
+            if is_queryable {
+                extract_method_call(expr_id, *receiver, method.symbol, args, hir, interner, lang_items, arena)
+            } else {
+                // Non-Queryable method: treat as opaque extension.
+                let input = extract_expr_as_plan(*receiver, hir, interner, lang_items, arena);
+                input.map(|inp| {
+                    alloc(
+                        arena,
+                        Plan::Extension {
+                            node: std::sync::Arc::new(OpaqueMethod {
+                                name: method.symbol.as_str(interner).to_string(),
+                                input: inp,
+                                call: expr_id,
+                            }),
+                        },
+                        origin,
+                    )
+                })
+            }
+        }
 
         // ── Comprehension (desugared selector) ─────────────────────────
         Expr::Comprehension {
@@ -621,25 +651,34 @@ pub fn extract_expr_as_plan(
             element,
             variables,
             condition,
-        } => extract_comprehension(*element, variables, *condition, hir, interner, arena),
+        } => extract_comprehension(*element, variables, *condition, hir, interner, lang_items, arena),
 
         // ── Intrinsic call ─────────────────────────────────────────────
         Expr::Intrinsic { name, args } => {
-            extract_intrinsic(name.symbol, args, hir, interner, arena)
+            extract_intrinsic(name.symbol, args, hir, interner, lang_items, arena)
         }
 
         // ── Nested select query ────────────────────────────────────────
-        Expr::Query(query_id) => extract_query(*query_id, hir, interner, arena),
+        Expr::Query(query_id) => extract_query(*query_id, hir, interner, lang_items, arena),
 
         // ── Path reference (table or local variable) ───────────────────
-        Expr::Path { res: _ } => {
-            // A path to a table or collection variable → Scan.
-            // TODO: resolve the DefId to determine if it's a @table struct.
-            let name = Symbol::from(1u32); // placeholder
+        Expr::Path { res } => {
+            let source = match res {
+                yelang_hir::res::Res::Def { def_id } => SourceRef::Table {
+                    def: *def_id,
+                    name: Symbol::from(1u32),
+                },
+                yelang_hir::res::Res::Local { .. } => SourceRef::Local {
+                    name: Symbol::from(1u32),
+                },
+                _ => SourceRef::Local {
+                    name: Symbol::from(1u32),
+                },
+            };
             Some(alloc(
                 arena,
                 Plan::Scan {
-                    source: SourceRef::Local { name },
+                    source,
                     filter: None,
                     projection: None,
                     range: None,
@@ -664,13 +703,14 @@ fn extract_method_call(
     args: &[ExprId],
     hir: &Crate,
     interner: &Interner,
+    lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     let origin = PlanOrigin::MethodCall(call_expr);
     let method_name = method.as_str(interner);
 
     // Extract the receiver as a plan (the collection being operated on).
-    let input = extract_expr_as_plan(receiver, hir, interner, arena)?;
+    let input = extract_expr_as_plan(receiver, hir, interner, lang_items, arena)?;
 
     match method_name {
         // ── Filter ─────────────────────────────────────────────────────
@@ -717,7 +757,7 @@ fn extract_method_call(
         "join" | "inner_join" => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -734,7 +774,7 @@ fn extract_method_call(
         "left_join" => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -751,7 +791,7 @@ fn extract_method_call(
         "semi_join" => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -768,7 +808,7 @@ fn extract_method_call(
         "anti_join" => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -915,7 +955,7 @@ fn extract_method_call(
         // ── Union ──────────────────────────────────────────────────────
         "union" | "union_all" => {
             let other_expr = args.first().copied()?;
-            let other = extract_expr_as_plan(other_expr, hir, interner, arena)?;
+            let other = extract_expr_as_plan(other_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Union {
@@ -971,6 +1011,7 @@ fn extract_comprehension(
     condition: Option<ExprId>,
     hir: &Crate,
     interner: &Interner,
+    lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     // A comprehension like `users@u[where u.age > 18][*].name` desugars to:
@@ -986,7 +1027,7 @@ fn extract_comprehension(
     let origin = PlanOrigin::MethodCall(element);
 
     // Extract the source collection.
-    let mut current = extract_expr_as_plan(var.source, hir, interner, arena)?;
+    let mut current = extract_expr_as_plan(var.source, hir, interner, lang_items, arena)?;
 
     // Apply the filter condition if present.
     if let Some(pred) = condition {
@@ -1020,6 +1061,7 @@ fn extract_intrinsic(
     args: &[ExprId],
     hir: &Crate,
     interner: &Interner,
+    lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     let intrinsic_name = name.as_str(interner);
@@ -1048,7 +1090,7 @@ fn extract_intrinsic(
         "query_filter" => {
             let input_expr = args.first().copied()?;
             let pred = args.get(1).copied()?;
-            let input = extract_expr_as_plan(input_expr, hir, interner, arena)?;
+            let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Filter { input, pred },
@@ -1060,7 +1102,7 @@ fn extract_intrinsic(
         "query_map" => {
             let input_expr = args.first().copied()?;
             let func = args.get(1).copied()?;
-            let input = extract_expr_as_plan(input_expr, hir, interner, arena)?;
+            let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Map {
@@ -1076,7 +1118,7 @@ fn extract_intrinsic(
         "query_flat_map" => {
             let input_expr = args.first().copied()?;
             let func = args.get(1).copied()?;
-            let input = extract_expr_as_plan(input_expr, hir, interner, arena)?;
+            let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Map {

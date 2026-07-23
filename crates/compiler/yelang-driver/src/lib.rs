@@ -152,7 +152,7 @@ pub fn compile_program(
         }
 
         // 6a. Extract logical plan from HIR query.
-        let Some(logical_root) = extract_query(query_id, &hir, interner, &mut plan_arena) else {
+        let Some(logical_root) = extract_query(query_id, &hir, interner, &hir.lang_items, &mut plan_arena) else {
             continue; // Mutations not yet handled.
         };
 

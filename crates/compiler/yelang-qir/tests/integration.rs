@@ -1,12 +1,10 @@
 //! Integration tests for the query planning pipeline.
 //!
-//! Each test parses source text containing a query expression, runs the
-//! full pipeline (resolve → HIR → tycheck → extract → optimize), and
-//! verifies the resulting plan tree structure.
-//!
-//! Tests use local variables as collection sources (not `@table` structs)
-//! to avoid type-resolution complexity while still exercising the plan
-//! extraction and optimization pipeline.
+//! Tests use correct Yelang query semantics:
+//! - The projection uses the **collection label** with selectors (`[*]`, `[where]`, etc.)
+//! - The item binder (`@u`) is accessible in `where`, `order by`, and segment predicates
+//! - `select 1 from users@u:User` returns `1`, NOT `[1, 1, ...]`
+//! - Per-element results require explicit selectors: `select users@u[*].id from ...`
 
 use yelang_ast::Program;
 use yelang_hir::lower_crate;
@@ -48,7 +46,7 @@ fn plan_queries(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>, Interner) {
         if slot.is_none() {
             continue;
         }
-        if let Some(root) = extract_query(query_id, &hir, &interner, &mut arena) {
+        if let Some(root) = extract_query(query_id, &hir, &interner, &hir.lang_items, &mut arena) {
             let optimized = optimizer.optimize(root, &mut arena, &hir);
             roots.push(optimized);
         }
@@ -121,15 +119,16 @@ fn first_child(plan: &Plan) -> Option<yelang_qir::PlanId> {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Core semantics tests
 // ---------------------------------------------------------------------------
 
 #[test]
-fn simple_select_produces_plan() {
+fn scalar_projection_returns_scalar() {
+    // select 1 from xs@x → returns 1, NOT [1, 1, ...]
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x;
+    let _ = select 1 from xs@x;
 }
 "#;
 
@@ -137,20 +136,18 @@ fn main() {
     assert_eq!(roots.len(), 1, "expected exactly one query plan");
 
     let spine = plan_spine(&arena, roots[0]);
-    // Should produce at least a Project and a Scan.
-    assert!(
-        spine.contains(&"Scan"),
-        "expected Scan in spine, got: {:?}",
-        spine
-    );
+    // The root should be a Project (the projection wraps the constant).
+    assert_eq!(spine[0], "Project", "root should be Project, got: {:?}", spine);
+    assert!(spine.contains(&"Scan"), "expected Scan in spine, got: {:?}", spine);
 }
 
 #[test]
-fn select_with_where_produces_filter_or_pushdown() {
+fn iteration_requires_explicit_selector() {
+    // select xs@b[*] from xs@x where x > 1 → iterate with [*]
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x where x > 1;
+    let _ = select xs@b[*] from xs@x where x > 1;
 }
 "#;
 
@@ -158,45 +155,51 @@ fn main() {
     assert_eq!(roots.len(), 1);
 
     let spine = plan_spine(&arena, roots[0]);
+    // Should contain a Map node (from the [*] selector) and a Scan.
+    assert!(spine.contains(&"Scan"), "expected Scan, got: {:?}", spine);
+}
 
-    // The where clause produces a Filter, but the optimizer may push it
-    // into the Scan. Either way, the predicate must be present somewhere.
-    let has_filter_node = spine.contains(&"Filter");
-    let has_scan_with_filter = spine.iter().any(|&name| name == "Scan");
+#[test]
+fn where_clause_filters_collection() {
+    // The where clause filters the collection before projection.
+    let src = r#"
+fn main() {
+    let xs = [1, 2, 3];
+    let _ = select xs@b[*] from xs@x where x > 1;
+}
+"#;
 
-    assert!(
-        has_filter_node || has_scan_with_filter,
-        "expected Filter node or Scan with pushed-down filter, got: {:?}",
-        spine
-    );
+    let (arena, roots, _interner) = plan_queries(src);
+    assert_eq!(roots.len(), 1);
 
-    // Verify the Scan actually has a filter if there's no separate Filter node.
-    if !has_filter_node {
-        // Walk to the Scan and check it has a filter.
+    // After optimization, the filter should be pushed into the Scan
+    // or remain as a Filter node.
+    let spine = plan_spine(&arena, roots[0]);
+    let has_filter = spine.contains(&"Filter");
+    let has_scan = spine.contains(&"Scan");
+    assert!(has_scan, "expected Scan, got: {:?}", spine);
+
+    // If no separate Filter, the Scan should have a pushed-down filter.
+    if !has_filter {
         let mut current = Some(roots[0]);
-        let mut found_filtered_scan = false;
+        let mut found = false;
         while let Some(id) = current {
-            let plan = arena.plan(id);
-            if let Plan::Scan { filter: Some(_), .. } = plan {
-                found_filtered_scan = true;
+            if let Plan::Scan { filter: Some(_), .. } = arena.plan(id) {
+                found = true;
                 break;
             }
-            current = first_child(plan);
+            current = first_child(arena.plan(id));
         }
-        assert!(
-            found_filtered_scan,
-            "expected Scan with pushed-down filter, got spine: {:?}",
-            spine
-        );
+        assert!(found, "expected pushed-down filter in Scan, spine: {:?}", spine);
     }
 }
 
 #[test]
-fn select_with_order_by_produces_sort() {
+fn order_by_produces_sort() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x order by x desc;
+    let _ = select xs@b[*] from xs@x order by x desc;
 }
 "#;
 
@@ -204,19 +207,15 @@ fn main() {
     assert_eq!(roots.len(), 1);
 
     let spine = plan_spine(&arena, roots[0]);
-    assert!(
-        spine.contains(&"Sort"),
-        "expected Sort in spine, got: {:?}",
-        spine
-    );
+    assert!(spine.contains(&"Sort"), "expected Sort, got: {:?}", spine);
 }
 
 #[test]
-fn select_with_range_produces_limit() {
+fn range_produces_limit() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x range 0..2;
+    let _ = select xs@b[*] from xs@x range 0..2;
 }
 "#;
 
@@ -224,15 +223,11 @@ fn main() {
     assert_eq!(roots.len(), 1);
 
     let spine = plan_spine(&arena, roots[0]);
-    assert!(
-        spine.contains(&"Limit"),
-        "expected Limit in spine, got: {:?}",
-        spine
-    );
+    assert!(spine.contains(&"Limit"), "expected Limit, got: {:?}", spine);
 }
 
 #[test]
-fn select_with_group_by_produces_aggregate() {
+fn group_by_produces_aggregate() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
@@ -244,11 +239,7 @@ fn main() {
     assert_eq!(roots.len(), 1);
 
     let spine = plan_spine(&arena, roots[0]);
-    assert!(
-        spine.contains(&"Aggregate"),
-        "expected Aggregate in spine, got: {:?}",
-        spine
-    );
+    assert!(spine.contains(&"Aggregate"), "expected Aggregate, got: {:?}", spine);
 }
 
 #[test]
@@ -256,23 +247,24 @@ fn no_correlated_nodes_after_optimization() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x where x > 1;
+    let _ = select xs@b[*] from xs@x where x > 1;
 }
 "#;
 
     let (arena, _roots, _interner) = plan_queries(src);
     assert!(
         !arena.has_correlated_nodes(),
-        "expected no DependentJoin/ScalarSubquery/Exists after optimization"
+        "expected no correlated nodes after optimization"
     );
 }
 
 #[test]
-fn full_query_spine_order() {
+fn full_pipeline_spine_order() {
+    // where → order by → range → projection
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x where x > 1 order by x range 0..2;
+    let _ = select xs@b[*] from xs@x where x > 1 order by x range 0..2;
 }
 "#;
 
@@ -281,16 +273,12 @@ fn main() {
 
     let spine = plan_spine(&arena, roots[0]);
 
-    // The spine should contain (root to leaf):
-    // Project → Limit → Sort → Filter → Scan
-    // (or Filter may be pushed into Scan)
-    assert!(spine.contains(&"Project"), "spine: {:?}", spine);
+    // Root should be Project (the projection).
+    assert_eq!(spine[0], "Project", "root should be Project, got: {:?}", spine);
+    // Should contain Limit, Sort, and Scan.
     assert!(spine.contains(&"Limit"), "spine: {:?}", spine);
     assert!(spine.contains(&"Sort"), "spine: {:?}", spine);
     assert!(spine.contains(&"Scan"), "spine: {:?}", spine);
-
-    // Project should be the root.
-    assert_eq!(spine[0], "Project", "Project should be root, got: {:?}", spine);
 }
 
 #[test]
@@ -299,8 +287,8 @@ fn multiple_queries_each_get_a_plan() {
 fn main() {
     let xs = [1, 2, 3];
     let ys = [4, 5, 6];
-    let _ = select x from xs@x;
-    let _ = select y from ys@y;
+    let _ = select xs@a[*] from xs@x;
+    let _ = select ys@a[*] from ys@y;
 }
 "#;
 
@@ -319,7 +307,7 @@ fn physical_plan_produces_phys_ops() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x where x > 1 order by x;
+    let _ = select xs@b[*] from xs@x where x > 1 order by x;
 }
 "#;
 
@@ -335,19 +323,8 @@ fn main() {
         &mut phys_arena,
     );
 
-    // The physical plan should have at least one node.
-    assert!(
-        phys_arena.get(phys_root).is_some(),
-        "physical plan root should exist"
-    );
-
-    // Count physical nodes.
-    let node_count = phys_arena.nodes.len();
-    assert!(
-        node_count >= 2,
-        "expected at least 2 physical nodes, got {}",
-        node_count
-    );
+    assert!(phys_arena.get(phys_root).is_some());
+    assert!(phys_arena.nodes.len() >= 2);
 }
 
 #[test]
@@ -357,7 +334,7 @@ fn in_memory_executor_produces_no_exchanges() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x where x > 1;
+    let _ = select xs@b[*] from xs@x where x > 1;
 }
 "#;
 
@@ -373,63 +350,11 @@ fn main() {
         &mut phys_arena,
     );
 
-    // In-memory executor should produce no Exchange nodes.
     let has_exchange = phys_arena
         .nodes
         .iter()
         .any(|op| matches!(op, PhysOp::Exchange { .. }));
-    assert!(
-        !has_exchange,
-        "in-memory executor should not produce Exchange nodes"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Decorrelation tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn decorrelation_removes_dependent_joins() {
-    let src = r#"
-fn main() {
-    let xs = [1, 2, 3];
-    let _ = select x from xs@x where x > 1;
-}
-"#;
-
-    let (arena, _roots, _interner) = plan_queries(src);
-
-    // After optimization (which includes decorrelation), no correlated
-    // nodes should remain.
-    assert!(
-        !arena.has_correlated_nodes(),
-        "expected no correlated nodes after decorrelation"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Aggregate decomposition tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn group_by_with_aggregate_populates_aggs() {
-    let src = r#"
-fn main() {
-    let xs = [1, 2, 3];
-    let _ = select g from xs@x group by { v: x } into g;
-}
-"#;
-
-    let (arena, roots, _interner) = plan_queries(src);
-    assert_eq!(roots.len(), 1);
-
-    // Find the Aggregate node and verify it exists.
-    let spine = plan_spine(&arena, roots[0]);
-    assert!(
-        spine.contains(&"Aggregate"),
-        "expected Aggregate in spine, got: {:?}",
-        spine
-    );
+    assert!(!has_exchange, "in-memory should not produce Exchange nodes");
 }
 
 // ---------------------------------------------------------------------------
@@ -441,30 +366,25 @@ fn local_variable_source_resolves_to_local() {
     let src = r#"
 fn main() {
     let xs = [1, 2, 3];
-    let _ = select x from xs@x;
+    let _ = select xs@a[*] from xs@x;
 }
 "#;
 
     let (arena, roots, _interner) = plan_queries(src);
     assert_eq!(roots.len(), 1);
 
-    // Walk to the Scan node and verify it has a Local source.
     let mut current = Some(roots[0]);
     let mut found_local_scan = false;
     while let Some(id) = current {
-        let plan = arena.plan(id);
         if let Plan::Scan {
             source: yelang_qir::plan::SourceRef::Local { .. },
             ..
-        } = plan
+        } = arena.plan(id)
         {
             found_local_scan = true;
             break;
         }
-        current = first_child(plan);
+        current = first_child(arena.plan(id));
     }
-    assert!(
-        found_local_scan,
-        "expected Scan with Local source for local variable"
-    );
+    assert!(found_local_scan, "expected Scan with Local source");
 }

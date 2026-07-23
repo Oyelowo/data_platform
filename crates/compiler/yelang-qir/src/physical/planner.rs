@@ -7,7 +7,7 @@
 //! decisions (scan strategy, join algorithm, Exchange insertion).
 
 use crate::physical::{
-    ExchangeKind, Executor, JoinAlgorithm, PhysArena, PhysId, PhysOp,
+    AggAlgorithm, ExchangeKind, Executor, JoinAlgorithm, PhysArena, PhysId, PhysOp,
     TraverseStrategy,
 };
 use crate::plan::{Plan, PlanArena, PlanId};
@@ -141,7 +141,29 @@ fn lower_node(
             let phys_input = lower_node(*input, logical, executor, phys);
 
             let est_card = logical.meta(*input).and_then(|m| m.est_cardinality);
-            let algorithm = executor.choose_aggregate(est_card, None);
+
+            // Choose algorithm based on aggregate metadata.
+            // User-defined aggregates with `merge` support can be parallelized
+            // (partial aggregation per shard, merge at coordinator).
+            let all_parallelizable = aggs.iter().all(|agg| match &agg.kind {
+                crate::plan::AggKind::Count
+                | crate::plan::AggKind::Sum { .. }
+                | crate::plan::AggKind::Avg { .. }
+                | crate::plan::AggKind::Min { .. }
+                | crate::plan::AggKind::Max { .. } => true,
+                // User-defined aggregates: parallelizable if they have merge
+                // (all Aggregate trait impls do, by definition).
+                crate::plan::AggKind::UserAggregate { .. } => true,
+                // Opaque aggregates: cannot be parallelized.
+                crate::plan::AggKind::Opaque { .. } => false,
+            });
+
+            let algorithm = if executor.is_distributed() && all_parallelizable && !keys.is_empty()
+            {
+                AggAlgorithm::PartialMerge
+            } else {
+                executor.choose_aggregate(est_card, None)
+            };
 
             // For distributed execution, insert Exchange before aggregation
             // (shuffle by group keys) unless already partitioned.

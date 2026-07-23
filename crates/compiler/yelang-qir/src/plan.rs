@@ -20,13 +20,10 @@ use yelang_interner::Symbol;
 
 /// Expression reference used throughout the plan tree.
 ///
-/// Currently HIR [`ExprId`] because:
-/// - HIR query nodes (`SelectQuery`, etc.) use `ExprId` for sub-expressions
-/// - Type information is available from tycheck results keyed by `ExprId`
-/// - HIR expressions are resolved and desugared
-///
-/// This may migrate to `ExprRef` once query sub-expressions are lowered
-/// to THIR. The alias makes the switch a one-line change.
+/// Currently HIR [`ExprId`]. The THIR infrastructure is in place
+/// (`ThirBodies::query_lowerings`, `ThirBodies::expr_mapping`) for
+/// incremental migration to [`yelang_thir::ids::ThirExprId`] once
+/// the analysis module is also migrated to walk THIR expressions.
 pub type ExprRef = ExprId;
 
 // ---------------------------------------------------------------------------

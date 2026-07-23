@@ -19,7 +19,7 @@ pub mod pat;
 pub mod stmt;
 pub mod ty;
 
-pub use body::{ThirBodies, ThirBody};
+pub use body::{QueryLowering, ThirBodies, ThirBody};
 pub use context::LoweringContext;
 pub use errors::LoweringError;
 pub use expr::{ThirArm, ThirExpr};

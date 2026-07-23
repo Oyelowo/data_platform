@@ -30,6 +30,10 @@ pub struct LoweringContext<'a> {
     pub stmts: SlotMap<ThirStmtId, ThirStmt>,
     /// Mapping from HIR pattern ids to THIR pattern ids for the current body.
     pub local_pats: FxHashMap<PatId, ThirPatId>,
+    /// Mapping from HIR expression ids to THIR expression ids.
+    /// Populated during lowering; used by the plan extraction to convert
+    /// HIR ExprId references to THIR ExprRef (ThirExprId).
+    pub expr_mapping: FxHashMap<ExprId, ThirExprId>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -50,6 +54,7 @@ impl<'a> LoweringContext<'a> {
             pats: SlotMap::with_key(),
             stmts: SlotMap::with_key(),
             local_pats: FxHashMap::default(),
+            expr_mapping: FxHashMap::default(),
         }
     }
 
@@ -59,6 +64,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Allocate a THIR expression and record its inferred type from the
     /// type-check results for the source HIR expression.
+    /// Also records the HIR → THIR expression mapping.
     pub fn alloc_expr_with_ty(
         &mut self,
         expr: ThirExpr,
@@ -68,6 +74,7 @@ impl<'a> LoweringContext<'a> {
         if let Some(ty) = self.typeck_results.expr_ty(source_hir_expr) {
             self.expr_tys.insert(id, ty);
         }
+        self.expr_mapping.insert(source_hir_expr, id);
         id
     }
 
@@ -108,5 +115,12 @@ impl<'a> LoweringContext<'a> {
     /// Resolve a `Symbol` to its textual form.
     pub fn resolve_symbol(&self, symbol: yelang_interner::Symbol) -> &str {
         self.interner.resolve(&symbol)
+    }
+
+    /// Consume the context and return the accumulated [`ThirBodies`],
+    /// including the `expr_mapping` and `query_lowerings` side tables.
+    pub fn finish(mut self) -> ThirBodies {
+        self.bodies.expr_mapping = self.expr_mapping;
+        self.bodies
     }
 }
