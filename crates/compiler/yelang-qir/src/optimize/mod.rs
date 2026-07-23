@@ -7,6 +7,7 @@
 //! Decorrelation is special: it is a stateful top-down pass that runs
 //! **once** before the fixpoint loop (see the BTW 2025 algorithm).
 
+pub mod decorrelate;
 pub mod pushdown;
 pub mod prune;
 pub mod simplify;
@@ -79,11 +80,14 @@ impl Optimizer {
 
     /// Run the optimizer on a plan tree. Returns the new root.
     ///
-    /// Decorrelation should be run **before** this (it is stateful and
-    /// not a fixpoint rule).
+    /// Decorrelation runs **once** before the fixpoint loop (it is
+    /// stateful and top-down, not a fixpoint rule).
     pub fn optimize(&self, root: PlanId, arena: &mut PlanArena, hir: &Crate) -> PlanId {
+        // Phase 0: Decorrelation (one-shot, top-down).
+        let mut current = decorrelate::decorrelate(root, arena, hir);
+
+        // Phase 1+: Fixpoint loop with rewrite rules.
         let ctx = OptContext { hir };
-        let mut current = root;
 
         for _pass in 0..self.max_passes {
             let mut any_changed = false;
