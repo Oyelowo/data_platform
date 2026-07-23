@@ -31,7 +31,7 @@ pub mod tree;
 pub use extract::{extract_expr_as_plan, extract_query};
 pub use optimize::{OptRule, Optimizer};
 pub use plan::{
-    AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec,
-    Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin, PlanRange, SourceRef,
-    TraversePath, TraverseSegment, UserDefinedPlanNode,
+    AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, GroupKey, JoinKind, NodeRef,
+    OrderSpec, Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin, PlanRange, SortKey,
+    SortSpec, SourceRef, TraversePath, TraverseSegment, UserDefinedPlanNode,
 };

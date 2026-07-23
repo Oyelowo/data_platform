@@ -9,6 +9,7 @@ use yelang_arena::FxHashMap;
 use yelang_hir::ids::{ExprId, QueryId};
 use yelang_interner::Symbol;
 
+use crate::expr::ThirExpr;
 use crate::ids::{ThirBodyId, ThirExprId, ThirPatId};
 
 #[derive(Debug, Clone)]
@@ -45,13 +46,13 @@ pub struct QueryLowering {
 #[derive(Debug, Clone, Default)]
 pub struct ThirBodies {
     pub bodies: SlotMap<ThirBodyId, ThirBody>,
+    /// All THIR expressions produced during lowering.
+    /// The QIR analysis walks these directly — no HIR dependency.
+    pub exprs: SlotMap<ThirExprId, ThirExpr>,
     /// Lowered query sub-expressions, keyed by HIR QueryId.
     pub query_lowerings: FxHashMap<QueryId, QueryLowering>,
     /// HIR ExprId → THIR ThirExprId.
     pub expr_mapping: FxHashMap<ExprId, ThirExprId>,
-    /// THIR ThirExprId → HIR ExprId (reverse of expr_mapping).
-    /// Used by the analysis module to walk HIR expressions from THIR refs.
-    pub reverse_expr_mapping: FxHashMap<ThirExprId, ExprId>,
 }
 
 impl ThirBodies {

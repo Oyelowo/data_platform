@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use slotmap::SlotMap;
 use yelang_arena::{DefId, FxHashMap, Id, IndexVec, SecondaryMap};
 use yelang_hir::ids::{ExprId, QueryId};
 use yelang_interner::Symbol;
@@ -23,8 +24,33 @@ use yelang_thir::ids::ThirExprId;
 ///
 /// Uses THIR [`ThirExprId`] — the typed, desugared IR. The extraction
 /// converts HIR `ExprId` → `ThirExprId` via [`PlanArena::to_thir`].
-/// The analysis converts back via [`PlanArena::to_hir`].
+/// The analysis walks THIR expressions directly via [`PlanArena::thir_expr`].
 pub type ExprRef = ThirExprId;
+
+// ---------------------------------------------------------------------------
+// GroupKey / SortKey
+// ---------------------------------------------------------------------------
+
+/// A group-by key: either a computed expression or a direct column reference.
+///
+/// During decorrelation, outer ref columns are added as `Column` keys.
+/// No synthetic expression IDs needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupKey {
+    /// A computed expression (e.g. `u.date.year()`).
+    Expr(ExprRef),
+    /// A direct column reference by name (e.g. outer ref `u.id`).
+    Column(Symbol),
+}
+
+/// A sort key: either a computed expression or a direct column reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SortKey {
+    /// A computed expression.
+    Expr(ExprRef),
+    /// A direct column reference by name.
+    Column(Symbol),
+}
 
 // ---------------------------------------------------------------------------
 // PlanId
@@ -56,8 +82,9 @@ pub struct PlanArena {
     pub origin: SecondaryMap<PlanId, PlanOrigin>,
     /// HIR ExprId → THIR ThirExprId. Populated from ThirBodies before extraction.
     pub expr_mapping: FxHashMap<ExprId, ExprRef>,
-    /// THIR ThirExprId → HIR ExprId. Used by the analysis to walk HIR exprs.
-    pub reverse_expr_mapping: FxHashMap<ExprRef, ExprId>,
+    /// THIR expression arena — a copy of `ThirBodies::exprs` so the
+    /// analysis can walk typed expressions without depending on the HIR.
+    pub thir_exprs: SlotMap<ThirExprId, yelang_thir::ThirExpr>,
 }
 
 impl PlanArena {
@@ -67,7 +94,7 @@ impl PlanArena {
             meta: SecondaryMap::new(),
             origin: SecondaryMap::new(),
             expr_mapping: FxHashMap::default(),
-            reverse_expr_mapping: FxHashMap::default(),
+            thir_exprs: SlotMap::with_key(),
         }
     }
 
@@ -77,16 +104,20 @@ impl PlanArena {
         self.expr_mapping.get(&hir_id).copied().unwrap_or_default()
     }
 
-    /// Convert a THIR ExprRef back to an HIR ExprId.
-    /// Returns a default (invalid) ExprId if no mapping exists.
-    pub fn to_hir(&self, thir_id: ExprRef) -> ExprId {
-        self.reverse_expr_mapping.get(&thir_id).copied().unwrap_or_default()
+    /// Look up a THIR expression by its [`ExprRef`].
+    pub fn thir_expr(&self, id: ExprRef) -> Option<&yelang_thir::ThirExpr> {
+        self.thir_exprs.get(id)
     }
 
-    /// Populate the expression mappings from THIR bodies.
+    /// Copy the THIR expression arena from [`yelang_thir::ThirBodies`].
+    pub fn load_thir_exprs(&mut self, bodies: &yelang_thir::ThirBodies) {
+        self.thir_exprs = bodies.exprs.clone();
+    }
+
+    /// Populate the expression mappings and THIR expressions from THIR bodies.
     pub fn load_expr_mappings(&mut self, bodies: &yelang_thir::ThirBodies) {
         self.expr_mapping = bodies.expr_mapping.clone();
-        self.reverse_expr_mapping = bodies.reverse_expr_mapping.clone();
+        self.load_thir_exprs(bodies);
     }
 
     /// Allocate a plan node and return its [`PlanId`].
@@ -251,8 +282,8 @@ pub enum Plan {
     /// `.aggregate(…)`.
     Aggregate {
         input: PlanId,
-        /// Grouping keys: `(output_name, key_expression)`.
-        keys: Vec<(Symbol, ExprRef)>,
+        /// Grouping keys: `(output_name, key)`.
+        keys: Vec<(Symbol, GroupKey)>,
         /// Aggregate computations per group.
         aggs: Vec<AggCall>,
         /// The `into <label>` name for the resulting group collection.
@@ -265,7 +296,7 @@ pub enum Plan {
     /// Lowered from: `order by …`, `.order_by(…)`, `[order by …]`.
     Sort {
         input: PlanId,
-        specs: Vec<OrderSpec>,
+        specs: Vec<SortSpec>,
     },
 
     /// Skip and/or take a number of rows.
@@ -574,6 +605,15 @@ pub enum AggKind {
 pub struct OrderSpec {
     /// The expression to sort by.
     pub expr: ExprRef,
+    /// `true` for descending.
+    pub desc: bool,
+}
+
+/// A sort specification: a key (expression or column) with a direction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortSpec {
+    /// The sort key.
+    pub key: SortKey,
     /// `true` for descending.
     pub desc: bool,
 }

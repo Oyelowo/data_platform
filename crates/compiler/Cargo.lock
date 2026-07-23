@@ -884,6 +884,7 @@ name = "yelang-qir"
 version = "0.1.0"
 dependencies = [
  "rstest",
+ "slotmap",
  "thiserror",
  "yelang-arena",
  "yelang-ast",

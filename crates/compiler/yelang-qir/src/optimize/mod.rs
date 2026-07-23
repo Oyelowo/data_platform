@@ -12,22 +12,8 @@ pub mod pushdown;
 pub mod prune;
 pub mod simplify;
 
-use yelang_hir::Crate;
-
 use crate::plan::{PlanArena, PlanId};
 use crate::tree::{transform_bottom_up, transform_top_down, Transformed};
-
-// ---------------------------------------------------------------------------
-// OptContext
-// ---------------------------------------------------------------------------
-
-/// Context passed to every optimizer rule.
-///
-/// Provides access to the HIR (for expression inspection) and any other
-/// global state the rules need.
-pub struct OptContext<'a> {
-    pub hir: &'a Crate,
-}
 
 // ---------------------------------------------------------------------------
 // OptRule trait
@@ -51,7 +37,7 @@ pub trait OptRule {
     fn apply_order(&self) -> ApplyOrder;
 
     /// Attempt to rewrite the node at `id`.
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, ctx: &OptContext) -> Transformed;
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed;
 }
 
 // ---------------------------------------------------------------------------
@@ -82,24 +68,22 @@ impl Optimizer {
     ///
     /// Decorrelation runs **once** before the fixpoint loop (it is
     /// stateful and top-down, not a fixpoint rule).
-    pub fn optimize(&self, root: PlanId, arena: &mut PlanArena, hir: &Crate) -> PlanId {
+    pub fn optimize(&self, root: PlanId, arena: &mut PlanArena) -> PlanId {
         // Phase 0: Decorrelation (one-shot, top-down).
-        let mut current = decorrelate::decorrelate(root, arena, hir);
+        let mut current = decorrelate::decorrelate(root, arena);
 
         // Phase 1+: Fixpoint loop with rewrite rules.
-        let ctx = OptContext { hir };
-
         for _pass in 0..self.max_passes {
             let mut any_changed = false;
 
             for rule in &self.rules {
                 let result = match rule.apply_order() {
                     ApplyOrder::TopDown => transform_top_down(current, arena, &mut |id, arena| {
-                        rule.rewrite(id, arena, &ctx)
+                        rule.rewrite(id, arena)
                     }),
                     ApplyOrder::BottomUp => {
                         transform_bottom_up(current, arena, &mut |id, arena| {
-                            rule.rewrite(id, arena, &ctx)
+                            rule.rewrite(id, arena)
                         })
                     }
                 };

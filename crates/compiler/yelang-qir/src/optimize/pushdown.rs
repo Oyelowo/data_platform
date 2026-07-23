@@ -2,7 +2,7 @@
 //! and into scans.
 
 use crate::analysis::{predicate_can_evaluate_against, referenced_fields};
-use crate::optimize::{ApplyOrder, OptContext, OptRule};
+use crate::optimize::{ApplyOrder, OptRule};
 use crate::plan::{JoinKind, Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
@@ -18,7 +18,7 @@ impl OptRule for PushDownFilter {
         ApplyOrder::TopDown
     }
 
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, ctx: &OptContext) -> Transformed {
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed {
         let plan = arena.plan(id).clone();
 
         let Plan::Filter { input, pred } = &plan else {
@@ -56,12 +56,12 @@ impl OptRule for PushDownFilter {
                 on,
                 filter: join_filter,
             } => {
-                let pred_fields = referenced_fields(arena.to_hir(*pred), ctx.hir);
+                let pred_fields = referenced_fields(*pred, arena);
 
                 let can_push_left =
-                    predicate_can_evaluate_against(&pred_fields, *left, arena, ctx.hir);
+                    predicate_can_evaluate_against(&pred_fields, *left, arena);
                 let can_push_right =
-                    predicate_can_evaluate_against(&pred_fields, *right, arena, ctx.hir);
+                    predicate_can_evaluate_against(&pred_fields, *right, arena);
 
                 if can_push_left && !can_push_right {
                     let new_left = arena.alloc(Plan::Filter {

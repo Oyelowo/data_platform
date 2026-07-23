@@ -22,7 +22,7 @@ use std::sync::Arc;
 use yelang_arena::{Id, IndexVec};
 use yelang_interner::Symbol;
 
-use crate::plan::{AggCall, ExprRef, JoinKind, OrderSpec, PlanRange, SourceRef, TraversePath};
+use crate::plan::{AggCall, ExprRef, GroupKey, JoinKind, PlanRange, SortSpec, SourceRef, TraversePath};
 
 // ---------------------------------------------------------------------------
 // PhysId
@@ -124,7 +124,7 @@ pub enum PhysOp {
     // ── Aggregation (with chosen algorithm) ────────────────────────────
     Aggregate {
         input: PhysId,
-        keys: Vec<(Symbol, ExprRef)>,
+        keys: Vec<(Symbol, GroupKey)>,
         aggs: Vec<AggCall>,
         into: Symbol,
         algorithm: AggAlgorithm,
@@ -133,7 +133,7 @@ pub enum PhysOp {
     // ── Sort ───────────────────────────────────────────────────────────
     Sort {
         input: PhysId,
-        specs: Vec<OrderSpec>,
+        specs: Vec<SortSpec>,
         algorithm: SortAlgorithm,
     },
 
@@ -272,7 +272,7 @@ pub enum ExchangeKind {
     /// Hash-partition by these keys.
     ShuffleBy(Vec<Symbol>),
     /// Merge pre-sorted partitions (preserves order).
-    Merge(Vec<OrderSpec>),
+    Merge(Vec<SortSpec>),
     /// Range-partition by these keys.
     RangeBy(Vec<Symbol>),
 }

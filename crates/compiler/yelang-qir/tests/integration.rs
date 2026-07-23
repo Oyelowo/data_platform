@@ -47,7 +47,7 @@ fn plan_queries(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>, Interner) {
             continue;
         }
         if let Some(root) = extract_query(query_id, &hir, &interner, &hir.lang_items, &mut arena) {
-            let optimized = optimizer.optimize(root, &mut arena, &hir);
+            let optimized = optimizer.optimize(root, &mut arena);
             roots.push(optimized);
         }
     }

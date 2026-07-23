@@ -1,6 +1,6 @@
 //! Simplification rules — remove trivially redundant nodes.
 
-use crate::optimize::{ApplyOrder, OptContext, OptRule};
+use crate::optimize::{ApplyOrder, OptRule};
 use crate::plan::{Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
@@ -16,7 +16,7 @@ impl OptRule for EliminateTrivialFilter {
         ApplyOrder::BottomUp
     }
 
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, _ctx: &OptContext) -> Transformed {
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed {
         // TODO: inspect the predicate expression to detect literal `true`.
         let _ = (id, arena);
         Transformed::no(id)
@@ -35,7 +35,7 @@ impl OptRule for EliminateTrivialLimit {
         ApplyOrder::BottomUp
     }
 
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, _ctx: &OptContext) -> Transformed {
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed {
         let plan = arena.plan(id);
         if let Plan::Limit {
             input,
@@ -61,7 +61,7 @@ impl OptRule for MergeAdjacentFilters {
         ApplyOrder::BottomUp
     }
 
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, _ctx: &OptContext) -> Transformed {
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed {
         // TODO: detect Filter → Filter chains and merge predicates.
         let _ = (id, arena);
         Transformed::no(id)

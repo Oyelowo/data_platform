@@ -18,6 +18,7 @@ yelang-lexer = { path = "../yelang-lexer" }
 yelang-resolve = { path = "../yelang-resolve" }
 yelang-thir = { path = "../yelang-thir" }
 yelang-ty = { path = "../yelang-ty" }
+slotmap = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -21,12 +21,12 @@
 //! nodes remain in the plan tree.
 
 use yelang_arena::FxHashMap;
-use yelang_hir::Crate;
 use yelang_interner::Symbol;
+use yelang_thir::ThirExpr;
 
 use crate::analysis::referenced_fields;
 use crate::plan::{
-    DepJoinKind, ExprRef, JoinKind, Plan, PlanArena, PlanId,
+    DepJoinKind, ExprRef, GroupKey, JoinKind, Plan, PlanArena, PlanId, SortKey, SortSpec,
 };
 use crate::tree::Transformed;
 
@@ -179,13 +179,13 @@ impl UnnestingState {
 /// `ScalarSubquery`, or `Exists` nodes remain.
 ///
 /// Returns the new root [`PlanId`].
-pub fn decorrelate(root: PlanId, arena: &mut PlanArena, hir: &Crate) -> PlanId {
+pub fn decorrelate(root: PlanId, arena: &mut PlanArena) -> PlanId {
     // Phase 1: Convert ScalarSubquery/Exists → DependentJoin.
     let root = convert_subqueries_to_dependent_joins(root, arena);
 
     // Phase 2: Top-down elimination of DependentJoin nodes.
     let mut state = UnnestingState::new();
-    eliminate_recursive(root, &mut state, arena, hir)
+    eliminate_recursive(root, &mut state, arena)
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +257,6 @@ fn eliminate_recursive(
     node: PlanId,
     state: &mut UnnestingState,
     arena: &mut PlanArena,
-    hir: &Crate,
 ) -> PlanId {
     // BTW 2025 §4.3: CTE DAG cutting — if this node was already processed,
     // return the cached result. Prevents duplicate work on shared subtrees.
@@ -274,7 +273,7 @@ fn eliminate_recursive(
             pred,
             kind,
         } => {
-            eliminate_dependent_join(node, *outer, *inner, *pred, *kind, state, arena, hir)
+            eliminate_dependent_join(node, *outer, *inner, *pred, *kind, state, arena)
         }
 
         // BTW 2025: Γ_{A; a:f}(T) → Γ_{A ∪ A(D); a:f}(unnest(T))
@@ -284,14 +283,14 @@ fn eliminate_recursive(
             aggs,
             into,
         } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
 
             let mut new_keys = keys.clone();
             if let Some(info) = state.current() {
                 for &outer_ref in &info.outer_refs {
                     let already_present = new_keys.iter().any(|&(name, _)| name == outer_ref);
                     if !already_present {
-                        new_keys.push((outer_ref, ExprRef::default()));
+                        new_keys.push((outer_ref, GroupKey::Column(outer_ref)));
                     }
                 }
             }
@@ -312,22 +311,20 @@ fn eliminate_recursive(
         // Add outer refs as prefix sort keys so sorting is per-outer-binding.
         // The Limit then applies per partition.
         Plan::Sort { input, specs } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
 
             let mut new_specs = specs.clone();
             if let Some(info) = state.current() {
                 // Add outer refs as prefix sort keys (ascending).
-                for _outer_ref in &info.outer_refs {
+                for &outer_ref in &info.outer_refs {
                     let already_present = new_specs.iter().any(|s| {
-                        // Check if this spec already sorts by the outer ref.
-                        // We use ExprRef::default() as sentinel for column refs.
-                        s.expr == ExprRef::default()
+                        matches!(&s.key, SortKey::Column(c) if *c == outer_ref)
                     });
                     if !already_present {
                         new_specs.insert(
                             0,
-                            crate::plan::OrderSpec {
-                                expr: ExprRef::default(),
+                            SortSpec {
+                                key: SortKey::Column(outer_ref),
                                 desc: false,
                             },
                         );
@@ -347,7 +344,7 @@ fn eliminate_recursive(
 
         // Unary pass-through: recurse into input.
         Plan::Filter { input, pred } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {
                 arena.alloc(Plan::Filter {
                     input: new_input,
@@ -359,7 +356,7 @@ fn eliminate_recursive(
         }
 
         Plan::Project { input, exprs } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {
                 arena.alloc(Plan::Project {
                     input: new_input,
@@ -375,7 +372,7 @@ fn eliminate_recursive(
             func,
             flatten_depth,
         } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {
                 arena.alloc(Plan::Map {
                     input: new_input,
@@ -392,7 +389,7 @@ fn eliminate_recursive(
             skip,
             fetch,
         } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {
                 arena.alloc(Plan::Limit {
                     input: new_input,
@@ -405,7 +402,7 @@ fn eliminate_recursive(
         }
 
         Plan::Distinct { input, on } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {
                 arena.alloc(Plan::Distinct {
                     input: new_input,
@@ -417,7 +414,7 @@ fn eliminate_recursive(
         }
 
         Plan::Traverse { input, paths } => {
-            let new_input = eliminate_recursive(*input, state, arena, hir);
+            let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {
                 arena.alloc(Plan::Traverse {
                     input: new_input,
@@ -443,8 +440,8 @@ fn eliminate_recursive(
         } if state.current().is_some() => {
             // Full outer join inside a correlated context.
             // Recurse into both sides, then rebuild.
-            let new_left = eliminate_recursive(*left, state, arena, hir);
-            let new_right = eliminate_recursive(*right, state, arena, hir);
+            let new_left = eliminate_recursive(*left, state, arena);
+            let new_right = eliminate_recursive(*right, state, arena);
 
             // The filter predicate may reference outer refs.
             // Keep it as a post-join filter (cannot push into full outer join).
@@ -465,8 +462,8 @@ fn eliminate_recursive(
             on,
             filter,
         } => {
-            let new_left = eliminate_recursive(*left, state, arena, hir);
-            let new_right = eliminate_recursive(*right, state, arena, hir);
+            let new_left = eliminate_recursive(*left, state, arena);
+            let new_right = eliminate_recursive(*right, state, arena);
             if new_left != *left || new_right != *right {
                 arena.alloc(Plan::Join {
                     left: new_left,
@@ -481,8 +478,8 @@ fn eliminate_recursive(
         }
 
         Plan::GroupJoin { left, right, on, aggs } => {
-            let new_left = eliminate_recursive(*left, state, arena, hir);
-            let new_right = eliminate_recursive(*right, state, arena, hir);
+            let new_left = eliminate_recursive(*left, state, arena);
+            let new_right = eliminate_recursive(*right, state, arena);
             if new_left != *left || new_right != *right {
                 arena.alloc(Plan::GroupJoin {
                     left: new_left,
@@ -500,7 +497,7 @@ fn eliminate_recursive(
             let new_inputs: Vec<PlanId> = inputs
                 .iter()
                 .map(|&inp| {
-                    let new_inp = eliminate_recursive(inp, state, arena, hir);
+                    let new_inp = eliminate_recursive(inp, state, arena);
                     if new_inp != inp {
                         changed = true;
                     }
@@ -541,10 +538,9 @@ fn eliminate_dependent_join(
     kind: DepJoinKind,
     state: &mut UnnestingState,
     arena: &mut PlanArena,
-    hir: &Crate,
 ) -> PlanId {
     // Step 1: Compute outer refs (A(outer) ∩ F(inner)).
-    let outer_refs = compute_outer_refs(outer, inner, pred, arena, hir);
+    let outer_refs = compute_outer_refs(outer, inner, pred, arena);
 
     // Step 2: Try simple elimination.
     //
@@ -575,15 +571,15 @@ fn eliminate_dependent_join(
     // Step 4: Unnest the LEFT (outer) side first.
     //
     // This makes outer columns available for the inner side's unnesting.
-    let new_outer = eliminate_recursive(outer, state, arena, hir);
+    let new_outer = eliminate_recursive(outer, state, arena);
 
     // Step 5: Add equivalences from the join predicate to the union-find.
     if let Some(pred_expr) = pred {
-        add_predicate_equivalences(pred_expr, arena, state, hir);
+        add_predicate_equivalences(pred_expr, arena, state);
     }
 
     // Step 6: Unnest the RIGHT (inner) side under this unnesting's umbrella.
-    let new_inner = eliminate_recursive(inner, state, arena, hir);
+    let new_inner = eliminate_recursive(inner, state, arena);
 
     // Step 7: Finalize — build the replacement plan.
     //
@@ -611,12 +607,11 @@ fn compute_outer_refs(
     inner: PlanId,
     pred: Option<ExprRef>,
     arena: &PlanArena,
-    hir: &Crate,
 ) -> Vec<Symbol> {
     use crate::analysis::plan_output_fields;
 
     let outer_fields = if let Some(outer_plan) = arena.get(outer) {
-        plan_output_fields(outer_plan, arena, hir)
+        plan_output_fields(outer_plan, arena)
     } else {
         return vec![];
     };
@@ -625,13 +620,13 @@ fn compute_outer_refs(
     let mut inner_refs = yelang_arena::FxHashSet::new();
 
     if let Some(pred_expr) = pred {
-        for f in referenced_fields(arena.to_hir(pred_expr), hir).iter() {
+        for f in referenced_fields(pred_expr, arena).iter() {
             inner_refs.insert(*f);
         }
     }
 
     // Walk the inner plan tree to collect all referenced fields.
-    collect_plan_refs(inner, arena, hir, &mut inner_refs);
+    collect_plan_refs(inner, arena, &mut inner_refs);
 
     // Intersection: fields that are both produced by outer and referenced by inner.
     outer_fields
@@ -645,100 +640,96 @@ fn compute_outer_refs(
 fn collect_plan_refs(
     node: PlanId,
     arena: &PlanArena,
-    hir: &Crate,
     out: &mut yelang_arena::FxHashSet<Symbol>,
 ) {
     let Some(plan) = arena.get(node) else {
         return;
     };
 
-    let plan_refs = crate::analysis::plan_referenced_fields(plan, arena, hir);
+    let plan_refs = crate::analysis::plan_referenced_fields(plan, arena);
     for f in plan_refs.iter() {
         out.insert(*f);
     }
 
     // Recurse into children.
     for child in crate::tree::children(plan) {
-        collect_plan_refs(child, arena, hir, out);
+        collect_plan_refs(child, arena, out);
     }
 }
 
 /// Add column equivalences from a predicate expression to the union-find.
 ///
-/// Walks the HIR expression tree looking for equality comparisons between
+/// Walks the THIR expression tree looking for equality comparisons between
 /// field accesses: `a.x == b.y` → `union(x, y)`.
 /// Also recurses through `And` conjunctions.
 fn add_predicate_equivalences(
     pred: ExprRef,
     arena: &PlanArena,
     state: &mut UnnestingState,
-    hir: &Crate,
 ) {
     let Some(info) = state.current_mut() else {
         return;
     };
-    collect_equivalences(arena.to_hir(pred), hir, &mut info.cclasses);
+    collect_equivalences(pred, arena, &mut info.cclasses);
 }
 
-/// Recursively collect field equivalences from an expression.
+/// Recursively collect field equivalences from a THIR expression.
 fn collect_equivalences(
-    expr: yelang_hir::ids::ExprId,
-    hir: &Crate,
+    expr: ExprRef,
+    arena: &PlanArena,
     uf: &mut UnionFind,
 ) {
-    use yelang_hir::hir::expr::Expr;
-
-    let Some(expr_node) = hir.expr(expr) else {
+    let Some(expr_node) = arena.thir_expr(expr) else {
         return;
     };
 
     match expr_node {
         // a.x == b.y → union(x, y)
-        Expr::Binary {
+        ThirExpr::Binary {
             op: yelang_ast::BinaryOp::Eq,
             left,
             right,
         } => {
             if let (
-                Some(Expr::Field { field: left_field, .. }),
-                Some(Expr::Field { field: right_field, .. }),
-            ) = (hir.expr(*left), hir.expr(*right))
+                Some(ThirExpr::Field { field: left_field, .. }),
+                Some(ThirExpr::Field { field: right_field, .. }),
+            ) = (arena.thir_expr(*left), arena.thir_expr(*right))
             {
-                uf.union(left_field.symbol, right_field.symbol);
+                uf.union(*left_field, *right_field);
             }
             // Also recurse into both sides for nested equalities.
-            collect_equivalences(*left, hir, uf);
-            collect_equivalences(*right, hir, uf);
+            collect_equivalences(*left, arena, uf);
+            collect_equivalences(*right, arena, uf);
         }
 
         // Recurse through AND conjunctions.
-        Expr::Binary {
+        ThirExpr::Binary {
             op: yelang_ast::BinaryOp::And,
             left,
             right,
         } => {
-            collect_equivalences(*left, hir, uf);
-            collect_equivalences(*right, hir, uf);
+            collect_equivalences(*left, arena, uf);
+            collect_equivalences(*right, arena, uf);
         }
 
         // Recurse into other binary ops (may contain nested equalities).
-        Expr::Binary { left, right, .. } => {
-            collect_equivalences(*left, hir, uf);
-            collect_equivalences(*right, hir, uf);
+        ThirExpr::Binary { left, right, .. } => {
+            collect_equivalences(*left, arena, uf);
+            collect_equivalences(*right, arena, uf);
         }
 
         // Recurse into unary, calls, etc.
-        Expr::Unary { expr: inner, .. } => {
-            collect_equivalences(*inner, hir, uf);
+        ThirExpr::Unary { expr: inner, .. } => {
+            collect_equivalences(*inner, arena, uf);
         }
-        Expr::Call { args, .. } => {
+        ThirExpr::Call { args, .. } => {
             for &arg in args {
-                collect_equivalences(arg, hir, uf);
+                collect_equivalences(arg, arena, uf);
             }
         }
-        Expr::MethodCall { args, .. } => {
+        ThirExpr::Intrinsic { args, .. } => {
             for &arg in args {
-                collect_equivalences(arg, hir, uf);
+                collect_equivalences(arg, arena, uf);
             }
         }
 
@@ -772,8 +763,8 @@ fn convert_to_regular_join(
 
 /// Finalize the unnesting of a dependent join.
 ///
-/// For each outer ref, try substitution via union-find. If all outer refs
-/// can be substituted, no domain join is needed. Otherwise, create a
+/// For each outer ref, check if it can be substituted via the union-find.
+/// If all can be substituted, no domain join is needed. Otherwise, create a
 /// domain projection and join.
 fn finalize_unnesting(
     outer: PlanId,

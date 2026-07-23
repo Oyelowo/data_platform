@@ -32,8 +32,8 @@ use yelang_interner::{Interner, Symbol};
 use yelang_resolve::lang_items::{LangItem, LangItems};
 
 use crate::plan::{
-    AggCall, AggKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec, Plan, PlanArena,
-    PlanId, PlanOrigin, PlanRange, SourceRef, TraversePath, TraverseSegment,
+    AggCall, AggKind, Direction, EdgeRef, GroupKey, JoinKind, NodeRef, Plan, PlanArena,
+    PlanId, PlanOrigin, PlanRange, SortKey, SortSpec, SourceRef, TraversePath, TraverseSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -359,12 +359,12 @@ fn extract_group_by(
     origin: &PlanOrigin,
 ) -> PlanId {
     let fallback = interner.intern("_key");
-    let keys: Vec<(Symbol, ExprRef)> = group_by
+    let keys: Vec<(Symbol, GroupKey)> = group_by
         .keys
         .iter()
         .map(|key| {
             let name = key.name.map(|ident| ident.symbol).unwrap_or(fallback);
-            (name, arena.to_thir(key.expr))
+            (name, GroupKey::Expr(arena.to_thir(key.expr)))
         })
         .collect();
 
@@ -566,11 +566,11 @@ fn collect_aggregate_calls(
 // Order by → OrderSpec
 // ---------------------------------------------------------------------------
 
-fn extract_order_specs(parts: &[OrderByPart], arena: &PlanArena) -> Vec<OrderSpec> {
+fn extract_order_specs(parts: &[OrderByPart], arena: &PlanArena) -> Vec<SortSpec> {
     parts
         .iter()
-        .map(|part| OrderSpec {
-            expr: arena.to_thir(part.expr),
+        .map(|part| SortSpec {
+            key: SortKey::Expr(arena.to_thir(part.expr)),
             desc: matches!(part.direction, SortDirection::Desc),
         })
         .collect()
@@ -851,7 +851,7 @@ fn extract_method_call(
                 arena,
                 Plan::Aggregate {
                     input,
-                    keys: vec![(key_name, thir_key)],
+                    keys: vec![(key_name, GroupKey::Expr(thir_key))],
                     aggs: vec![],
                     into,
                 },
@@ -867,8 +867,8 @@ fn extract_method_call(
                 arena,
                 Plan::Sort {
                     input,
-                    specs: vec![OrderSpec {
-                        expr: thir_key,
+                    specs: vec![SortSpec {
+                        key: SortKey::Expr(thir_key),
                         desc: false,
                     }],
                 },
@@ -883,8 +883,8 @@ fn extract_method_call(
                 arena,
                 Plan::Sort {
                     input,
-                    specs: vec![OrderSpec {
-                        expr: thir_key,
+                    specs: vec![SortSpec {
+                        key: SortKey::Expr(thir_key),
                         desc: true,
                     }],
                 },

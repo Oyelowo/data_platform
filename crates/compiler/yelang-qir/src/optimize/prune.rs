@@ -5,7 +5,7 @@
 //! projection list into the scan so the storage engine reads fewer
 //! columns.
 
-use crate::optimize::{ApplyOrder, OptContext, OptRule};
+use crate::optimize::{ApplyOrder, OptRule};
 use crate::plan::{Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
@@ -29,7 +29,7 @@ impl OptRule for PruneUnusedFields {
         ApplyOrder::BottomUp
     }
 
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, _ctx: &OptContext) -> Transformed {
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed {
         let plan = arena.plan(id).clone();
 
         // Only prune scans that don't already have a projection.

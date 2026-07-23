@@ -157,7 +157,7 @@ pub fn compile_program(
         };
 
         // 6b. Optimize (decorrelation + fixpoint rules).
-        let optimized_root = optimizer.optimize(logical_root, &mut plan_arena, &hir);
+        let optimized_root = optimizer.optimize(logical_root, &mut plan_arena);
 
         // 6c. Lower to physical plan.
         let phys_root =
