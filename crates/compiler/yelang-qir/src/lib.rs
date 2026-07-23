@@ -22,9 +22,12 @@
 //! - [`AggKind`] — three-tier aggregate recognition (known / trait-based / opaque)
 
 pub mod extract;
+pub mod optimize;
 pub mod plan;
+pub mod tree;
 
 pub use extract::extract_query;
+pub use optimize::{OptRule, Optimizer};
 pub use plan::{
     AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec,
     Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin, PlanRange, SourceRef,
