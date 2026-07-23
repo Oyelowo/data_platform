@@ -1,0 +1,21 @@
+[package]
+name = "yelang-qir"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-arena = { path = "../yelang-arena" }
+yelang-hir = { path = "../yelang-hir" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-thir = { path = "../yelang-thir" }
+yelang-ty = { path = "../yelang-ty" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
