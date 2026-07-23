@@ -24,6 +24,7 @@
 pub mod analysis;
 pub mod extract;
 pub mod optimize;
+pub mod physical;
 pub mod plan;
 pub mod tree;
 

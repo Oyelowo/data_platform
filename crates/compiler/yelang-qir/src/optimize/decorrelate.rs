@@ -259,7 +259,7 @@ fn eliminate_recursive(
 
             // If we're inside an unnesting, add outer refs to group keys.
             if let Some(info) = state.current() {
-                let mut new_keys = keys.clone();
+                let new_keys = keys.clone();
                 for &outer_ref in &info.outer_refs {
                     // Check if this outer ref is already in the keys.
                     let already_present = new_keys.iter().any(|&(name, _)| name == outer_ref);

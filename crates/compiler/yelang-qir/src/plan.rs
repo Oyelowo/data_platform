@@ -549,7 +549,7 @@ pub enum AggKind {
 // ---------------------------------------------------------------------------
 
 /// One key in an `ORDER BY` clause.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderSpec {
     /// The expression to sort by.
     pub expr: ExprRef,
