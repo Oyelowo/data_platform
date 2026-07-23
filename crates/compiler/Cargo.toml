@@ -15,6 +15,7 @@ members = [
     "yelang-mir",
     "yelang-codegen",
     "yelang-vm",
+    "yelang-jit",
     "yelang-driver",
     "stdlib/core",
 ]
@@ -32,6 +33,12 @@ anyhow = "1"
 annotate-snippets = "0.11"
 blake3 = "1"
 bumpalo = "3"
+cranelift = "0.134"
+cranelift-codegen = "0.134"
+cranelift-jit = "0.134"
+cranelift-module = "0.134"
+cranelift-native = "0.134"
+cranelift-frontend = "0.134"
 fxhash = "0.2"
 futures = "0.3"
 indexmap = "2"

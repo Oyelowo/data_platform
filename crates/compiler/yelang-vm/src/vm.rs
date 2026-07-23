@@ -6,7 +6,13 @@
 //! - Function calls with a call stack
 //! - All Yelang value types
 
-use crate::instruction::{CompiledFunction, CompiledProgram, Instruction};
+use std::cmp::Ordering;
+
+use yelang_interner::Symbol;
+
+use crate::instruction::{CompiledFunction, CompiledProgram, Instruction, WindowAgg, WindowFunc};
+use crate::storage::{EmptyStorage, StorageBackend};
+use crate::traverse::{TraverseDirection, TraverseSpec};
 use crate::value::Value;
 
 /// A call frame on the call stack.
@@ -38,6 +44,8 @@ pub struct Vm {
     max_stack_depth: usize,
     /// Maximum call depth (safety limit).
     max_call_depth: usize,
+    /// The storage backend for query scans and link traversals.
+    storage: Box<dyn StorageBackend>,
 }
 
 /// VM execution error.
@@ -66,7 +74,7 @@ pub enum VmError {
 }
 
 impl Vm {
-    /// Create a new VM with default limits.
+    /// Create a new VM with default limits and an empty storage backend.
     pub fn new() -> Self {
         Self {
             stack: Vec::with_capacity(256),
@@ -77,16 +85,33 @@ impl Vm {
             halted: false,
             max_stack_depth: 10_000,
             max_call_depth: 1_000,
+            storage: Box::new(EmptyStorage),
         }
     }
 
-    /// Create a VM with custom limits.
+    /// Create a VM with custom limits and an empty storage backend.
     pub fn with_limits(max_stack_depth: usize, max_call_depth: usize) -> Self {
         Self {
             max_stack_depth,
             max_call_depth,
             ..Self::new()
         }
+    }
+
+    /// Create a VM backed by the given storage backend.
+    ///
+    /// The backend supplies rows for `QueryScan` and the edge/target tables
+    /// for `QueryTraverse`.
+    pub fn with_storage(storage: Box<dyn StorageBackend>) -> Self {
+        Self {
+            storage,
+            ..Self::new()
+        }
+    }
+
+    /// Replace the storage backend, returning the previous one.
+    pub fn set_storage(&mut self, storage: Box<dyn StorageBackend>) -> Box<dyn StorageBackend> {
+        std::mem::replace(&mut self.storage, storage)
     }
 
     /// Execute a compiled program and return the result.
@@ -457,10 +482,10 @@ impl Vm {
             }
 
             // ── Query operations ───────────────────────────────────────
-            Instruction::QueryScan(_table_id) => {
-                // TODO: connect to storage engine.
-                // For now, push an empty QueryResult.
-                self.push(Value::QueryResult(vec![]))?;
+            Instruction::QueryScan(table_id) => {
+                // Scan the table from the storage backend.
+                let rows = self.storage.scan_table(*table_id);
+                self.push(Value::QueryResult(rows))?;
             }
             Instruction::QueryFilter => {
                 // TODO: apply filter predicate to QueryResult.
@@ -500,10 +525,29 @@ impl Vm {
                 let qr = self.pop()?;
                 self.push(qr)?;
             }
-            Instruction::QueryTraverse => {
-                // TODO: traverse links.
+            Instruction::QueryTraverse(spec) => {
                 let qr = self.pop()?;
-                self.push(qr)?;
+                let rows = into_rows(qr)?;
+                // Pull the edge and target tables from storage (owned copies,
+                // so the storage borrow ends before we mutate the stack).
+                let edges = self.storage.scan_table(spec.edge_table);
+                let targets = self.storage.scan_table(spec.target_table);
+                let result = execute_traverse(&rows, &edges, &targets, spec);
+                self.push(Value::QueryResult(result))?;
+            }
+
+            // ── Window operations ──────────────────────────────────────
+            Instruction::Window {
+                partition_by,
+                order_by,
+                func,
+                output,
+            } => {
+                let qr = self.pop()?;
+                let rows = into_rows(qr)?;
+                let result =
+                    execute_window(&rows, partition_by, order_by, func, *output);
+                self.push(Value::QueryResult(result))?;
             }
 
             // ── Aggregate operations ───────────────────────────────────
@@ -748,4 +792,272 @@ impl Default for Vm {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── Query execution helpers ────────────────────────────────────────────────
+
+/// Unwrap a stack value into a row vector for query operators.
+fn into_rows(value: Value) -> Result<Vec<Value>, VmError> {
+    match value {
+        Value::QueryResult(rows) | Value::Array(rows) => Ok(rows),
+        other => Err(VmError::TypeError(
+            "query result".into(),
+            format!("{}", other),
+        )),
+    }
+}
+
+/// Read a struct field, returning `Null` when the row is not a struct or the
+/// field is absent.
+fn field_of(row: &Value, name: Symbol) -> Value {
+    row.get_field(name).cloned().unwrap_or(Value::Null)
+}
+
+/// Return a copy of `row` with an extra field appended. Non-struct rows are
+/// wrapped in a fresh struct so the output column is never lost.
+fn with_added_field(row: &Value, name: Symbol, value: Value) -> Value {
+    match row {
+        Value::Struct(def_id, fields) => {
+            let mut new_fields = fields.clone();
+            // Replace an existing field of the same name, else append.
+            if let Some(slot) = new_fields.iter_mut().find(|(n, _)| *n == name) {
+                slot.1 = value;
+            } else {
+                new_fields.push((name, value));
+            }
+            Value::Struct(*def_id, new_fields)
+        }
+        _ => Value::Struct(0, vec![(name, value)]),
+    }
+}
+
+/// Total ordering between two runtime values.
+///
+/// Numeric values compare numerically; `Null` sorts before everything; other
+/// types fall back to booleans then their display form so the ordering is
+/// deterministic.
+fn compare_values(a: &Value, b: &Value) -> Ordering {
+    match (a, b) {
+        (Value::Null, Value::Null) => Ordering::Equal,
+        (Value::Null, _) => Ordering::Less,
+        (_, Value::Null) => Ordering::Greater,
+        _ => match (a.as_float(), b.as_float()) {
+            (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+            _ => match (a.as_bool(), b.as_bool()) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                _ => a.to_string().cmp(&b.to_string()),
+            },
+        },
+    }
+}
+
+/// Lexicographically compare two key tuples, applying per-key direction
+/// (`ascending[i] == false` reverses the i-th key).
+fn compare_key_tuples(a: &[Value], b: &[Value], ascending: &[bool]) -> Ordering {
+    for i in 0..a.len().min(b.len()) {
+        let mut ord = compare_values(&a[i], &b[i]);
+        if !ascending.get(i).copied().unwrap_or(true) {
+            ord = ord.reverse();
+        }
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    a.len().cmp(&b.len())
+}
+
+/// Compute a window function over partitions and return the rows with the
+/// `output` column added. Input row order is preserved.
+fn execute_window(
+    rows: &[Value],
+    partition_by: &[Symbol],
+    order_by: &[(Symbol, bool)],
+    func: &WindowFunc,
+    output: Symbol,
+) -> Vec<Value> {
+    // Group row indices into partitions, preserving first-seen order.
+    let mut partitions: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
+    for (idx, row) in rows.iter().enumerate() {
+        let key: Vec<Value> = partition_by.iter().map(|k| field_of(row, *k)).collect();
+        match partitions.iter_mut().find(|(pk, _)| *pk == key) {
+            Some((_, members)) => members.push(idx),
+            None => partitions.push((key, vec![idx])),
+        }
+    }
+
+    let ascending: Vec<bool> = order_by.iter().map(|(_, asc)| *asc).collect();
+
+    // Compute (original_index, output_row) for every row, then restore order.
+    let mut computed: Vec<(usize, Value)> = Vec::with_capacity(rows.len());
+
+    for (_key, mut members) in partitions {
+        // Order the partition by the ORDER BY keys.
+        members.sort_by(|&a, &b| {
+            let ka: Vec<Value> = order_by.iter().map(|(k, _)| field_of(&rows[a], *k)).collect();
+            let kb: Vec<Value> = order_by.iter().map(|(k, _)| field_of(&rows[b], *k)).collect();
+            compare_key_tuples(&ka, &kb, &ascending)
+        });
+
+        let n = members.len();
+
+        // Precompute the ordered key tuples for ranking comparisons.
+        let sorted_keys: Vec<Vec<Value>> = members
+            .iter()
+            .map(|&i| order_by.iter().map(|(k, _)| field_of(&rows[i], *k)).collect())
+            .collect();
+
+        // Precompute RANK / DENSE_RANK for the whole partition.
+        let mut ranks = vec![0usize; n];
+        let mut dense_ranks = vec![0usize; n];
+        if n > 0 {
+            ranks[0] = 1;
+            dense_ranks[0] = 1;
+            for i in 1..n {
+                let same =
+                    compare_key_tuples(&sorted_keys[i - 1], &sorted_keys[i], &ascending)
+                        == Ordering::Equal;
+                if same {
+                    ranks[i] = ranks[i - 1];
+                    dense_ranks[i] = dense_ranks[i - 1];
+                } else {
+                    ranks[i] = i + 1; // gap after ties
+                    dense_ranks[i] = dense_ranks[i - 1] + 1;
+                }
+            }
+        }
+
+        // Precompute a whole-partition aggregate value if needed.
+        let partition_agg: Option<Value> = match func {
+            WindowFunc::Aggregate(agg, field) => {
+                let vals: Vec<Value> =
+                    members.iter().map(|&i| field_of(&rows[i], *field)).collect();
+                Some(compute_window_agg(*agg, &vals))
+            }
+            _ => None,
+        };
+
+        for (pos, &row_idx) in members.iter().enumerate() {
+            let value = match func {
+                WindowFunc::RowNumber => Value::Uint((pos + 1) as u128),
+                WindowFunc::Rank => Value::Uint(ranks[pos] as u128),
+                WindowFunc::DenseRank => Value::Uint(dense_ranks[pos] as u128),
+                WindowFunc::Lag(field, offset) => {
+                    if pos >= *offset {
+                        field_of(&rows[members[pos - *offset]], *field)
+                    } else {
+                        Value::Null
+                    }
+                }
+                WindowFunc::Lead(field, offset) => {
+                    if pos + *offset < n {
+                        field_of(&rows[members[pos + *offset]], *field)
+                    } else {
+                        Value::Null
+                    }
+                }
+                WindowFunc::Aggregate(_, _) => {
+                    partition_agg.clone().unwrap_or(Value::Null)
+                }
+            };
+            let new_row = with_added_field(&rows[row_idx], output, value);
+            computed.push((row_idx, new_row));
+        }
+    }
+
+    // Restore the original input row order.
+    computed.sort_by_key(|(idx, _)| *idx);
+    computed.into_iter().map(|(_, row)| row).collect()
+}
+
+/// Reduce a slice of field values with a window aggregate.
+fn compute_window_agg(agg: WindowAgg, vals: &[Value]) -> Value {
+    match agg {
+        WindowAgg::Count => Value::Uint(vals.len() as u128),
+        WindowAgg::Sum => Value::Int(vals.iter().filter_map(|v| v.as_int()).sum()),
+        WindowAgg::Avg => {
+            let floats: Vec<f64> = vals.iter().filter_map(|v| v.as_float()).collect();
+            if floats.is_empty() {
+                Value::Float(0.0)
+            } else {
+                Value::Float(floats.iter().sum::<f64>() / floats.len() as f64)
+            }
+        }
+        WindowAgg::Min => vals
+            .iter()
+            .filter_map(|v| v.as_int())
+            .min()
+            .map(Value::Int)
+            .unwrap_or(Value::Null),
+        WindowAgg::Max => vals
+            .iter()
+            .filter_map(|v| v.as_int())
+            .max()
+            .map(Value::Int)
+            .unwrap_or(Value::Null),
+    }
+}
+
+/// Nested-loop link traversal.
+///
+/// For each input row, find matching edges and resolve them to target rows,
+/// collecting the matches into a nested array stored under `spec.output`.
+fn execute_traverse(
+    rows: &[Value],
+    edges: &[Value],
+    targets: &[Value],
+    spec: &TraverseSpec,
+) -> Vec<Value> {
+    let mut result = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let source_val = field_of(row, spec.source_key);
+        let mut matched: Vec<Value> = Vec::new();
+
+        for edge in edges {
+            let edge_src = field_of(edge, spec.source_column);
+            let edge_tgt = field_of(edge, spec.target_column);
+
+            // Which target-key value does this edge point at, given the
+            // traversal direction? `None` means the edge does not match.
+            let lookup: Option<Value> = match spec.direction {
+                TraverseDirection::Out => {
+                    if edge_src == source_val {
+                        Some(edge_tgt)
+                    } else {
+                        None
+                    }
+                }
+                TraverseDirection::In => {
+                    if edge_tgt == source_val {
+                        Some(edge_src)
+                    } else {
+                        None
+                    }
+                }
+                TraverseDirection::Both => {
+                    if edge_src == source_val {
+                        Some(edge_tgt)
+                    } else if edge_tgt == source_val {
+                        Some(edge_src)
+                    } else {
+                        None
+                    }
+                }
+            };
+
+            let Some(lookup) = lookup else {
+                continue;
+            };
+
+            for target in targets {
+                if field_of(target, spec.target_key) == lookup {
+                    matched.push(target.clone());
+                }
+            }
+        }
+
+        result.push(with_added_field(row, spec.output, Value::Array(matched)));
+    }
+
+    result
 }

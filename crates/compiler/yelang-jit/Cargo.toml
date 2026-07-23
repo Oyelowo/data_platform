@@ -1,0 +1,21 @@
+[package]
+name = "yelang-jit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-interner = { path = "../yelang-interner" }
+yelang-vm = { path = "../yelang-vm" }
+cranelift = { workspace = true }
+cranelift-codegen = { workspace = true }
+cranelift-jit = { workspace = true }
+cranelift-module = { workspace = true }
+cranelift-native = { workspace = true }
+cranelift-frontend = { workspace = true }
+thiserror = { workspace = true }

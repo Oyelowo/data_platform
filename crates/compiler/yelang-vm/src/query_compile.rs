@@ -6,8 +6,10 @@
 
 use yelang_interner::Symbol;
 use yelang_qir::physical::{PhysArena, PhysId, PhysOp};
+use yelang_qir::plan::{Direction, TraversePath};
 
 use crate::instruction::{CompiledFunction, Instruction};
+use crate::traverse::{TraverseDirection, TraverseSpec};
 
 /// Compile a QIR physical plan into a bytecode function.
 ///
@@ -162,9 +164,13 @@ impl QueryCompiler {
                 // TODO: implement window functions.
             }
 
-            PhysOp::Traverse { input, paths: _, strategy: _ } => {
+            PhysOp::Traverse { input, paths, strategy: _ } => {
                 self.compile_node(plan, *input);
-                self.emit(Instruction::QueryTraverse);
+                // Build a traversal spec from the first path's first segment.
+                // With no traversable path, the input passes through unchanged.
+                if let Some(spec) = build_traverse_spec(paths) {
+                    self.emit(Instruction::QueryTraverse(spec));
+                }
             }
 
             PhysOp::Exchange { input, kind: _ } => {
@@ -220,4 +226,37 @@ impl QueryCompiler {
             num_args: 0,
         }
     }
+}
+
+/// Build a VM [`TraverseSpec`] from the first segment of the first traversal
+/// path, if any.
+///
+/// The edge table conventionally carries `_from`/`_to` key columns and nodes
+/// are keyed by `id`; the nested result is stored under the target's collection
+/// label. Returns `None` when there is no path/segment to traverse.
+fn build_traverse_spec(paths: &[TraversePath]) -> Option<TraverseSpec> {
+    let segment = paths.first()?.segments.first()?;
+
+    // Conventional column/key names for edge and node tables.
+    let interner = yelang_interner::Interner::new();
+    let from = interner.intern("_from");
+    let to = interner.intern("_to");
+    let id = interner.intern("id");
+
+    let direction = match segment.direction {
+        Direction::Forward => TraverseDirection::Out,
+        Direction::Backward => TraverseDirection::In,
+        Direction::Both => TraverseDirection::Both,
+    };
+
+    Some(TraverseSpec {
+        edge_table: segment.edge.def.raw() as u64,
+        source_column: from,
+        target_column: to,
+        target_table: segment.target.def.raw() as u64,
+        direction,
+        source_key: id,
+        target_key: id,
+        output: segment.target.label,
+    })
 }

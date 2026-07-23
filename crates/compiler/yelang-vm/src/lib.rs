@@ -14,12 +14,20 @@
 
 pub mod compile;
 pub mod instruction;
+pub mod parallel;
 pub mod query_compile;
+pub mod reg_instruction;
+pub mod storage;
+pub mod traverse;
 pub mod value;
 pub mod vm;
 
 pub use compile::compile_mir;
-pub use instruction::{CompiledFunction, CompiledProgram, Instruction};
+pub use instruction::{CompiledFunction, CompiledProgram, Instruction, WindowAgg, WindowFunc};
+pub use parallel::{Morsel, MorselQueue, ParallelExecutor, DEFAULT_MORSEL_SIZE};
 pub use query_compile::compile_query;
+pub use reg_instruction::RegInstruction;
+pub use storage::{EmptyStorage, InMemoryStorage, StorageBackend};
+pub use traverse::{TraverseDirection, TraverseSpec};
 pub use value::Value;
 pub use vm::{Vm, VmError};

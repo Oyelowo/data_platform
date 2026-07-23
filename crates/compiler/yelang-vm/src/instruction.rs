@@ -9,7 +9,48 @@
 
 use yelang_interner::Symbol;
 
+use crate::traverse::TraverseSpec;
 use crate::value::Value;
+
+/// A window aggregate function computed over a partition frame.
+///
+/// Used by [`WindowFunc::Aggregate`] for windowed `SUM`/`COUNT`/etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowAgg {
+    /// Sum of the field over the frame.
+    Sum,
+    /// Number of rows in the frame.
+    Count,
+    /// Average of the field over the frame.
+    Avg,
+    /// Minimum of the field over the frame.
+    Min,
+    /// Maximum of the field over the frame.
+    Max,
+}
+
+/// A window function computed over a partition.
+///
+/// Mirrors the SQL standard window functions. Ranking functions (`RowNumber`,
+/// `Rank`, `DenseRank`) depend only on the partition's order; `Lag`/`Lead`
+/// access neighbouring rows; `Aggregate` reduces the whole partition frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WindowFunc {
+    /// `ROW_NUMBER()` — sequential 1-based integer per partition.
+    RowNumber,
+    /// `RANK()` — rank with gaps for ties (e.g. `1, 1, 3`).
+    Rank,
+    /// `DENSE_RANK()` — rank without gaps for ties (e.g. `1, 1, 2`).
+    DenseRank,
+    /// `LAG(field, offset)` — value of `field` from `offset` rows earlier in
+    /// the partition order, or `Null` if there is no such row.
+    Lag(Symbol, usize),
+    /// `LEAD(field, offset)` — value of `field` from `offset` rows later in
+    /// the partition order, or `Null` if there is no such row.
+    Lead(Symbol, usize),
+    /// A windowed aggregate over `field` (frame = the whole partition).
+    Aggregate(WindowAgg, Symbol),
+}
 
 /// A bytecode instruction.
 #[derive(Debug, Clone, PartialEq)]
@@ -138,8 +179,28 @@ pub enum Instruction {
     QuerySort(Vec<(Symbol, bool)>),
     /// Limit: pop QueryResult + skip + fetch, push limited QueryResult.
     QueryLimit,
-    /// Traverse (links): pop QueryResult + traversal spec, push traversed QueryResult.
-    QueryTraverse,
+    /// Traverse (links): pop QueryResult, follow links per the spec, push a
+    /// QueryResult with a nested array column of matched target rows.
+    QueryTraverse(TraverseSpec),
+
+    // ── Window operations ──────────────────────────────────────────────
+    /// Window: pop a QueryResult, compute a window function over partitions,
+    /// push a QueryResult with an added `output` column.
+    ///
+    /// Rows are grouped into partitions by `partition_by` field values, ordered
+    /// within each partition by the `order_by` keys (`(field, ascending)`), and
+    /// the window `func` is evaluated for each row. The input row order is
+    /// preserved in the output.
+    Window {
+        /// Fields that define each partition.
+        partition_by: Vec<Symbol>,
+        /// Ordering within a partition: `(field, ascending)`.
+        order_by: Vec<(Symbol, bool)>,
+        /// The window function to compute.
+        func: WindowFunc,
+        /// Output column name for the computed value.
+        output: Symbol,
+    },
 
     // ── Aggregate operations ───────────────────────────────────────────
     /// Pop a QueryResult, push the sum of all elements.
