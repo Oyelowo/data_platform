@@ -996,6 +996,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-vm"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "yelang-arena",
+ "yelang-interner",
+ "yelang-mir",
+ "yelang-qir",
+ "yelang-ty",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"

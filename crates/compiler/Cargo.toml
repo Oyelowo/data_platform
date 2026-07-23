@@ -14,6 +14,7 @@ members = [
     "yelang-qir",
     "yelang-mir",
     "yelang-codegen",
+    "yelang-vm",
     "yelang-driver",
     "stdlib/core",
 ]
