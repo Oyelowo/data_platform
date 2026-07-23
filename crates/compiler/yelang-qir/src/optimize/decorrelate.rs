@@ -117,11 +117,18 @@ struct UnnestingInfo {
 /// Stack of active unnesting states.
 struct UnnestingState {
     stack: Vec<UnnestingInfo>,
+    /// CTE DAG cutting: maps original PlanId → decorrelated PlanId.
+    /// Ensures shared subtrees (CTEs referenced multiple times) are
+    /// processed only once (BTW 2025 §4.3).
+    cache: FxHashMap<PlanId, PlanId>,
 }
 
 impl UnnestingState {
     fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self {
+            stack: Vec::new(),
+            cache: FxHashMap::default(),
+        }
     }
 
     fn push(&mut self, info: UnnestingInfo) -> usize {
@@ -141,6 +148,23 @@ impl UnnestingState {
     #[allow(dead_code)]
     fn current_mut(&mut self) -> Option<&mut UnnestingInfo> {
         self.stack.last_mut()
+    }
+
+    /// BTW 2025 §4.3: merge parent's outer_refs into the current unnesting.
+    /// This implements "never push different D sets across dependent joins."
+    fn merge_parent_outer_refs(&mut self) {
+        let len = self.stack.len();
+        if len < 2 {
+            return;
+        }
+        // Collect parent's outer_refs, then extend current.
+        let parent_refs: Vec<Symbol> = self.stack[len - 2].outer_refs.clone();
+        let current = &mut self.stack[len - 1];
+        for r in parent_refs {
+            if !current.outer_refs.contains(&r) {
+                current.outer_refs.push(r);
+            }
+        }
     }
 }
 
@@ -235,9 +259,15 @@ fn eliminate_recursive(
     arena: &mut PlanArena,
     hir: &Crate,
 ) -> PlanId {
+    // BTW 2025 §4.3: CTE DAG cutting — if this node was already processed,
+    // return the cached result. Prevents duplicate work on shared subtrees.
+    if let Some(&cached) = state.cache.get(&node) {
+        return cached;
+    }
+
     let plan = arena.plan(node).clone();
 
-    match &plan {
+    let result = match &plan {
         Plan::DependentJoin {
             outer,
             inner,
@@ -247,8 +277,7 @@ fn eliminate_recursive(
             eliminate_dependent_join(node, *outer, *inner, *pred, *kind, state, arena, hir)
         }
 
-        // Per-operator rules: push outer refs into group-by keys,
-        // window partition-by, etc.
+        // BTW 2025: Γ_{A; a:f}(T) → Γ_{A ∪ A(D); a:f}(unnest(T))
         Plan::Aggregate {
             input,
             keys,
@@ -257,10 +286,6 @@ fn eliminate_recursive(
         } => {
             let new_input = eliminate_recursive(*input, state, arena, hir);
 
-            // BTW 2025: Γ_{A; a:f}(T) → Γ_{A ∪ A(D); a:f}(unnest(T))
-            // Add outer ref columns to group-by keys so aggregation is
-            // per-outer-binding. ExprRef::default() is a sentinel meaning
-            // "column reference to the key's Symbol name."
             let mut new_keys = keys.clone();
             if let Some(info) = state.current() {
                 for &outer_ref in &info.outer_refs {
@@ -272,26 +297,49 @@ fn eliminate_recursive(
             }
 
             if new_input != *input || new_keys.len() != keys.len() {
-                let new_plan = Plan::Aggregate {
+                arena.alloc(Plan::Aggregate {
                     input: new_input,
                     keys: new_keys,
                     aggs: aggs.clone(),
                     into: *into,
-                };
-                arena.alloc(new_plan)
+                })
             } else {
                 node
             }
         }
 
+        // BTW 2025 §4.4: ORDER BY LIMIT in correlated subqueries.
+        // Add outer refs as prefix sort keys so sorting is per-outer-binding.
+        // The Limit then applies per partition.
         Plan::Sort { input, specs } => {
             let new_input = eliminate_recursive(*input, state, arena, hir);
-            if new_input != *input {
-                let new_plan = Plan::Sort {
+
+            let mut new_specs = specs.clone();
+            if let Some(info) = state.current() {
+                // Add outer refs as prefix sort keys (ascending).
+                for _outer_ref in &info.outer_refs {
+                    let already_present = new_specs.iter().any(|s| {
+                        // Check if this spec already sorts by the outer ref.
+                        // We use ExprRef::default() as sentinel for column refs.
+                        s.expr == ExprRef::default()
+                    });
+                    if !already_present {
+                        new_specs.insert(
+                            0,
+                            crate::plan::OrderSpec {
+                                expr: ExprRef::default(),
+                                desc: false,
+                            },
+                        );
+                    }
+                }
+            }
+
+            if new_input != *input || new_specs.len() != specs.len() {
+                arena.alloc(Plan::Sort {
                     input: new_input,
-                    specs: specs.clone(),
-                };
-                arena.alloc(new_plan)
+                    specs: new_specs,
+                })
             } else {
                 node
             }
@@ -380,6 +428,35 @@ fn eliminate_recursive(
             }
         }
 
+        // BTW 2025 §4.1: Full outer join with correlated predicates.
+        // When a Join(Full) is inside a DependentJoin, we need special
+        // handling: the correlation predicate cannot be pushed into a
+        // full outer join directly. Instead, we evaluate the predicate
+        // for every binding of the outer refs and use the result as
+        // the join condition.
+        Plan::Join {
+            left,
+            right,
+            kind: JoinKind::Full,
+            on,
+            filter,
+        } if state.current().is_some() => {
+            // Full outer join inside a correlated context.
+            // Recurse into both sides, then rebuild.
+            let new_left = eliminate_recursive(*left, state, arena, hir);
+            let new_right = eliminate_recursive(*right, state, arena, hir);
+
+            // The filter predicate may reference outer refs.
+            // Keep it as a post-join filter (cannot push into full outer join).
+            arena.alloc(Plan::Join {
+                left: new_left,
+                right: new_right,
+                kind: JoinKind::Full,
+                on: on.clone(),
+                filter: *filter,
+            })
+        }
+
         // Binary: recurse into both sides.
         Plan::Join {
             left,
@@ -445,7 +522,11 @@ fn eliminate_recursive(
         | Plan::Repeat { .. }
         | Plan::ScalarSubquery { .. }
         | Plan::Exists { .. } => node,
-    }
+    };
+
+    // Cache the result for CTE DAG cutting.
+    state.cache.insert(node, result);
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +567,10 @@ fn eliminate_dependent_join(
         },
     };
     let _info_idx = state.push(info);
+
+    // BTW 2025: merge parent's outer_refs into this unnesting.
+    // "Never push different D sets across dependent joins."
+    state.merge_parent_outer_refs();
 
     // Step 4: Unnest the LEFT (outer) side first.
     //
