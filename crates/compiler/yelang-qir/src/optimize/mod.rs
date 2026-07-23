@@ -1,8 +1,14 @@
-mod optimizer;
-pub mod decorrelate;
-pub mod join_reorder;
-pub mod pushdown;
-pub mod simplify;
-pub mod prune;
+//! Query optimization.
+//!
+//! Two phases:
+//! 1. **Logical optimization** (`logical/`): Plan → Plan transformations
+//!    that preserve query semantics (decorrelation, pushdown, simplify,
+//!    join reordering, projection pruning).
+//! 2. **Physical planning** (`../physical/`): Plan → PhysPlan transformations
+//!    that choose execution algorithms and insert Exchange nodes.
 
-pub use optimizer::{OptRule, ApplyOrder, Optimizer, default_rules};
+pub mod logical;
+mod optimizer;
+
+pub use logical::decorrelate;
+pub use optimizer::{default_rules, ApplyOrder, OptRule, Optimizer};
