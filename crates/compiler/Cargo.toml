@@ -13,6 +13,7 @@ members = [
     "yelang-thir",
     "yelang-qir",
     "yelang-mir",
+    "yelang-codegen",
     "yelang-driver",
     "stdlib/core",
 ]

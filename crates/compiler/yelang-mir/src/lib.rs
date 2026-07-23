@@ -15,8 +15,10 @@
 //! - Query expressions handled by QIR, not MIR
 
 pub mod body;
+pub mod bridge;
 pub mod build;
 pub mod ops;
+pub mod optimize;
 pub mod place;
 pub mod terminator;
 
@@ -24,6 +26,9 @@ pub use body::{
     AggregateKind, BasicBlock, BasicBlockData, BinOp, Body, Local, LocalDecl, LocalKind, Rvalue,
     Statement, UnOp,
 };
+pub use bridge::{QueryBridge, QueryBridgeRequest};
+pub use build::MirBuilder;
 pub use ops::{ConstValue, Constant, Operand};
+pub use optimize::MirPass;
 pub use place::{Place, Projection};
 pub use terminator::{AssertKind, SwitchTargets, Terminator, TerminatorKind};

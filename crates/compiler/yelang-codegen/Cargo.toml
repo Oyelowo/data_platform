@@ -1,0 +1,17 @@
+[package]
+name = "yelang-codegen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+yelang-arena = { path = "../yelang-arena" }
+yelang-interner = { path = "../yelang-interner" }
+yelang-mir = { path = "../yelang-mir" }
+yelang-qir = { path = "../yelang-qir" }
+yelang-ty = { path = "../yelang-ty" }

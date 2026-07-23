@@ -808,6 +808,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-codegen"
+version = "0.1.0"
+dependencies = [
+ "yelang-arena",
+ "yelang-interner",
+ "yelang-mir",
+ "yelang-qir",
+ "yelang-ty",
+]
+
+[[package]]
 name = "yelang-driver"
 version = "0.1.0"
 dependencies = [
