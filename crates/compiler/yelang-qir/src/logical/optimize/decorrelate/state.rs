@@ -3,7 +3,7 @@
 use yelang_arena::FxHashMap;
 use yelang_interner::Symbol;
 
-use crate::plan::PlanId;
+use crate::logical::plan::PlanId;
 
 use super::union_find::UnionFind;
 

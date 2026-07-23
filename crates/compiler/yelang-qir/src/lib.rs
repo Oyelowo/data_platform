@@ -22,17 +22,22 @@
 //! - [`AggKind`] — three-tier aggregate recognition (known / trait-based / opaque)
 
 pub mod analysis;
-pub mod lower;
+pub mod logical;
 pub mod optimize;
 pub mod physical;
-pub mod plan;
 pub mod tree;
 
-pub use lower::{lower_expr_as_plan, lower_query};
+pub use logical::{lower_expr_as_plan, lower_query};
 pub use optimize::{OptRule, Optimizer};
-pub use plan::{
+pub use logical::{
     AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, FrameBound, FrameUnit, GroupKey,
     JoinKind, NodeRef, OrderSpec, Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin,
     PlanRange, SortKey, SortSpec, SourceRef, TraversePath, TraverseSegment, UserDefinedPlanNode,
     WindowFrame, WindowFunc, WindowKind,
 };
+
+// Backward-compatible module re-exports: the logical plan types now live under
+// [`logical`], but downstream code (and this crate's own tests) historically
+// referenced them as `yelang_qir::plan` / `yelang_qir::lower`.
+pub use logical::lower;
+pub use logical::plan;

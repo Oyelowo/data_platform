@@ -29,7 +29,7 @@ mod union_find;
 
 pub use union_find::UnionFind;
 
-use crate::plan::{DepJoinKind, Plan, PlanArena, PlanId};
+use crate::logical::plan::{DepJoinKind, Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
 use eliminate::eliminate_recursive;

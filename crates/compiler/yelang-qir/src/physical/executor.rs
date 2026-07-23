@@ -5,7 +5,7 @@
 //! - `SingleNodeExecutor`: storage engine with index scan, filter pushdown
 //! - `DistributedExecutor`: sharded storage with Exchange = real shuffle
 
-use crate::plan::{ExprRef, JoinKind, SourceRef};
+use crate::logical::plan::{ExprRef, JoinKind, SourceRef};
 
 use super::algorithm::{AggAlgorithm, JoinAlgorithm, ScanStrategy, SortAlgorithm};
 

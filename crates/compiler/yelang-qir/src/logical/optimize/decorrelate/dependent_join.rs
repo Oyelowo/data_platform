@@ -3,7 +3,7 @@
 use yelang_arena::FxHashMap;
 use yelang_interner::Symbol;
 
-use crate::plan::{DepJoinKind, ExprRef, JoinKind, Plan, PlanArena, PlanId};
+use crate::logical::plan::{DepJoinKind, ExprRef, JoinKind, Plan, PlanArena, PlanId};
 
 use super::eliminate::eliminate_recursive;
 use super::equivalences::add_predicate_equivalences;

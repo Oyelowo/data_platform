@@ -4,7 +4,7 @@
 //! the plan tree: child enumeration, child mapping, and top-down /
 //! bottom-up recursive rewriting with change tracking.
 
-use crate::plan::{Plan, PlanArena, PlanId};
+use crate::logical::plan::{Plan, PlanArena, PlanId};
 
 // ---------------------------------------------------------------------------
 // Transformed

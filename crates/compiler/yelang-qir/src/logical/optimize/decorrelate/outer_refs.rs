@@ -3,7 +3,7 @@
 use yelang_interner::Symbol;
 
 use crate::analysis::referenced_fields;
-use crate::plan::{ExprRef, PlanArena, PlanId};
+use crate::logical::plan::{ExprRef, PlanArena, PlanId};
 
 /// Compute the outer references: symbols produced by `outer` that are
 /// referenced by `inner` or the join predicate.

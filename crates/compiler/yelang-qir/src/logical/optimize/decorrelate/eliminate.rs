@@ -1,6 +1,6 @@
 //! Top-down recursive elimination of dependent joins.
 
-use crate::plan::{GroupKey, JoinKind, Plan, PlanArena, PlanId, SortKey, SortSpec};
+use crate::logical::plan::{GroupKey, JoinKind, Plan, PlanArena, PlanId, SortKey, SortSpec};
 
 use super::dependent_join::eliminate_dependent_join;
 use super::state::UnnestingState;

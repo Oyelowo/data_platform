@@ -2,7 +2,7 @@
 
 use yelang_thir::ThirExpr;
 
-use crate::plan::{ExprRef, PlanArena};
+use crate::logical::plan::{ExprRef, PlanArena};
 
 use super::state::UnnestingState;
 use super::union_find::UnionFind;

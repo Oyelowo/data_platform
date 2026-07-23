@@ -7,7 +7,7 @@
 //! Decorrelation is special: it is a stateful top-down pass that runs
 //! **once** before the fixpoint loop (see the BTW 2025 algorithm).
 
-use crate::plan::{PlanArena, PlanId};
+use crate::logical::plan::{PlanArena, PlanId};
 use crate::tree::{transform_bottom_up, transform_top_down, Transformed};
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ impl Optimizer {
     /// stateful and top-down, not a fixpoint rule).
     pub fn optimize(&self, root: PlanId, arena: &mut PlanArena) -> PlanId {
         // Phase 0: Decorrelation (one-shot, top-down).
-        let mut current = super::logical::decorrelate::decorrelate(root, arena);
+        let mut current = crate::logical::optimize::decorrelate::decorrelate(root, arena);
 
         // Invariant: decorrelation must eliminate all correlated nodes.
         debug_assert!(
@@ -120,14 +120,14 @@ impl Default for Optimizer {
 pub fn default_rules() -> Vec<Box<dyn OptRule>> {
     vec![
         // Phase 1: Simplification
-        Box::new(super::logical::simplify::EliminateTrivialFilter),
-        Box::new(super::logical::simplify::EliminateTrivialLimit),
-        Box::new(super::logical::simplify::MergeAdjacentFilters),
+        Box::new(crate::logical::optimize::simplify::EliminateTrivialFilter),
+        Box::new(crate::logical::optimize::simplify::EliminateTrivialLimit),
+        Box::new(crate::logical::optimize::simplify::MergeAdjacentFilters),
         // Phase 2: Pushdown
-        Box::new(super::logical::pushdown::PushDownFilter),
+        Box::new(crate::logical::optimize::pushdown::PushDownFilter),
         // Phase 3: Join reordering (cost-based, greedy)
-        Box::new(super::logical::join_reorder::JoinReorder),
+        Box::new(crate::logical::optimize::join_reorder::JoinReorder),
         // Phase 4: Projection pruning
-        Box::new(super::logical::prune::PruneUnusedFields),
+        Box::new(crate::logical::optimize::prune::PruneUnusedFields),
     ]
 }

@@ -6,7 +6,7 @@
 //! columns.
 
 use crate::optimize::{ApplyOrder, OptRule};
-use crate::plan::{Plan, PlanArena, PlanId};
+use crate::logical::plan::{Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
 /// Push a projection list into `Scan` nodes that don't have one,

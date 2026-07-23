@@ -1,7 +1,7 @@
 //! Cost-based join reordering — greedy algorithm.
 //!
 //! Reorders join chains to minimize intermediate result sizes using
-//! cardinality estimates from [`PlanMeta::est_cardinality`](crate::plan::PlanMeta::est_cardinality).
+//! cardinality estimates from [`PlanMeta::est_cardinality`](crate::logical::plan::PlanMeta::est_cardinality).
 //!
 //! # Algorithm
 //!
@@ -24,7 +24,7 @@ use yelang_interner::Symbol;
 
 use crate::analysis::{plan_output_fields, referenced_fields};
 use crate::optimize::{ApplyOrder, OptRule};
-use crate::plan::{ExprRef, JoinKind, Plan, PlanArena, PlanId, PlanMeta};
+use crate::logical::plan::{ExprRef, JoinKind, Plan, PlanArena, PlanId, PlanMeta};
 use crate::tree::Transformed;
 
 // ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ mod tests {
     /// produces a valid plan.
     #[test]
     fn reorder_three_relations() {
-        use crate::plan::SourceRef;
+        use crate::logical::plan::SourceRef;
 
         let mut arena = PlanArena::new();
         let interner = yelang_interner::Interner::new();
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn two_relations_not_reordered() {
-        use crate::plan::SourceRef;
+        use crate::logical::plan::SourceRef;
 
         let mut arena = PlanArena::new();
         let interner = yelang_interner::Interner::new();

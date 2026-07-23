@@ -3,7 +3,7 @@
 
 use crate::analysis::{predicate_can_evaluate_against, referenced_fields};
 use crate::optimize::{ApplyOrder, OptRule};
-use crate::plan::{JoinKind, Plan, PlanArena, PlanId};
+use crate::logical::plan::{JoinKind, Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
 /// Push `Filter` nodes as far down the plan tree as possible.

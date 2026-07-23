@@ -11,7 +11,7 @@ use yelang_arena::FxHashSet;
 use yelang_interner::Symbol;
 use yelang_thir::ThirExpr;
 
-use crate::plan::{ExprRef, GroupKey, Plan, PlanArena, PlanId, SortKey};
+use crate::logical::plan::{ExprRef, GroupKey, Plan, PlanArena, PlanId, SortKey};
 
 // ---------------------------------------------------------------------------
 // Expression-level analysis
@@ -257,8 +257,8 @@ pub fn plan_referenced_fields(plan: &Plan, arena: &PlanArena) -> FxHashSet<Symbo
     fields
 }
 
-fn collect_agg_fields(kind: &crate::plan::AggKind, arena: &PlanArena, out: &mut FxHashSet<Symbol>) {
-    use crate::plan::AggKind;
+fn collect_agg_fields(kind: &crate::logical::plan::AggKind, arena: &PlanArena, out: &mut FxHashSet<Symbol>) {
+    use crate::logical::plan::AggKind;
     match kind {
         AggKind::Sum { expr }
         | AggKind::Avg { expr }

@@ -10,7 +10,7 @@ use crate::physical::{
     AggAlgorithm, ExchangeKind, Executor, JoinAlgorithm, PhysArena, PhysId, PhysOp,
     TraverseStrategy,
 };
-use crate::plan::{Plan, PlanArena, PlanId};
+use crate::logical::plan::{Plan, PlanArena, PlanId};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -324,7 +324,7 @@ fn insert_join_exchanges(
     left: PhysId,
     right: PhysId,
     algorithm: JoinAlgorithm,
-    _on: &[(crate::plan::ExprRef, crate::plan::ExprRef)],
+    _on: &[(crate::logical::plan::ExprRef, crate::logical::plan::ExprRef)],
     _executor: &dyn Executor,
     phys: &mut PhysArena,
 ) -> (PhysId, PhysId) {

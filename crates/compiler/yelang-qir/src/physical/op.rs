@@ -5,7 +5,7 @@ use std::sync::Arc;
 use yelang_arena::{Id, IndexVec};
 use yelang_interner::Symbol;
 
-use crate::plan::{AggCall, ExprRef, GroupKey, JoinKind, PlanRange, SortSpec, SourceRef, TraversePath};
+use crate::logical::plan::{AggCall, ExprRef, GroupKey, JoinKind, PlanRange, SortSpec, SourceRef, TraversePath};
 
 use super::algorithm::{
     AggAlgorithm, ExchangeKind, JoinAlgorithm, ScanStrategy, SortAlgorithm, TraverseStrategy,
@@ -139,7 +139,7 @@ pub enum PhysOp {
     // ── Window ─────────────────────────────────────────────────────────
     Window {
         input: PhysId,
-        funcs: Vec<crate::plan::WindowFunc>,
+        funcs: Vec<crate::logical::plan::WindowFunc>,
     },
 
     // ── Limit / Distinct ───────────────────────────────────────────────
@@ -184,7 +184,7 @@ pub enum PhysOp {
 
     // ── User-defined / opaque ──────────────────────────────────────────
     Extension {
-        node: Arc<dyn crate::plan::UserDefinedPlanNode>,
+        node: Arc<dyn crate::logical::plan::UserDefinedPlanNode>,
     },
 
     // ── Leaves ─────────────────────────────────────────────────────────

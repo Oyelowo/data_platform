@@ -2,7 +2,7 @@
 
 use yelang_interner::Symbol;
 
-use crate::plan::SortSpec;
+use crate::logical::plan::SortSpec;
 
 // ---------------------------------------------------------------------------
 // Algorithm choices

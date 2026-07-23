@@ -41,7 +41,7 @@ use yelang_thir::query::{
 };
 use yelang_thir::{ThirBodies, ThirExpr, ThirPat};
 
-use crate::plan::{
+use crate::logical::plan::{
     AggCall, AggKind, Direction, EdgeRef, GroupKey, JoinKind, NodeRef, Plan, PlanArena,
     PlanId, PlanOrigin, PlanRange, SortKey, SortSpec, SourceRef, TraversePath, TraverseSegment,
 };
@@ -801,8 +801,8 @@ fn collect_aggregate_calls(
                         input_expr: None,
                         // TODO: resolve from the trait impl's properties() method
                         // via constant evaluation. For now, use conservative defaults.
-                        properties: crate::plan::AggProperties {
-                            class: crate::plan::AggClass::Holistic,
+                        properties: crate::logical::plan::AggProperties {
+                            class: crate::logical::plan::AggClass::Holistic,
                             associative: false,
                             commutative: false,
                             invertible: false,
@@ -1336,8 +1336,8 @@ fn lower_method_call(
                             args: vec![thir_marker],
                             input_expr: None,
                             // TODO: resolve from trait impl's properties()
-                            properties: crate::plan::AggProperties {
-                                class: crate::plan::AggClass::Holistic,
+                            properties: crate::logical::plan::AggProperties {
+                                class: crate::logical::plan::AggClass::Holistic,
                                 associative: false,
                                 commutative: false,
                                 invertible: false,
@@ -1554,7 +1554,7 @@ struct OpaqueMethod {
     call: ExprId,
 }
 
-impl crate::plan::UserDefinedPlanNode for OpaqueMethod {
+impl crate::logical::plan::UserDefinedPlanNode for OpaqueMethod {
     fn name(&self) -> &str {
         &self.name
     }

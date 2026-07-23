@@ -12,7 +12,7 @@ use yelang_hir::res::Res;
 use yelang_hir::Crate;
 use yelang_interner::Symbol;
 
-use crate::plan::{EdgeRef, NodeRef, PlanArena, SourceRef};
+use crate::logical::plan::{EdgeRef, NodeRef, PlanArena, SourceRef};
 
 /// Resolve a `from` node's source expression to a [`SourceRef`].
 ///

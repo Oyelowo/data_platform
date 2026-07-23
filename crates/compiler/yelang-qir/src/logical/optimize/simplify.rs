@@ -1,7 +1,7 @@
 //! Simplification rules — remove trivially redundant nodes.
 
 use crate::optimize::{ApplyOrder, OptRule};
-use crate::plan::{Plan, PlanArena, PlanId};
+use crate::logical::plan::{Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
 /// Remove `Filter { pred: true }` — a filter that always passes.
