@@ -833,6 +833,7 @@ dependencies = [
  "yelang-thir",
  "yelang-ty",
  "yelang-tycheck",
+ "yelang-vm",
 ]
 
 [[package]]

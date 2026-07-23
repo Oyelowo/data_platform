@@ -20,4 +20,5 @@ yelang-resolve = { path = "../yelang-resolve" }
 yelang-thir = { path = "../yelang-thir" }
 yelang-ty = { path = "../yelang-ty" }
 yelang-tycheck = { path = "../yelang-tycheck" }
+yelang-vm = { path = "../yelang-vm" }
 thiserror = { workspace = true }

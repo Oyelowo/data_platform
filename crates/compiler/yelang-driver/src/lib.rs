@@ -190,3 +190,54 @@ pub fn compile_program(
 pub fn compile_in_memory(src: &str) -> Result<CompilationResult, CompileError> {
     compile_source(src, &InMemoryExecutor)
 }
+
+// ---------------------------------------------------------------------------
+// End-to-end execution: source → bytecode → VM → result
+// ---------------------------------------------------------------------------
+
+/// The result of executing a query.
+#[derive(Debug)]
+pub struct ExecutionResult {
+    /// The VM value produced by each query.
+    pub query_results: Vec<yelang_vm::Value>,
+}
+
+/// Compile and execute source text end-to-end.
+///
+/// Full pipeline: source → AST → HIR → THIR → QIR → physical plan
+/// → bytecode → VM execution → result values.
+pub fn execute_source(
+    src: &str,
+    executor: &dyn Executor,
+) -> Result<ExecutionResult, CompileError> {
+    let compilation = compile_source(src, executor)?;
+
+    let mut vm = yelang_vm::Vm::new();
+    let mut query_results = Vec::new();
+
+    for (_query_id, _logical_root, phys_root) in &compilation.plans {
+        // Compile the physical plan to bytecode.
+        let bytecode = yelang_vm::compile_query(&compilation.phys_arena, *phys_root);
+
+        // Create a program with this function.
+        let mut program = yelang_vm::CompiledProgram::new();
+        let func_id = program.add_function(bytecode);
+        program.entry = Some(func_id);
+
+        // Execute.
+        match vm.execute(&program) {
+            Ok(result) => query_results.push(result),
+            Err(_err) => {
+                // TODO: propagate VM errors properly.
+                query_results.push(yelang_vm::Value::Null);
+            }
+        }
+    }
+
+    Ok(ExecutionResult { query_results })
+}
+
+/// Compile and execute with the in-memory executor.
+pub fn execute_in_memory(src: &str) -> Result<ExecutionResult, CompileError> {
+    execute_source(src, &InMemoryExecutor)
+}
