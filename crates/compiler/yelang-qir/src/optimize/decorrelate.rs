@@ -581,20 +581,84 @@ fn collect_plan_refs(
 
 /// Add column equivalences from a predicate expression to the union-find.
 ///
-/// Looks for `Binary { op: Eq, left: Field(a), right: Field(b) }` patterns
-/// and unions `a` and `b`.
+/// Walks the HIR expression tree looking for equality comparisons between
+/// field accesses: `a.x == b.y` → `union(x, y)`.
+/// Also recurses through `And` conjunctions.
 fn add_predicate_equivalences(
     pred: yelang_hir::ids::ExprId,
     state: &mut UnnestingState,
     hir: &Crate,
 ) {
-    // TODO: walk the predicate expression tree looking for equality
-    // comparisons between field accesses. For each `a.x == b.y`,
-    // add `union(x, y)` to the current unnesting's cclasses.
-    //
-    // For now, this is a no-op. The full implementation requires
-    // pattern-matching on the HIR expression tree.
-    let _ = (pred, state, hir);
+    let Some(info) = state.current_mut() else {
+        return;
+    };
+    collect_equivalences(pred, hir, &mut info.cclasses);
+}
+
+/// Recursively collect field equivalences from an expression.
+fn collect_equivalences(
+    expr: yelang_hir::ids::ExprId,
+    hir: &Crate,
+    uf: &mut UnionFind,
+) {
+    use yelang_hir::hir::expr::Expr;
+
+    let Some(expr_node) = hir.expr(expr) else {
+        return;
+    };
+
+    match expr_node {
+        // a.x == b.y → union(x, y)
+        Expr::Binary {
+            op: yelang_ast::BinaryOp::Eq,
+            left,
+            right,
+        } => {
+            if let (
+                Some(Expr::Field { field: left_field, .. }),
+                Some(Expr::Field { field: right_field, .. }),
+            ) = (hir.expr(*left), hir.expr(*right))
+            {
+                uf.union(left_field.symbol, right_field.symbol);
+            }
+            // Also recurse into both sides for nested equalities.
+            collect_equivalences(*left, hir, uf);
+            collect_equivalences(*right, hir, uf);
+        }
+
+        // Recurse through AND conjunctions.
+        Expr::Binary {
+            op: yelang_ast::BinaryOp::And,
+            left,
+            right,
+        } => {
+            collect_equivalences(*left, hir, uf);
+            collect_equivalences(*right, hir, uf);
+        }
+
+        // Recurse into other binary ops (may contain nested equalities).
+        Expr::Binary { left, right, .. } => {
+            collect_equivalences(*left, hir, uf);
+            collect_equivalences(*right, hir, uf);
+        }
+
+        // Recurse into unary, calls, etc.
+        Expr::Unary { expr: inner, .. } => {
+            collect_equivalences(*inner, hir, uf);
+        }
+        Expr::Call { args, .. } => {
+            for &arg in args {
+                collect_equivalences(arg, hir, uf);
+            }
+        }
+        Expr::MethodCall { args, .. } => {
+            for &arg in args {
+                collect_equivalences(arg, hir, uf);
+            }
+        }
+
+        _ => {}
+    }
 }
 
 /// Convert a trivial dependent join (no correlation) to a regular join.

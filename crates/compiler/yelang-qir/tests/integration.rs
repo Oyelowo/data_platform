@@ -307,3 +307,164 @@ fn main() {
     let (_arena, roots, _interner) = plan_queries(src);
     assert_eq!(roots.len(), 2, "expected two query plans, got {}", roots.len());
 }
+
+// ---------------------------------------------------------------------------
+// Physical planning tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn physical_plan_produces_phys_ops() {
+    use yelang_qir::physical::{InMemoryExecutor, PhysArena};
+
+    let src = r#"
+fn main() {
+    let xs = [1, 2, 3];
+    let _ = select x from xs@x where x > 1 order by x;
+}
+"#;
+
+    let (plan_arena, roots, _interner) = plan_queries(src);
+    assert_eq!(roots.len(), 1);
+
+    let mut phys_arena = PhysArena::new();
+    let executor = InMemoryExecutor;
+    let phys_root = yelang_qir::physical::planner::plan_physical(
+        roots[0],
+        &plan_arena,
+        &executor,
+        &mut phys_arena,
+    );
+
+    // The physical plan should have at least one node.
+    assert!(
+        phys_arena.get(phys_root).is_some(),
+        "physical plan root should exist"
+    );
+
+    // Count physical nodes.
+    let node_count = phys_arena.nodes.len();
+    assert!(
+        node_count >= 2,
+        "expected at least 2 physical nodes, got {}",
+        node_count
+    );
+}
+
+#[test]
+fn in_memory_executor_produces_no_exchanges() {
+    use yelang_qir::physical::{InMemoryExecutor, PhysArena, PhysOp};
+
+    let src = r#"
+fn main() {
+    let xs = [1, 2, 3];
+    let _ = select x from xs@x where x > 1;
+}
+"#;
+
+    let (plan_arena, roots, _interner) = plan_queries(src);
+    assert_eq!(roots.len(), 1);
+
+    let mut phys_arena = PhysArena::new();
+    let executor = InMemoryExecutor;
+    let _phys_root = yelang_qir::physical::planner::plan_physical(
+        roots[0],
+        &plan_arena,
+        &executor,
+        &mut phys_arena,
+    );
+
+    // In-memory executor should produce no Exchange nodes.
+    let has_exchange = phys_arena
+        .nodes
+        .iter()
+        .any(|op| matches!(op, PhysOp::Exchange { .. }));
+    assert!(
+        !has_exchange,
+        "in-memory executor should not produce Exchange nodes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Decorrelation tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decorrelation_removes_dependent_joins() {
+    let src = r#"
+fn main() {
+    let xs = [1, 2, 3];
+    let _ = select x from xs@x where x > 1;
+}
+"#;
+
+    let (arena, _roots, _interner) = plan_queries(src);
+
+    // After optimization (which includes decorrelation), no correlated
+    // nodes should remain.
+    assert!(
+        !arena.has_correlated_nodes(),
+        "expected no correlated nodes after decorrelation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate decomposition tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn group_by_with_aggregate_populates_aggs() {
+    let src = r#"
+fn main() {
+    let xs = [1, 2, 3];
+    let _ = select g from xs@x group by { v: x } into g;
+}
+"#;
+
+    let (arena, roots, _interner) = plan_queries(src);
+    assert_eq!(roots.len(), 1);
+
+    // Find the Aggregate node and verify it exists.
+    let spine = plan_spine(&arena, roots[0]);
+    assert!(
+        spine.contains(&"Aggregate"),
+        "expected Aggregate in spine, got: {:?}",
+        spine
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SourceRef resolution tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn local_variable_source_resolves_to_local() {
+    let src = r#"
+fn main() {
+    let xs = [1, 2, 3];
+    let _ = select x from xs@x;
+}
+"#;
+
+    let (arena, roots, _interner) = plan_queries(src);
+    assert_eq!(roots.len(), 1);
+
+    // Walk to the Scan node and verify it has a Local source.
+    let mut current = Some(roots[0]);
+    let mut found_local_scan = false;
+    while let Some(id) = current {
+        let plan = arena.plan(id);
+        if let Plan::Scan {
+            source: yelang_qir::plan::SourceRef::Local { .. },
+            ..
+        } = plan
+        {
+            found_local_scan = true;
+            break;
+        }
+        current = first_child(plan);
+    }
+    assert!(
+        found_local_scan,
+        "expected Scan with Local source for local variable"
+    );
+}

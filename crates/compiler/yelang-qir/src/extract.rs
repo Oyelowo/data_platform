@@ -75,7 +75,7 @@ fn extract_select(
     let origin = PlanOrigin::QuerySyntax(query_id);
 
     // 1. Build scan(s) from `from` nodes.
-    let mut current = extract_from_nodes(&select.from, arena, &origin);
+    let mut current = extract_from_nodes(&select.from, hir, arena, &origin);
 
     // 2. Apply `links` traversals.
     if !select.links.is_empty() {
@@ -141,6 +141,9 @@ fn extract_select(
         origin,
     );
 
+    // 8. Post-process: decompose the projection to populate Aggregate.aggs.
+    decompose_projection_aggregates(current, select.projection, hir, interner, arena);
+
     current
 }
 
@@ -150,6 +153,7 @@ fn extract_select(
 
 fn extract_from_nodes(
     from: &[FromNode],
+    hir: &Crate,
     arena: &mut PlanArena,
     origin: &PlanOrigin,
 ) -> PlanId {
@@ -158,7 +162,7 @@ fn extract_from_nodes(
     let mut scans: Vec<PlanId> = Vec::with_capacity(from.len());
 
     for node in from {
-        let mut scan_id = extract_single_from(node, arena, origin);
+        let mut scan_id = extract_single_from(node, hir, arena, origin);
 
         // Per-root modifiers.
         if let Some(filter) = node.filter {
@@ -219,8 +223,13 @@ fn extract_from_nodes(
     result
 }
 
-fn extract_single_from(node: &FromNode, arena: &mut PlanArena, origin: &PlanOrigin) -> PlanId {
-    let source = SourceRef::Local { name: node.label };
+fn extract_single_from(
+    node: &FromNode,
+    hir: &Crate,
+    arena: &mut PlanArena,
+    origin: &PlanOrigin,
+) -> PlanId {
+    let source = resolve_source_ref(node.source, node.label, hir);
 
     alloc(
         arena,
@@ -232,6 +241,26 @@ fn extract_single_from(node: &FromNode, arena: &mut PlanArena, origin: &PlanOrig
         },
         origin.clone(),
     )
+}
+
+/// Determine the [`SourceRef`] for a `from` node's source expression.
+///
+/// - `Res::Def` → table-backed source (the DefId points to a struct)
+/// - `Res::Local` → local variable holding a collection
+/// - Other expressions → function/method call returning a collection
+fn resolve_source_ref(source_expr: ExprId, label: Symbol, hir: &Crate) -> SourceRef {
+    match hir.expr(source_expr) {
+        Some(Expr::Path { res }) => match res {
+            yelang_hir::res::Res::Def { def_id } => SourceRef::Table {
+                def: *def_id,
+                name: label,
+            },
+            yelang_hir::res::Res::Local { .. } => SourceRef::Local { name: label },
+            _ => SourceRef::Local { name: label },
+        },
+        // Non-path expressions (calls, etc.) → Call source.
+        _ => SourceRef::Call { func: source_expr },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +369,185 @@ fn extract_group_by(
 }
 
 // ---------------------------------------------------------------------------
+// Projection decomposition — extract aggregates from the select expression
+// ---------------------------------------------------------------------------
+
+/// Walk the projection expression to find aggregate calls and populate
+/// the `Aggregate` node's `aggs` list.
+///
+/// This is a post-processing step after the plan tree is built. It finds
+/// the `Aggregate` node in the tree, then walks the projection expression
+/// looking for known aggregate method calls (`sum`, `count`, `avg`, etc.)
+/// and user-defined `Aggregate` trait calls.
+fn decompose_projection_aggregates(
+    root: PlanId,
+    projection: ExprId,
+    hir: &Crate,
+    interner: &Interner,
+    arena: &mut PlanArena,
+) {
+    // Find the Aggregate node in the plan tree.
+    let agg_id = find_aggregate_node(root, arena);
+    let Some(agg_id) = agg_id else {
+        return; // No group by → no aggregates to decompose.
+    };
+
+    // Walk the projection expression to find aggregate calls.
+    let mut aggs = Vec::new();
+    collect_aggregate_calls(projection, hir, interner, &mut aggs);
+
+    if aggs.is_empty() {
+        return;
+    }
+
+    // Update the Aggregate node's aggs list.
+    if let Some(Plan::Aggregate { aggs: existing, .. }) = arena.get_mut(agg_id) {
+        *existing = aggs;
+    }
+}
+
+/// Find the first `Aggregate` node in the plan tree (walking down the spine).
+fn find_aggregate_node(root: PlanId, arena: &PlanArena) -> Option<PlanId> {
+    let mut current = Some(root);
+    while let Some(id) = current {
+        let plan = arena.plan(id);
+        if matches!(plan, Plan::Aggregate { .. }) {
+            return Some(id);
+        }
+        current = crate::tree::children(plan).into_iter().next();
+    }
+    None
+}
+
+/// Walk an expression tree and collect aggregate calls.
+fn collect_aggregate_calls(
+    expr: ExprId,
+    hir: &Crate,
+    interner: &Interner,
+    out: &mut Vec<AggCall>,
+) {
+    let Some(expr_node) = hir.expr(expr) else {
+        return;
+    };
+
+    match expr_node {
+        // Method call: check if it's a known aggregate.
+        Expr::MethodCall {
+            receiver: _,
+            method,
+            args,
+            ..
+        } => {
+            let name = method.symbol.as_str(interner);
+            let output = interner.intern(&format!("_{}", name));
+
+            let kind = match name {
+                "sum" => Some(AggKind::Sum { expr }),
+                "count" => Some(AggKind::Count),
+                "avg" => Some(AggKind::Avg { expr }),
+                "min" => Some(AggKind::Min { expr }),
+                "max" => Some(AggKind::Max { expr }),
+                "aggregate" => {
+                    // User-defined aggregate via .aggregate(Marker).
+                    let marker = args.first().copied();
+                    Some(AggKind::UserAggregate {
+                        impl_def: yelang_arena::DefId::new(1), // TODO: resolve
+                        args: marker.map(|m| vec![m]).unwrap_or_default(),
+                        input_expr: None,
+                    })
+                }
+                _ => None,
+            };
+
+            if let Some(kind) = kind {
+                out.push(AggCall { output, kind });
+            }
+
+            // Recurse into arguments (there may be nested aggregates).
+            for &arg in args {
+                collect_aggregate_calls(arg, hir, interner, out);
+            }
+        }
+
+        // Recurse into sub-expressions.
+        Expr::Binary { left, right, .. } => {
+            collect_aggregate_calls(*left, hir, interner, out);
+            collect_aggregate_calls(*right, hir, interner, out);
+        }
+        Expr::Unary { expr: inner, .. } => {
+            collect_aggregate_calls(*inner, hir, interner, out);
+        }
+        Expr::Call { func, args } => {
+            collect_aggregate_calls(*func, hir, interner, out);
+            for &arg in args {
+                collect_aggregate_calls(arg, hir, interner, out);
+            }
+        }
+        Expr::Field { expr: base, .. } => {
+            collect_aggregate_calls(*base, hir, interner, out);
+        }
+        Expr::Index { expr: base, index } => {
+            collect_aggregate_calls(*base, hir, interner, out);
+            collect_aggregate_calls(*index, hir, interner, out);
+        }
+        Expr::Cast { expr: inner, .. } | Expr::TypeAscription { expr: inner, .. } => {
+            collect_aggregate_calls(*inner, hir, interner, out);
+        }
+        Expr::Struct { fields, rest, .. } => {
+            for field in fields {
+                collect_aggregate_calls(field.expr, hir, interner, out);
+            }
+            if let Some(rest_expr) = rest {
+                collect_aggregate_calls(*rest_expr, hir, interner, out);
+            }
+        }
+        Expr::Object { fields } => {
+            for field in fields {
+                collect_aggregate_calls(field.expr, hir, interner, out);
+            }
+        }
+        Expr::Tuple { exprs } | Expr::Array { exprs } => {
+            for &e in exprs {
+                collect_aggregate_calls(e, hir, interner, out);
+            }
+        }
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            collect_aggregate_calls(*cond, hir, interner, out);
+            collect_aggregate_calls(*then_branch, hir, interner, out);
+            if let Some(else_expr) = else_branch {
+                collect_aggregate_calls(*else_expr, hir, interner, out);
+            }
+        }
+        Expr::Block { block } => {
+            if let Some(tail) = block.expr {
+                collect_aggregate_calls(tail, hir, interner, out);
+            }
+        }
+        Expr::Comprehension {
+            element,
+            variables,
+            condition,
+            ..
+        } => {
+            collect_aggregate_calls(*element, hir, interner, out);
+            for var in variables {
+                collect_aggregate_calls(var.source, hir, interner, out);
+            }
+            if let Some(cond) = condition {
+                collect_aggregate_calls(*cond, hir, interner, out);
+            }
+        }
+
+        // Leaves: no aggregates.
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Order by → OrderSpec
 // ---------------------------------------------------------------------------
 
@@ -366,10 +574,11 @@ fn alloc(arena: &mut PlanArena, plan: Plan, origin: PlanOrigin) -> PlanId {
 /// The binder pattern is typically a simple identifier pattern like `u`
 /// in `users@u:User`.
 fn binder_symbol(pat_id: PatId, hir: &Crate) -> Symbol {
-    // TODO: inspect the pattern kind in the HIR pattern arena to extract
-    // the identifier symbol. For now, return a placeholder.
-    let _ = (pat_id, hir);
-    Symbol::from(1u32)
+    match hir.pat(pat_id) {
+        Some(yelang_hir::hir::pat::Pat::Binding { name, .. }) => *name,
+        // Fallback for non-binding patterns (wildcard, etc.)
+        _ => Symbol::from(1u32),
+    }
 }
 
 // ===========================================================================
