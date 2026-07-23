@@ -2,8 +2,8 @@
 
 use yelang_interner::Interner;
 use yelang_vm::{
-    CompiledFunction, CompiledProgram, InMemoryStorage, Instruction, StorageBackend,
-    TraverseDirection, TraverseSpec, Value, Vm, WindowAgg, WindowFunc,
+    CompiledFunction, CompiledProgram, InMemoryStorage, Instruction, JoinAlgorithm, JoinKind,
+    JoinSpec, StorageBackend, TraverseDirection, TraverseSpec, Value, Vm, WindowAgg, WindowFunc,
 };
 
 fn run(instructions: Vec<Instruction>) -> Value {
@@ -943,4 +943,289 @@ fn traverse_no_matches_yields_empty_array() {
     assert_eq!(out.len(), 1);
     let matched = out[0].get_field(books).expect("missing books field");
     assert_eq!(matched.len(), Some(0));
+}
+
+// ===========================================================================
+// Joins (Task 4)
+// ===========================================================================
+
+/// Run a join between two in-memory row collections and return the joined rows.
+fn run_join(left: Vec<Value>, right: Vec<Value>, spec: JoinSpec) -> Vec<Value> {
+    let result = run(vec![
+        Instruction::PushConst(Value::QueryResult(left)),
+        Instruction::PushConst(Value::QueryResult(right)),
+        Instruction::QueryJoin(spec),
+        Instruction::Halt,
+    ]);
+    into_rows(result)
+}
+
+/// Build the standard join fixtures:
+/// - `users`  {id, name}:  (1, 10), (2, 20), (3, 30)
+/// - `orders` {user_id, amount}: (1, 100), (1, 200), (2, 50)
+///
+/// User 3 has no order; user 1 has two orders.
+fn join_fixtures(
+    interner: &Interner,
+) -> (
+    Vec<Value>,
+    Vec<Value>,
+    yelang_interner::Symbol,
+    yelang_interner::Symbol,
+    yelang_interner::Symbol,
+    yelang_interner::Symbol,
+) {
+    let id = interner.intern("id");
+    let name = interner.intern("name");
+    let user_id = interner.intern("user_id");
+    let amount = interner.intern("amount");
+
+    let users = vec![
+        Value::Struct(1, vec![(id, Value::Int(1)), (name, Value::Int(10))]),
+        Value::Struct(1, vec![(id, Value::Int(2)), (name, Value::Int(20))]),
+        Value::Struct(1, vec![(id, Value::Int(3)), (name, Value::Int(30))]),
+    ];
+    let orders = vec![
+        Value::Struct(2, vec![(user_id, Value::Int(1)), (amount, Value::Int(100))]),
+        Value::Struct(2, vec![(user_id, Value::Int(1)), (amount, Value::Int(200))]),
+        Value::Struct(2, vec![(user_id, Value::Int(2)), (amount, Value::Int(50))]),
+    ];
+
+    (users, orders, id, name, user_id, amount)
+}
+
+/// Count rows whose `id` field equals `value`.
+fn count_with_id(rows: &[Value], id: yelang_interner::Symbol, value: i128) -> usize {
+    rows.iter()
+        .filter(|r| r.get_field(id) == Some(&Value::Int(value)))
+        .count()
+}
+
+#[test]
+fn inner_join_on_matching_keys() {
+    let interner = Interner::new();
+    let (users, orders, id, name, user_id, amount) = join_fixtures(&interner);
+
+    let spec = JoinSpec {
+        kind: JoinKind::Inner,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, orders, spec);
+
+    // user 1 → 2 orders, user 2 → 1 order, user 3 → none. Total 3.
+    assert_eq!(out.len(), 3);
+    assert_eq!(count_with_id(&out, id, 1), 2);
+    assert_eq!(count_with_id(&out, id, 2), 1);
+    assert_eq!(count_with_id(&out, id, 3), 0);
+
+    // A joined row carries columns from both sides.
+    let row1 = out
+        .iter()
+        .find(|r| r.get_field(amount) == Some(&Value::Int(100)))
+        .expect("missing joined row with amount 100");
+    assert_eq!(row1.get_field(id), Some(&Value::Int(1)));
+    assert_eq!(row1.get_field(name), Some(&Value::Int(10)));
+    assert_eq!(row1.get_field(user_id), Some(&Value::Int(1)));
+}
+
+#[test]
+fn inner_join_nested_loop_matches_hash() {
+    let interner = Interner::new();
+    let (users, orders, id, _name, user_id, _amount) = join_fixtures(&interner);
+
+    let hash_spec = JoinSpec {
+        kind: JoinKind::Inner,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let nl_spec = JoinSpec {
+        kind: JoinKind::Inner,
+        algorithm: JoinAlgorithm::NestedLoop,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+
+    let hash_out = run_join(users.clone(), orders.clone(), hash_spec);
+    let nl_out = run_join(users, orders, nl_spec);
+
+    // Both strategies must agree on the result multiset.
+    assert_eq!(hash_out.len(), nl_out.len());
+    for row in &nl_out {
+        assert!(hash_out.contains(row), "hash join missing {:?}", row);
+    }
+}
+
+#[test]
+fn left_join_keeps_unmatched_left_rows() {
+    let interner = Interner::new();
+    let (users, orders, id, _name, user_id, amount) = join_fixtures(&interner);
+
+    let spec = JoinSpec {
+        kind: JoinKind::Left,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, orders, spec);
+
+    // 2 (user 1) + 1 (user 2) + 1 padded (user 3) = 4 rows.
+    assert_eq!(out.len(), 4);
+    assert_eq!(count_with_id(&out, id, 3), 1);
+
+    // User 3's row is padded with null right-side columns.
+    let user3 = out
+        .iter()
+        .find(|r| r.get_field(id) == Some(&Value::Int(3)))
+        .expect("missing padded user 3 row");
+    assert_eq!(user3.get_field(amount), Some(&Value::Null));
+    assert_eq!(user3.get_field(user_id), Some(&Value::Null));
+}
+
+#[test]
+fn semi_join_keeps_only_matching_left_rows() {
+    let interner = Interner::new();
+    let (users, orders, id, name, user_id, amount) = join_fixtures(&interner);
+
+    let spec = JoinSpec {
+        kind: JoinKind::Semi,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, orders, spec);
+
+    // Users 1 and 2 have at least one order; user 3 does not. Each matching
+    // left row appears exactly once (no duplication, no right columns).
+    assert_eq!(out.len(), 2);
+    assert_eq!(count_with_id(&out, id, 1), 1);
+    assert_eq!(count_with_id(&out, id, 2), 1);
+    assert_eq!(count_with_id(&out, id, 3), 0);
+
+    // Semi join emits the left row unchanged (still has `name`, no `amount`).
+    let user1 = out
+        .iter()
+        .find(|r| r.get_field(id) == Some(&Value::Int(1)))
+        .expect("missing user 1");
+    assert_eq!(user1.get_field(name), Some(&Value::Int(10)));
+    assert_eq!(user1.get_field(amount), None);
+}
+
+#[test]
+fn anti_join_keeps_only_non_matching_left_rows() {
+    let interner = Interner::new();
+    let (users, orders, id, _name, user_id, _amount) = join_fixtures(&interner);
+
+    let spec = JoinSpec {
+        kind: JoinKind::Anti,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, orders, spec);
+
+    // Only user 3 has no matching order.
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].get_field(id), Some(&Value::Int(3)));
+}
+
+#[test]
+fn cross_join_produces_all_pairs() {
+    let interner = Interner::new();
+    let a = interner.intern("a");
+    let b = interner.intern("b");
+
+    let left = vec![
+        Value::Struct(1, vec![(a, Value::Int(1))]),
+        Value::Struct(1, vec![(a, Value::Int(2))]),
+    ];
+    let right = vec![
+        Value::Struct(2, vec![(b, Value::Int(10))]),
+        Value::Struct(2, vec![(b, Value::Int(20))]),
+        Value::Struct(2, vec![(b, Value::Int(30))]),
+    ];
+
+    let spec = JoinSpec {
+        kind: JoinKind::Cross,
+        algorithm: JoinAlgorithm::NestedLoop,
+        left_keys: vec![],
+        right_keys: vec![],
+    };
+    let out = run_join(left, right, spec);
+
+    // 2 × 3 = 6 pairs, each combining an `a` and a `b` column.
+    assert_eq!(out.len(), 6);
+    for row in &out {
+        assert!(row.get_field(a).is_some());
+        assert!(row.get_field(b).is_some());
+    }
+}
+
+#[test]
+fn right_join_keeps_unmatched_right_rows() {
+    let interner = Interner::new();
+    let (users, orders, id, _name, user_id, amount) = join_fixtures(&interner);
+
+    let spec = JoinSpec {
+        kind: JoinKind::Right,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, orders, spec);
+
+    // Every order (3) is preserved; all happen to match a user, so 3 rows.
+    assert_eq!(out.len(), 3);
+    // Each output row carries an amount from the right side.
+    assert!(out.iter().all(|r| r.get_field(amount).is_some()));
+}
+
+#[test]
+fn join_with_empty_right_input() {
+    let interner = Interner::new();
+    let (users, _orders, id, _name, user_id, _amount) = join_fixtures(&interner);
+
+    // Inner join against an empty right side yields nothing.
+    let spec = JoinSpec {
+        kind: JoinKind::Inner,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, vec![], spec);
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn join_with_empty_left_input() {
+    let interner = Interner::new();
+    let (_users, orders, id, _name, user_id, _amount) = join_fixtures(&interner);
+
+    // Inner join with an empty left side yields nothing.
+    let spec = JoinSpec {
+        kind: JoinKind::Inner,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(vec![], orders, spec);
+    assert_eq!(out.len(), 0);
+}
+
+#[test]
+fn anti_join_with_empty_right_keeps_all_left() {
+    let interner = Interner::new();
+    let (users, _orders, id, _name, user_id, _amount) = join_fixtures(&interner);
+
+    // With no right rows, every left row has "no match" → all are kept.
+    let spec = JoinSpec {
+        kind: JoinKind::Anti,
+        algorithm: JoinAlgorithm::Hash,
+        left_keys: vec![id],
+        right_keys: vec![user_id],
+    };
+    let out = run_join(users, vec![], spec);
+    assert_eq!(out.len(), 3);
 }

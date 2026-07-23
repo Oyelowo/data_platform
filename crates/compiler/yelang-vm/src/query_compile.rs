@@ -5,31 +5,41 @@
 //! (QueryScan, QueryFilter, QueryJoin, QueryAggregate, etc.).
 
 use yelang_interner::Symbol;
-use yelang_qir::physical::{PhysArena, PhysId, PhysOp};
-use yelang_qir::plan::{Direction, TraversePath};
+use yelang_qir::physical::{JoinAlgorithm as PhysJoinAlgorithm, PhysArena, PhysId, PhysOp};
+use yelang_qir::plan::{Direction, JoinKind as PhysJoinKind, PlanArena, TraversePath};
 
 use crate::instruction::{CompiledFunction, Instruction};
+use crate::join::{JoinAlgorithm, JoinKind, JoinSpec};
 use crate::traverse::{TraverseDirection, TraverseSpec};
 
 /// Compile a QIR physical plan into a bytecode function.
 ///
 /// The resulting function, when executed by the VM, runs the query
 /// and leaves the result on the stack.
-pub fn compile_query(plan: &PhysArena, root: PhysId) -> CompiledFunction {
-    let mut compiler = QueryCompiler::new();
+///
+/// `plan_arena` supplies the THIR expressions needed to resolve a join's key
+/// columns (the `on` expressions are field accesses back into the typed HIR).
+pub fn compile_query(
+    plan: &PhysArena,
+    root: PhysId,
+    plan_arena: &PlanArena,
+) -> CompiledFunction {
+    let mut compiler = QueryCompiler::new(plan_arena);
     compiler.compile_node(plan, root);
     compiler.emit(Instruction::Halt);
     compiler.finish()
 }
 
-struct QueryCompiler {
+struct QueryCompiler<'a> {
     instructions: Vec<Instruction>,
+    plan_arena: &'a PlanArena,
 }
 
-impl QueryCompiler {
-    fn new() -> Self {
+impl<'a> QueryCompiler<'a> {
+    fn new(plan_arena: &'a PlanArena) -> Self {
         Self {
             instructions: Vec::new(),
+            plan_arena,
         }
     }
 
@@ -80,17 +90,19 @@ impl QueryCompiler {
             PhysOp::Join {
                 left,
                 right,
-                kind: _,
-                algorithm: _,
-                on: _,
+                kind,
+                algorithm,
+                on,
                 filter: _,
             } => {
-                // Compile both sides.
+                // Compile both sides; the right result ends up on top of the
+                // stack, matching the VM's QueryJoin pop order.
                 self.compile_node(plan, *left);
                 self.compile_node(plan, *right);
-                // TODO: compile the join predicate.
-                self.emit(Instruction::PushConst(crate::value::Value::Bool(true)));
-                self.emit(Instruction::QueryJoin);
+                // Compile the join predicate: resolve each equi-join `on`
+                // pair to its key columns and pick the physical algorithm.
+                let spec = build_join_spec(*kind, *algorithm, on, self.plan_arena);
+                self.emit(Instruction::QueryJoin(spec));
             }
 
             PhysOp::Aggregate {
@@ -259,4 +271,76 @@ fn build_traverse_spec(paths: &[TraversePath]) -> Option<TraverseSpec> {
         target_key: id,
         output: segment.target.label,
     })
+}
+
+/// Build a VM [`JoinSpec`] from a physical join operator.
+///
+/// Each `on` pair `(left_expr, right_expr)` is an equi-join predicate; when
+/// both sides resolve to field accesses their column names become the join
+/// keys. If any pair fails to resolve (a non-equi predicate such as `<`), the
+/// whole join falls back to a keyless nested loop so the residual predicate is
+/// never silently dropped into a wrong hash key.
+fn build_join_spec(
+    kind: PhysJoinKind,
+    algorithm: PhysJoinAlgorithm,
+    on: &[(yelang_qir::plan::ExprRef, yelang_qir::plan::ExprRef)],
+    plan_arena: &PlanArena,
+) -> JoinSpec {
+    let mut left_keys = Vec::with_capacity(on.len());
+    let mut right_keys = Vec::with_capacity(on.len());
+    let mut all_equi = true;
+
+    for (left_expr, right_expr) in on {
+        match (
+            plan_arena.field_name(*left_expr),
+            plan_arena.field_name(*right_expr),
+        ) {
+            (Some(lk), Some(rk)) => {
+                left_keys.push(lk);
+                right_keys.push(rk);
+            }
+            _ => {
+                all_equi = false;
+            }
+        }
+    }
+
+    // A single non-equi predicate demotes the whole join to a keyless scan.
+    if !all_equi {
+        left_keys.clear();
+        right_keys.clear();
+    }
+
+    let vm_kind = match kind {
+        PhysJoinKind::Inner => JoinKind::Inner,
+        PhysJoinKind::Left => JoinKind::Left,
+        PhysJoinKind::Right => JoinKind::Right,
+        PhysJoinKind::Full => JoinKind::Full,
+        PhysJoinKind::Semi => JoinKind::Semi,
+        PhysJoinKind::Anti => JoinKind::Anti,
+        PhysJoinKind::Cross => JoinKind::Cross,
+    };
+
+    let vm_algorithm = match algorithm {
+        PhysJoinAlgorithm::HashBuildProbe
+        | PhysJoinAlgorithm::CoLocatedHash
+        | PhysJoinAlgorithm::ShuffleHash
+        | PhysJoinAlgorithm::BroadcastHash => JoinAlgorithm::Hash,
+        PhysJoinAlgorithm::SortMerge | PhysJoinAlgorithm::NestedLoop => JoinAlgorithm::NestedLoop,
+    };
+
+    // A hash join needs at least one equi key; otherwise fall back to a
+    // nested loop (cross joins always take the nested-loop path).
+    let vm_algorithm = if left_keys.is_empty() {
+        JoinAlgorithm::NestedLoop
+    } else {
+        vm_algorithm
+    };
+
+    JoinSpec {
+        kind: vm_kind,
+        algorithm: vm_algorithm,
+        left_keys,
+        right_keys,
+    }
 }

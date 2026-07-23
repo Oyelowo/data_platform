@@ -67,6 +67,19 @@ impl PlanArena {
         self.thir_exprs.get(id)
     }
 
+    /// If the expression referenced by `id` is a field access `_.field`, return
+    /// the field's name.
+    ///
+    /// Used to extract equi-join key columns from a join's `on` expressions:
+    /// a predicate like `a.id == b.id` lowers each side to a `Field` access
+    /// whose `field` symbol is the column being joined on.
+    pub fn field_name(&self, id: ExprRef) -> Option<Symbol> {
+        match self.thir_expr(id)? {
+            yelang_thir::ThirExpr::Field { field, .. } => Some(*field),
+            _ => None,
+        }
+    }
+
     /// Copy the THIR expression arena from [`yelang_thir::ThirBodies`].
     pub fn load_thir_exprs(&mut self, bodies: &yelang_thir::ThirBodies) {
         self.thir_exprs = bodies.exprs.clone();

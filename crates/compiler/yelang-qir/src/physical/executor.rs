@@ -199,7 +199,7 @@ impl Executor for SingleNodeExecutor {
         }
     }
 
-    fn choose_scan(&self, source: &SourceRef, has_filter: bool) -> ScanStrategy {
+    fn choose_scan(&self, _source: &SourceRef, has_filter: bool) -> ScanStrategy {
         if self.has_indexes && has_filter {
             ScanStrategy::Auto // Let the storage engine decide
         } else {

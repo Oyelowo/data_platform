@@ -9,6 +9,7 @@
 
 use yelang_interner::Symbol;
 
+use crate::join::JoinSpec;
 use crate::traverse::TraverseSpec;
 use crate::value::Value;
 
@@ -171,8 +172,10 @@ pub enum Instruction {
     QueryFilter,
     /// Project: pop QueryResult + field list, push projected QueryResult.
     QueryProject(Vec<Symbol>),
-    /// Join: pop two QueryResults + join predicate, push joined QueryResult.
-    QueryJoin,
+    /// Join: pop the right QueryResult then the left QueryResult, push the
+    /// joined QueryResult. The [`JoinSpec`] carries the join kind, algorithm,
+    /// and equi-join key columns (the compiled join predicate).
+    QueryJoin(JoinSpec),
     /// Aggregate: pop QueryResult + group keys + agg functions, push aggregated result.
     QueryAggregate(Vec<Symbol>),
     /// Sort: pop QueryResult + sort keys, push sorted QueryResult.

@@ -125,7 +125,9 @@ pub fn default_rules() -> Vec<Box<dyn OptRule>> {
         Box::new(super::simplify::MergeAdjacentFilters),
         // Phase 2: Pushdown
         Box::new(super::pushdown::PushDownFilter),
-        // Phase 3: Projection pruning
+        // Phase 3: Join reordering (cost-based, greedy)
+        Box::new(super::join_reorder::JoinReorder),
+        // Phase 4: Projection pruning
         Box::new(super::prune::PruneUnusedFields),
     ]
 }

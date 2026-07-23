@@ -7,10 +7,12 @@
 //! - All Yelang value types
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use yelang_interner::Symbol;
 
 use crate::instruction::{CompiledFunction, CompiledProgram, Instruction, WindowAgg, WindowFunc};
+use crate::join::{JoinAlgorithm, JoinKind, JoinSpec};
 use crate::storage::{EmptyStorage, StorageBackend};
 use crate::traverse::{TraverseDirection, TraverseSpec};
 use crate::value::Value;
@@ -499,14 +501,14 @@ impl Vm {
                 let qr = self.pop()?;
                 self.push(qr)?;
             }
-            Instruction::QueryJoin => {
-                // TODO: join two QueryResults.
-                let _pred = self.pop()?;
+            Instruction::QueryJoin(spec) => {
+                // Stack: [..., left, right] — right is on top.
                 let right = self.pop()?;
                 let left = self.pop()?;
-                // For now, return left.
-                let _ = right;
-                self.push(left)?;
+                let left_rows = into_rows(left)?;
+                let right_rows = into_rows(right)?;
+                let result = execute_join(&left_rows, &right_rows, spec);
+                self.push(Value::QueryResult(result))?;
             }
             Instruction::QueryAggregate(_keys) => {
                 // TODO: aggregate QueryResult.
@@ -1060,4 +1062,218 @@ fn execute_traverse(
     }
 
     result
+}
+
+// ── Join execution helpers ─────────────────────────────────────────────────
+
+/// A hashable, equality-comparable representation of a runtime [`Value`].
+///
+/// `Value` itself is not `Hash` (it contains `f64`), so join keys are projected
+/// into this form before being used as `HashMap` keys. Numeric variants keep
+/// their distinct tags so that `Int(1)` and `Uint(1)` hash consistently with
+/// how the nested-loop path compares them (via `Value` equality).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum HashValue {
+    Unit,
+    Null,
+    Bool(bool),
+    Int(i128),
+    Uint(u128),
+    /// Stored as raw bits so that `NaN`/`-0.0` edge cases still hash.
+    Float(u64),
+    Char(char),
+    Str(Symbol),
+    /// Any composite value falls back to its display form.
+    Other(String),
+}
+
+impl HashValue {
+    fn from_value(value: &Value) -> Self {
+        match value {
+            Value::Unit => HashValue::Unit,
+            Value::Null => HashValue::Null,
+            Value::Bool(b) => HashValue::Bool(*b),
+            Value::Int(i) => HashValue::Int(*i),
+            Value::Uint(u) => HashValue::Uint(*u),
+            Value::Float(f) => HashValue::Float(f.to_bits()),
+            Value::Char(c) => HashValue::Char(*c),
+            Value::Str(s) => HashValue::Str(*s),
+            other => HashValue::Other(other.to_string()),
+        }
+    }
+}
+
+/// A hashable join key: the projected key-column values of a single row.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct HashKey(Vec<HashValue>);
+
+/// Extract a row's join key (the tuple of `keys` field values) in hashable
+/// form. Missing fields project to [`Value::Null`].
+fn extract_key(row: &Value, keys: &[Symbol]) -> HashKey {
+    HashKey(keys.iter().map(|k| HashValue::from_value(&field_of(row, *k))).collect())
+}
+
+/// Build the probe-side hash table: right join key → indices of the right rows
+/// carrying that key.
+fn build_hash_table(right: &[Value], right_keys: &[Symbol]) -> HashMap<HashKey, Vec<usize>> {
+    let mut table: HashMap<HashKey, Vec<usize>> = HashMap::new();
+    for (idx, row) in right.iter().enumerate() {
+        table.entry(extract_key(row, right_keys)).or_default().push(idx);
+    }
+    table
+}
+
+/// Merge a matched left/right row pair into a single output row.
+///
+/// Left fields come first; right fields are appended unless a field of the same
+/// name already exists (the left value wins on collision). A [`Value::Null`]
+/// side (outer-join padding with no schema) contributes nothing.
+fn combine_rows(left: &Value, right: &Value) -> Value {
+    match (left, right) {
+        (Value::Struct(def_id, left_fields), Value::Struct(_, right_fields)) => {
+            let mut fields = left_fields.clone();
+            for (name, val) in right_fields {
+                if !fields.iter().any(|(n, _)| n == name) {
+                    fields.push((*name, val.clone()));
+                }
+            }
+            Value::Struct(*def_id, fields)
+        }
+        (Value::Null, _) => right.clone(),
+        (_, Value::Null) => left.clone(),
+        // Non-struct rows: keep both sides as a pair so neither is lost.
+        _ => Value::Tuple(vec![left.clone(), right.clone()]),
+    }
+}
+
+/// Build a null-padded row mirroring `template`'s field names, used to outer-
+/// join the side that had no match. Returns [`Value::Null`] when there is no
+/// template to derive a schema from.
+fn null_row_like(template: Option<&Value>) -> Value {
+    match template {
+        Some(Value::Struct(def_id, fields)) => Value::Struct(
+            *def_id,
+            fields.iter().map(|(name, _)| (*name, Value::Null)).collect(),
+        ),
+        _ => Value::Null,
+    }
+}
+
+/// Execute a join between two row collections per `spec`.
+///
+/// Equi-joins with a usable key on each side run as a hash build/probe when
+/// [`JoinAlgorithm::Hash`] is requested; everything else (cross joins,
+/// non-equi joins, keyless specs) runs as a nested loop. Both paths produce
+/// identical output for the same inputs.
+fn execute_join(left: &[Value], right: &[Value], spec: &JoinSpec) -> Vec<Value> {
+    // Cross join: unconditional cartesian product, no predicate.
+    if spec.kind == JoinKind::Cross {
+        let mut out = Vec::with_capacity(left.len().saturating_mul(right.len()));
+        for l in left {
+            for r in right {
+                out.push(combine_rows(l, r));
+            }
+        }
+        return out;
+    }
+
+    let equi = spec.is_equi();
+    let use_hash = equi && spec.algorithm == JoinAlgorithm::Hash;
+    let hash_table = use_hash.then(|| build_hash_table(right, &spec.right_keys));
+
+    // Null padding templates for outer joins.
+    let null_right = null_row_like(right.first());
+    let null_left = null_row_like(left.first());
+
+    // For Right/Full joins, track which right rows found a match.
+    let track_right = matches!(spec.kind, JoinKind::Right | JoinKind::Full);
+    let mut right_matched = vec![false; right.len()];
+
+    let mut out: Vec<Value> = Vec::new();
+
+    for l in left {
+        // Indices into `right` that match this left row.
+        let matches: Vec<usize> = match &hash_table {
+            Some(table) => table
+                .get(&extract_key(l, &spec.left_keys))
+                .cloned()
+                .unwrap_or_default(),
+            None => nested_loop_matches(l, right, spec, equi),
+        };
+
+        if track_right {
+            for &ri in &matches {
+                right_matched[ri] = true;
+            }
+        }
+
+        match spec.kind {
+            JoinKind::Inner => {
+                for ri in matches {
+                    out.push(combine_rows(l, &right[ri]));
+                }
+            }
+            JoinKind::Left | JoinKind::Full => {
+                if matches.is_empty() {
+                    out.push(combine_rows(l, &null_right));
+                } else {
+                    for ri in matches {
+                        out.push(combine_rows(l, &right[ri]));
+                    }
+                }
+            }
+            JoinKind::Right => {
+                // Emit matched pairs only; unmatched left rows are dropped.
+                // Unmatched right rows are appended after the loop.
+                for ri in matches {
+                    out.push(combine_rows(l, &right[ri]));
+                }
+            }
+            JoinKind::Semi => {
+                if !matches.is_empty() {
+                    out.push(l.clone());
+                }
+            }
+            JoinKind::Anti => {
+                if matches.is_empty() {
+                    out.push(l.clone());
+                }
+            }
+            JoinKind::Cross => unreachable!("cross join handled above"),
+        }
+    }
+
+    // Right/Full outer: emit unmatched right rows padded with null left columns.
+    if track_right {
+        for (ri, matched) in right_matched.iter().enumerate() {
+            if !matched {
+                out.push(combine_rows(&null_left, &right[ri]));
+            }
+        }
+    }
+
+    out
+}
+
+/// Nested-loop match scan: indices of the right rows that match `left_row`.
+///
+/// With `equi` true the rows match on join-key equality; otherwise every right
+/// row matches (a keyless inner join degenerates to a cartesian product).
+fn nested_loop_matches(
+    left_row: &Value,
+    right: &[Value],
+    spec: &JoinSpec,
+    equi: bool,
+) -> Vec<usize> {
+    if equi {
+        let left_key = extract_key(left_row, &spec.left_keys);
+        right
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| extract_key(r, &spec.right_keys) == left_key)
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        (0..right.len()).collect()
+    }
 }

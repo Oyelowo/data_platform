@@ -14,6 +14,7 @@
 
 pub mod compile;
 pub mod instruction;
+pub mod join;
 pub mod parallel;
 pub mod query_compile;
 pub mod reg_instruction;
@@ -24,10 +25,11 @@ pub mod vm;
 
 pub use compile::compile_mir;
 pub use instruction::{CompiledFunction, CompiledProgram, Instruction, WindowAgg, WindowFunc};
+pub use join::{JoinAlgorithm, JoinKind, JoinSpec};
 pub use parallel::{Morsel, MorselQueue, ParallelExecutor, DEFAULT_MORSEL_SIZE};
 pub use query_compile::compile_query;
 pub use reg_instruction::RegInstruction;
-pub use storage::{EmptyStorage, InMemoryStorage, StorageBackend};
+pub use storage::{DistributedSimStorage, EmptyStorage, InMemoryStorage, SimulatedTableStorage, StorageBackend};
 pub use traverse::{TraverseDirection, TraverseSpec};
 pub use value::Value;
 pub use vm::{Vm, VmError};

@@ -217,7 +217,8 @@ pub fn execute_source(
 
     for (_query_id, _logical_root, phys_root) in &compilation.plans {
         // Compile the physical plan to bytecode.
-        let bytecode = yelang_vm::compile_query(&compilation.phys_arena, *phys_root);
+        let bytecode =
+            yelang_vm::compile_query(&compilation.phys_arena, *phys_root, &compilation.plan_arena);
 
         // Create a program with this function.
         let mut program = yelang_vm::CompiledProgram::new();
