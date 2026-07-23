@@ -124,6 +124,24 @@ pub enum PhysOp {
         algorithm: SortAlgorithm,
     },
 
+    /// Fused Sort + Limit (DuckDB-style TopN).
+    ///
+    /// Uses a min/max heap to efficiently return the top-N rows
+    /// without sorting the entire input. The physical planner
+    /// detects `Sort → Limit` patterns and fuses them into this.
+    TopN {
+        input: PhysId,
+        specs: Vec<SortSpec>,
+        skip: Option<ExprRef>,
+        fetch: ExprRef,
+    },
+
+    // ── Window ─────────────────────────────────────────────────────────
+    Window {
+        input: PhysId,
+        funcs: Vec<crate::plan::WindowFunc>,
+    },
+
     // ── Limit / Distinct ───────────────────────────────────────────────
     Limit {
         input: PhysId,

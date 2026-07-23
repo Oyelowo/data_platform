@@ -10,7 +10,7 @@
 //! # Pipeline position
 //!
 //! ```text
-//! THIR (typed) ──► Plan extraction ──► Logical optimization ──► Physical planning ──► Execution
+//! THIR (typed) ──► Plan lowering ──► Logical optimization ──► Physical planning ──► Execution
 //!                  (this crate)        (this crate)            (future)              (future)
 //! ```
 //!
@@ -22,16 +22,17 @@
 //! - [`AggKind`] — three-tier aggregate recognition (known / trait-based / opaque)
 
 pub mod analysis;
-pub mod extract;
+pub mod lower;
 pub mod optimize;
 pub mod physical;
 pub mod plan;
 pub mod tree;
 
-pub use extract::{extract_expr_as_plan, extract_query};
+pub use lower::{lower_expr_as_plan, lower_query};
 pub use optimize::{OptRule, Optimizer};
 pub use plan::{
-    AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, GroupKey, JoinKind, NodeRef,
-    OrderSpec, Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin, PlanRange, SortKey,
-    SortSpec, SourceRef, TraversePath, TraverseSegment, UserDefinedPlanNode,
+    AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, FrameBound, FrameUnit, GroupKey,
+    JoinKind, NodeRef, OrderSpec, Partitioning, Plan, PlanArena, PlanId, PlanMeta, PlanOrigin,
+    PlanRange, SortKey, SortSpec, SourceRef, TraversePath, TraverseSegment, UserDefinedPlanNode,
+    WindowFrame, WindowFunc, WindowKind,
 };

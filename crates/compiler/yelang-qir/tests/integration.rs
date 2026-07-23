@@ -10,7 +10,7 @@ use yelang_ast::Program;
 use yelang_hir::lower_crate;
 use yelang_interner::Interner;
 use yelang_qir::plan::{Plan, PlanArena};
-use yelang_qir::{extract_query, Optimizer};
+use yelang_qir::{lower_query, Optimizer};
 use yelang_tycheck::tcx::TyCtxt;
 
 /// Run the full pipeline on source text and return the plan arena
@@ -46,7 +46,7 @@ fn plan_queries(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>, Interner) {
         if slot.is_none() {
             continue;
         }
-        if let Some(root) = extract_query(query_id, &hir, &interner, &hir.lang_items, &mut arena) {
+        if let Some(root) = lower_query(query_id, &hir, &interner, &hir.lang_items, &mut arena) {
             let optimized = optimizer.optimize(root, &mut arena);
             roots.push(optimized);
         }
@@ -77,6 +77,7 @@ fn plan_name(plan: &Plan) -> &'static str {
         Plan::Map { .. } => "Map",
         Plan::Join { .. } => "Join",
         Plan::Aggregate { .. } => "Aggregate",
+        Plan::Window { .. } => "Window",
         Plan::Sort { .. } => "Sort",
         Plan::Limit { .. } => "Limit",
         Plan::Distinct { .. } => "Distinct",
@@ -99,6 +100,7 @@ fn first_child(plan: &Plan) -> Option<yelang_qir::PlanId> {
         | Plan::Project { input, .. }
         | Plan::Map { input, .. }
         | Plan::Aggregate { input, .. }
+        | Plan::Window { input, .. }
         | Plan::Sort { input, .. }
         | Plan::Limit { input, .. }
         | Plan::Distinct { input, .. }

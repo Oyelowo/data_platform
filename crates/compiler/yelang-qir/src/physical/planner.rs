@@ -216,11 +216,36 @@ fn lower_node(
             skip,
             fetch,
         } => {
+            // TopN fusion: Sort → Limit(fetch) becomes a single TopN node.
+            if let Some(fetch_expr) = fetch {
+                if let Plan::Sort {
+                    input: sort_input,
+                    specs,
+                } = logical.plan(*input)
+                {
+                    let phys_input = lower_node(*sort_input, logical, executor, phys);
+                    return phys.alloc(PhysOp::TopN {
+                        input: phys_input,
+                        specs: specs.clone(),
+                        skip: *skip,
+                        fetch: *fetch_expr,
+                    });
+                }
+            }
+
             let phys_input = lower_node(*input, logical, executor, phys);
             phys.alloc(PhysOp::Limit {
                 input: phys_input,
                 skip: *skip,
                 fetch: *fetch,
+            })
+        }
+
+        Plan::Window { input, funcs } => {
+            let phys_input = lower_node(*input, logical, executor, phys);
+            phys.alloc(PhysOp::Window {
+                input: phys_input,
+                funcs: funcs.clone(),
             })
         }
 

@@ -43,6 +43,7 @@ pub fn children(plan: &Plan) -> Vec<PlanId> {
         | Plan::Project { input, .. }
         | Plan::Map { input, .. }
         | Plan::Aggregate { input, .. }
+        | Plan::Window { input, .. }
         | Plan::Sort { input, .. }
         | Plan::Limit { input, .. }
         | Plan::Distinct { input, .. }
@@ -103,6 +104,10 @@ pub fn map_children(plan: &Plan, new_children: &[PlanId]) -> Plan {
             keys: keys.clone(),
             aggs: aggs.clone(),
             into: *into,
+        },
+        Plan::Window { funcs, .. } => Plan::Window {
+            input: next(),
+            funcs: funcs.clone(),
         },
         Plan::Sort { specs, .. } => Plan::Sort {
             input: next(),

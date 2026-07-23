@@ -6,7 +6,7 @@ use yelang_ast::Program;
 use yelang_hir::lower_crate;
 use yelang_interner::Interner;
 use yelang_qir::plan::{Plan, PlanArena};
-use yelang_qir::{extract_query, Optimizer};
+use yelang_qir::{lower_query, Optimizer};
 use yelang_tycheck::tcx::TyCtxt;
 
 fn plan_and_optimize(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>) {
@@ -35,7 +35,7 @@ fn plan_and_optimize(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>) {
         if slot.is_none() {
             continue;
         }
-        if let Some(root) = extract_query(qid, &hir, &interner, &hir.lang_items, &mut arena) {
+        if let Some(root) = lower_query(qid, &hir, &interner, &hir.lang_items, &mut arena) {
             roots.push(optimizer.optimize(root, &mut arena));
         }
     }
@@ -65,6 +65,7 @@ fn has_node(arena: &PlanArena, root: yelang_qir::PlanId, name: &str) -> bool {
             Plan::Map { .. } => "Map",
             Plan::Join { .. } => "Join",
             Plan::Aggregate { .. } => "Aggregate",
+            Plan::Window { .. } => "Window",
             Plan::Sort { .. } => "Sort",
             Plan::Limit { .. } => "Limit",
             Plan::Distinct { .. } => "Distinct",

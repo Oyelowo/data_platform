@@ -23,7 +23,10 @@ mod user;
 pub use agg::{AggCall, AggKind};
 pub use arena::{Partitioning, PlanArena, PlanId, PlanMeta, PlanOrigin, TagPlan};
 pub use join::{DepJoinKind, JoinKind};
-pub use keys::{GroupKey, OrderSpec, PlanRange, SortKey, SortSpec};
+pub use keys::{
+    FrameBound, FrameUnit, GroupKey, OrderSpec, PlanRange, SortKey, SortSpec, WindowFrame,
+    WindowFunc, WindowKind,
+};
 pub use op::Plan;
 pub use source::{Direction, EdgeRef, NodeRef, SourceRef, TraversePath, TraverseSegment};
 pub use user::UserDefinedPlanNode;

@@ -171,6 +171,20 @@ pub fn plan_referenced_fields(plan: &Plan, arena: &PlanArena) -> FxHashSet<Symbo
                 collect_agg_fields(&agg.kind, arena, &mut fields);
             }
         }
+        Plan::Window { funcs, .. } => {
+            for func in funcs {
+                for &sym in &func.partition_by {
+                    fields.insert(sym);
+                }
+                for spec in &func.order_by {
+                    if let SortKey::Expr(key_expr) = &spec.key {
+                        for f in referenced_fields(*key_expr, arena).iter() {
+                            fields.insert(*f);
+                        }
+                    }
+                }
+            }
+        }
         Plan::Sort { specs, .. } => {
             for spec in specs {
                 if let SortKey::Expr(key_expr) = &spec.key {
@@ -291,6 +305,19 @@ pub fn plan_output_fields(plan: &Plan, arena: &PlanArena) -> FxHashSet<Symbol> {
             }
             for agg in aggs {
                 s.insert(agg.output);
+            }
+            s
+        }
+
+        // Window: pass through input fields + add window func output columns.
+        Plan::Window { input, funcs } => {
+            let mut s = if let Some(child) = arena.get(*input) {
+                plan_output_fields(child, arena)
+            } else {
+                FxHashSet::new()
+            };
+            for func in funcs {
+                s.insert(func.output);
             }
             s
         }

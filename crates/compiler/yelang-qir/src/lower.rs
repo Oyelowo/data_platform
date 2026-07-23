@@ -1,6 +1,6 @@
 //! Plan extraction — builds a [`PlanArena`] from HIR query nodes.
 //!
-//! The main entry point is [`extract_query`], which dispatches on
+//! The main entry point is [`lower_query`], which dispatches on
 //! [`QueryKind`] and builds the logical operator tree. Currently only
 //! `Select` is implemented; mutations (`Create`, `Update`, …) will be
 //! added later.
@@ -47,7 +47,7 @@ use crate::plan::{
 /// Extract a logical plan tree from a HIR query.
 ///
 /// Returns the root [`PlanId`] of the extracted tree, allocated in `arena`.
-pub fn extract_query(
+pub fn lower_query(
     query_id: QueryId,
     hir: &Crate,
     interner: &Interner,
@@ -57,7 +57,7 @@ pub fn extract_query(
     let query = hir.query(query_id)?;
     match &query.kind {
         QueryKind::Select(select) => {
-            Some(extract_select(select, query_id, hir, interner, lang_items, arena))
+            Some(lower_select(select, query_id, hir, interner, lang_items, arena))
         }
         QueryKind::Create(_)
         | QueryKind::Update(_)
@@ -72,7 +72,7 @@ pub fn extract_query(
 // Select extraction
 // ---------------------------------------------------------------------------
 
-fn extract_select(
+fn lower_select(
     select: &SelectQuery,
     query_id: QueryId,
     hir: &Crate,
@@ -83,11 +83,11 @@ fn extract_select(
     let origin = PlanOrigin::QuerySyntax(query_id);
 
     // 1. Build scan(s) from `from` nodes.
-    let mut current = extract_from_nodes(&select.from, hir, arena, &origin);
+    let mut current = lower_from_nodes(&select.from, hir, arena, &origin);
 
     // 2. Apply `links` traversals.
     if !select.links.is_empty() {
-        let paths = extract_link_paths(&select.links, hir, interner, arena);
+        let paths = lower_link_paths(&select.links, hir, interner, arena);
         current = alloc(
             arena,
             Plan::Traverse {
@@ -110,12 +110,12 @@ fn extract_select(
 
     // 4. Apply `group by`.
     if let Some(group_by) = &select.group_by {
-        current = extract_group_by(current, group_by, interner, arena, &origin);
+        current = lower_group_by(current, group_by, interner, arena, &origin);
     }
 
     // 5. Apply `order by`.
     if !select.order_by.is_empty() {
-        let specs = extract_order_specs(&select.order_by, arena);
+        let specs = lower_order_specs(&select.order_by, arena);
         current = alloc(
             arena,
             Plan::Sort {
@@ -163,7 +163,7 @@ fn extract_select(
 // From nodes → Scan (+ optional Filter, Sort, Limit)
 // ---------------------------------------------------------------------------
 
-fn extract_from_nodes(
+fn lower_from_nodes(
     from: &[FromNode],
     hir: &Crate,
     arena: &mut PlanArena,
@@ -174,7 +174,7 @@ fn extract_from_nodes(
     let mut scans: Vec<PlanId> = Vec::with_capacity(from.len());
 
     for node in from {
-        let mut scan_id = extract_single_from(node, hir, arena, origin);
+        let mut scan_id = lower_single_from(node, hir, arena, origin);
 
         // Per-root modifiers.
         if let Some(filter) = node.filter {
@@ -189,7 +189,7 @@ fn extract_from_nodes(
             );
         }
         if !node.order_by.is_empty() {
-            let specs = extract_order_specs(&node.order_by, arena);
+            let specs = lower_order_specs(&node.order_by, arena);
             scan_id = alloc(
                 arena,
                 Plan::Sort {
@@ -238,7 +238,7 @@ fn extract_from_nodes(
     result
 }
 
-fn extract_single_from(
+fn lower_single_from(
     node: &FromNode,
     hir: &Crate,
     arena: &mut PlanArena,
@@ -282,7 +282,7 @@ fn resolve_source_ref(source_expr: ExprId, label: Symbol, hir: &Crate, arena: &P
 // Links → TraversePath
 // ---------------------------------------------------------------------------
 
-fn extract_link_paths(
+fn lower_link_paths(
     links: &[SelectLinkPath],
     hir: &Crate,
     interner: &Interner,
@@ -290,11 +290,11 @@ fn extract_link_paths(
 ) -> Vec<TraversePath> {
     links
         .iter()
-        .map(|path| extract_link_path(path, hir, interner, arena))
+        .map(|path| lower_link_path(path, hir, interner, arena))
         .collect()
 }
 
-fn extract_link_path(
+fn lower_link_path(
     path: &SelectLinkPath,
     hir: &Crate,
     interner: &Interner,
@@ -305,13 +305,13 @@ fn extract_link_path(
     let segments = path
         .segments
         .iter()
-        .map(|seg| extract_link_segment(seg, hir, interner, arena))
+        .map(|seg| lower_link_segment(seg, hir, interner, arena))
         .collect();
 
     TraversePath { anchor, segments }
 }
 
-fn extract_link_segment(
+fn lower_link_segment(
     seg: &SelectLinkSegment,
     hir: &Crate,
     _interner: &Interner,
@@ -355,7 +355,7 @@ fn extract_link_segment(
 // Group by → Aggregate
 // ---------------------------------------------------------------------------
 
-fn extract_group_by(
+fn lower_group_by(
     input: PlanId,
     group_by: &GroupByClause,
     interner: &Interner,
@@ -570,7 +570,7 @@ fn collect_aggregate_calls(
 // Order by → OrderSpec
 // ---------------------------------------------------------------------------
 
-fn extract_order_specs(parts: &[OrderByPart], arena: &PlanArena) -> Vec<SortSpec> {
+fn lower_order_specs(parts: &[OrderByPart], arena: &PlanArena) -> Vec<SortSpec> {
     parts
         .iter()
         .map(|part| SortSpec {
@@ -607,16 +607,16 @@ fn binder_symbol(pat_id: PatId, hir: &Crate) -> Symbol {
 /// Try to interpret an HIR expression as a collection-producing plan.
 ///
 /// This is the second entry point into the plan tree (alongside
-/// [`extract_query`]). It handles:
+/// [`lower_query`]). It handles:
 /// - `Queryable` method chains: `.filter()`, `.map()`, `.join()`, …
 /// - Comprehensions (desugared selectors): `[*]`, `[where …]`, `[**]`
 /// - `@intrinsic(query_*)` calls
 /// - Table/path references → `Scan`
-/// - Nested `select` queries → recursive [`extract_query`]
+/// - Nested `select` queries → recursive [`lower_query`]
 ///
 /// Returns `None` if the expression cannot be interpreted as a collection
 /// plan (e.g. a scalar literal, a non-Queryable function call).
-pub fn extract_expr_as_plan(
+pub fn lower_expr_as_plan(
     expr_id: ExprId,
     hir: &Crate,
     interner: &Interner,
@@ -640,10 +640,10 @@ pub fn extract_expr_as_plan(
                 .unwrap_or(false);
 
             if is_queryable {
-                extract_method_call(expr_id, *receiver, method.symbol, args, hir, interner, lang_items, arena)
+                lower_method_call(expr_id, *receiver, method.symbol, args, hir, interner, lang_items, arena)
             } else {
                 // Non-Queryable method: treat as opaque extension.
-                let input = extract_expr_as_plan(*receiver, hir, interner, lang_items, arena);
+                let input = lower_expr_as_plan(*receiver, hir, interner, lang_items, arena);
                 input.map(|inp| {
                     alloc(
                         arena,
@@ -666,15 +666,15 @@ pub fn extract_expr_as_plan(
             element,
             variables,
             condition,
-        } => extract_comprehension(*element, variables, *condition, hir, interner, lang_items, arena),
+        } => lower_comprehension(*element, variables, *condition, hir, interner, lang_items, arena),
 
         // ── Intrinsic call ─────────────────────────────────────────────
         Expr::Intrinsic { name, args } => {
-            extract_intrinsic(name.symbol, args, hir, interner, lang_items, arena)
+            lower_intrinsic(name.symbol, args, hir, interner, lang_items, arena)
         }
 
         // ── Nested select query ────────────────────────────────────────
-        Expr::Query(query_id) => extract_query(*query_id, hir, interner, lang_items, arena),
+        Expr::Query(query_id) => lower_query(*query_id, hir, interner, lang_items, arena),
 
         // ── Path reference (table or local variable) ───────────────────
         Expr::Path { res } => {
@@ -711,7 +711,7 @@ pub fn extract_expr_as_plan(
 // Method call → Plan node
 // ---------------------------------------------------------------------------
 
-fn extract_method_call(
+fn lower_method_call(
     call_expr: ExprId,
     receiver: ExprId,
     method: Symbol,
@@ -725,7 +725,7 @@ fn extract_method_call(
     let method_name = method.as_str(interner);
 
     // Extract the receiver as a plan (the collection being operated on).
-    let input = extract_expr_as_plan(receiver, hir, interner, lang_items, arena)?;
+    let input = lower_expr_as_plan(receiver, hir, interner, lang_items, arena)?;
 
     // Dispatch via centralized QueryableMethod enum.
     let Some(mk) = method_kind::QueryableMethod::from_name(method_name) else {
@@ -791,7 +791,7 @@ fn extract_method_call(
         QueryableMethod::Join | QueryableMethod::InnerJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let right = lower_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
@@ -809,7 +809,7 @@ fn extract_method_call(
         QueryableMethod::LeftJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let right = lower_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
@@ -827,7 +827,7 @@ fn extract_method_call(
         QueryableMethod::SemiJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let right = lower_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
@@ -845,7 +845,7 @@ fn extract_method_call(
         QueryableMethod::AntiJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
-            let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let right = lower_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
             let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
@@ -1012,7 +1012,7 @@ fn extract_method_call(
         // ── Union ──────────────────────────────────────────────────────
         QueryableMethod::Union | QueryableMethod::UnionAll => {
             let other_expr = args.first().copied()?;
-            let other = extract_expr_as_plan(other_expr, hir, interner, lang_items, arena)?;
+            let other = lower_expr_as_plan(other_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
                 arena,
                 Plan::Union {
@@ -1049,7 +1049,7 @@ fn scalar_agg(
 // Comprehension → Plan
 // ---------------------------------------------------------------------------
 
-fn extract_comprehension(
+fn lower_comprehension(
     element: ExprId,
     variables: &[ComprehensionVar],
     condition: Option<ExprId>,
@@ -1071,7 +1071,7 @@ fn extract_comprehension(
     let origin = PlanOrigin::MethodCall(arena.to_thir(element));
 
     // Extract the source collection.
-    let mut current = extract_expr_as_plan(var.source, hir, interner, lang_items, arena)?;
+    let mut current = lower_expr_as_plan(var.source, hir, interner, lang_items, arena)?;
 
     // Apply the filter condition if present.
     if let Some(pred) = condition {
@@ -1102,7 +1102,7 @@ fn extract_comprehension(
 // Intrinsic → Plan
 // ---------------------------------------------------------------------------
 
-fn extract_intrinsic(
+fn lower_intrinsic(
     name: Symbol,
     args: &[ExprId],
     hir: &Crate,
@@ -1134,7 +1134,7 @@ fn extract_intrinsic(
         "query_filter" => {
             let input_expr = args.first().copied()?;
             let pred = args.get(1).copied()?;
-            let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
+            let input = lower_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
             let thir_pred = arena.to_thir(pred);
             Some(alloc(
                 arena,
@@ -1147,7 +1147,7 @@ fn extract_intrinsic(
         "query_map" => {
             let input_expr = args.first().copied()?;
             let func = args.get(1).copied()?;
-            let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
+            let input = lower_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
             let thir_func = arena.to_thir(func);
             Some(alloc(
                 arena,
@@ -1164,7 +1164,7 @@ fn extract_intrinsic(
         "query_flat_map" => {
             let input_expr = args.first().copied()?;
             let func = args.get(1).copied()?;
-            let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
+            let input = lower_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
             let thir_func = arena.to_thir(func);
             Some(alloc(
                 arena,

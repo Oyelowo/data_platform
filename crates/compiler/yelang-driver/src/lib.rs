@@ -37,7 +37,7 @@ use yelang_interner::Interner;
 use yelang_lexer::FileId;
 use yelang_qir::physical::{Executor, InMemoryExecutor, PhysArena, PhysId};
 use yelang_qir::plan::PlanArena;
-use yelang_qir::{extract_query, Optimizer};
+use yelang_qir::{lower_query, Optimizer};
 use yelang_tycheck::diagnostics::Diagnostic;
 use yelang_tycheck::tcx::TyCtxt;
 use thiserror;
@@ -153,7 +153,7 @@ pub fn compile_program(
         }
 
         // 6a. Extract logical plan from HIR query.
-        let Some(logical_root) = extract_query(query_id, &hir, interner, &hir.lang_items, &mut plan_arena) else {
+        let Some(logical_root) = lower_query(query_id, &hir, interner, &hir.lang_items, &mut plan_arena) else {
             continue; // Mutations not yet handled.
         };
 

@@ -7,7 +7,7 @@ use yelang_interner::Symbol;
 use super::agg::AggCall;
 use super::arena::PlanId;
 use super::join::{DepJoinKind, JoinKind};
-use super::keys::{GroupKey, PlanRange, SortSpec};
+use super::keys::{GroupKey, PlanRange, SortSpec, WindowFunc};
 use super::source::{SourceRef, TraversePath};
 use super::user::UserDefinedPlanNode;
 use super::ExprRef;
@@ -94,6 +94,19 @@ pub enum Plan {
         aggs: Vec<AggCall>,
         /// The `into <label>` name for the resulting group collection.
         into: Symbol,
+    },
+
+    // ── Window functions ───────────────────────────────────────────────
+    /// Compute window functions over partitions.
+    ///
+    /// Lowered from: `ROW_NUMBER() OVER (...)`, `RANK() OVER (...)`,
+    /// `SUM(x) OVER (...)`, `LAG(x) OVER (...)`, etc.
+    ///
+    /// Each window function has its own PARTITION BY, ORDER BY, and frame.
+    /// Functions sharing the same window spec are grouped into one node.
+    Window {
+        input: PlanId,
+        funcs: Vec<WindowFunc>,
     },
 
     // ── Ordering / slicing / dedup ─────────────────────────────────────

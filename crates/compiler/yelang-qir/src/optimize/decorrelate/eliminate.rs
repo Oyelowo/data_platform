@@ -165,6 +165,18 @@ pub(super) fn eliminate_recursive(
             }
         }
 
+        Plan::Window { input, funcs } => {
+            let new_input = eliminate_recursive(*input, state, arena);
+            if new_input != *input {
+                arena.alloc(Plan::Window {
+                    input: new_input,
+                    funcs: funcs.clone(),
+                })
+            } else {
+                node
+            }
+        }
+
         Plan::Traverse { input, paths } => {
             let new_input = eliminate_recursive(*input, state, arena);
             if new_input != *input {

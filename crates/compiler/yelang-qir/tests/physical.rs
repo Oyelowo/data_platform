@@ -8,7 +8,7 @@ use yelang_hir::lower_crate;
 use yelang_interner::Interner;
 use yelang_qir::physical::{InMemoryExecutor, PhysArena, PhysOp};
 use yelang_qir::plan::PlanArena;
-use yelang_qir::{extract_query, Optimizer};
+use yelang_qir::{lower_query, Optimizer};
 use yelang_tycheck::tcx::TyCtxt;
 
 fn plan_optimize_and_physical(
@@ -41,7 +41,7 @@ fn plan_optimize_and_physical(
         if slot.is_none() {
             continue;
         }
-        if let Some(root) = extract_query(qid, &hir, &interner, &hir.lang_items, &mut plan_arena) {
+        if let Some(root) = lower_query(qid, &hir, &interner, &hir.lang_items, &mut plan_arena) {
             let optimized = optimizer.optimize(root, &mut plan_arena);
             let phys_root = yelang_qir::physical::planner::plan_physical(
                 optimized,
@@ -72,6 +72,8 @@ fn phys_node_count(phys: &PhysArena, root: yelang_qir::physical::PhysId) -> usiz
                 | PhysOp::Map { input, .. }
                 | PhysOp::Aggregate { input, .. }
                 | PhysOp::Sort { input, .. }
+                | PhysOp::TopN { input, .. }
+                | PhysOp::Window { input, .. }
                 | PhysOp::Limit { input, .. }
                 | PhysOp::Distinct { input, .. }
                 | PhysOp::Traverse { input, .. }
@@ -100,6 +102,8 @@ fn has_phys_op(phys: &PhysArena, root: yelang_qir::physical::PhysId, name: &str)
                 PhysOp::Join { .. } => "Join",
                 PhysOp::Aggregate { .. } => "Aggregate",
                 PhysOp::Sort { .. } => "Sort",
+                PhysOp::TopN { .. } => "TopN",
+                PhysOp::Window { .. } => "Window",
                 PhysOp::Limit { .. } => "Limit",
                 PhysOp::Distinct { .. } => "Distinct",
                 PhysOp::Union { .. } => "Union",
@@ -119,6 +123,8 @@ fn has_phys_op(phys: &PhysArena, root: yelang_qir::physical::PhysId, name: &str)
                 | PhysOp::Map { input, .. }
                 | PhysOp::Aggregate { input, .. }
                 | PhysOp::Sort { input, .. }
+                | PhysOp::TopN { input, .. }
+                | PhysOp::Window { input, .. }
                 | PhysOp::Limit { input, .. }
                 | PhysOp::Distinct { input, .. }
                 | PhysOp::Traverse { input, .. }

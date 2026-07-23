@@ -1,8 +1,9 @@
-//! [`GroupKey`], [`SortKey`], [`SortSpec`], [`OrderSpec`], [`PlanRange`].
+//! [`GroupKey`], [`SortKey`], [`SortSpec`], [`OrderSpec`], [`PlanRange`],
+//! [`WindowFunc`], [`WindowKind`], [`WindowFrame`], [`FrameBound`], [`FrameUnit`].
 
 use yelang_interner::Symbol;
 
-use super::ExprRef;
+use super::{AggKind, ExprRef};
 
 /// A group-by key: either a computed expression or a direct column reference.
 ///
@@ -52,4 +53,93 @@ pub struct PlanRange {
     pub end: Option<ExprRef>,
     /// Whether the end bound is inclusive (`..=`) or exclusive (`..`).
     pub inclusive: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Window functions
+// ---------------------------------------------------------------------------
+
+/// A window function computed over partitions.
+///
+/// Follows the SQL standard model: `func() OVER (PARTITION BY ... ORDER BY ... frame)`.
+/// Used for `ROW_NUMBER`, `RANK`, `LAG`, `LEAD`, and windowed aggregates.
+#[derive(Debug, Clone)]
+pub struct WindowFunc {
+    /// What kind of window function this is.
+    pub kind: WindowKind,
+    /// PARTITION BY columns.
+    pub partition_by: Vec<Symbol>,
+    /// ORDER BY within each partition.
+    pub order_by: Vec<SortSpec>,
+    /// Frame specification (ROWS/RANGE/GROUPS BETWEEN ... AND ...).
+    pub frame: Option<WindowFrame>,
+    /// Output column name for this window function's result.
+    pub output: Symbol,
+}
+
+/// The kind of window function.
+#[derive(Debug, Clone)]
+pub enum WindowKind {
+    /// `ROW_NUMBER()` — sequential integer per partition.
+    RowNumber,
+    /// `RANK()` — rank with gaps for ties.
+    Rank,
+    /// `DENSE_RANK()` — rank without gaps.
+    DenseRank,
+    /// `NTILE(n)` — distribute rows into n buckets.
+    Ntile { n: ExprRef },
+    /// `LAG(expr, offset, default)` — access previous row's value.
+    Lag {
+        expr: ExprRef,
+        offset: ExprRef,
+        default: Option<ExprRef>,
+    },
+    /// `LEAD(expr, offset, default)` — access next row's value.
+    Lead {
+        expr: ExprRef,
+        offset: ExprRef,
+        default: Option<ExprRef>,
+    },
+    /// A windowed aggregate (SUM, COUNT, AVG, etc. over a frame).
+    Aggregate(AggKind),
+}
+
+/// Window frame specification.
+///
+/// Defines the subset of rows within a partition that a window function
+/// operates on: `ROWS BETWEEN 1 PRECEDING AND CURRENT ROW`.
+#[derive(Debug, Clone)]
+pub struct WindowFrame {
+    /// ROWS, RANGE, or GROUPS.
+    pub unit: FrameUnit,
+    /// Start bound.
+    pub start: FrameBound,
+    /// End bound.
+    pub end: FrameBound,
+}
+
+/// Frame unit: how frame bounds are interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameUnit {
+    /// Physical row offsets.
+    Rows,
+    /// Logical value ranges (ORDER BY key values).
+    Range,
+    /// Peer group offsets.
+    Groups,
+}
+
+/// A single frame boundary.
+#[derive(Debug, Clone)]
+pub enum FrameBound {
+    /// `UNBOUNDED PRECEDING`
+    UnboundedPreceding,
+    /// `<n> PRECEDING`
+    Preceding(ExprRef),
+    /// `CURRENT ROW`
+    CurrentRow,
+    /// `<n> FOLLOWING`
+    Following(ExprRef),
+    /// `UNBOUNDED FOLLOWING`
+    UnboundedFollowing,
 }
