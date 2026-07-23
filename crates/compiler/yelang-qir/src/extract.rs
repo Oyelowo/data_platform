@@ -83,7 +83,7 @@ fn extract_select(
 
     // 2. Apply `links` traversals.
     if !select.links.is_empty() {
-        let paths = extract_link_paths(&select.links, hir, interner);
+        let paths = extract_link_paths(&select.links, hir, interner, arena);
         current = alloc(
             arena,
             Plan::Traverse {
@@ -96,9 +96,10 @@ fn extract_select(
 
     // 3. Apply pipeline `where` (post-links filter).
     if let Some(pred) = select.where_clause {
+        let thir_pred = arena.to_thir(pred);
         current = alloc(
             arena,
-            Plan::Filter { input: current, pred },
+            Plan::Filter { input: current, pred: thir_pred },
             origin.clone(),
         );
     }
@@ -110,7 +111,7 @@ fn extract_select(
 
     // 5. Apply `order by`.
     if !select.order_by.is_empty() {
-        let specs = extract_order_specs(&select.order_by);
+        let specs = extract_order_specs(&select.order_by, arena);
         current = alloc(
             arena,
             Plan::Sort {
@@ -123,12 +124,14 @@ fn extract_select(
 
     // 6. Apply `range`.
     if let Some(range) = &select.range {
+        let skip = range.start.map(|e| arena.to_thir(e));
+        let fetch = range.end.map(|e| arena.to_thir(e));
         current = alloc(
             arena,
             Plan::Limit {
                 input: current,
-                skip: range.start,
-                fetch: range.end,
+                skip,
+                fetch,
             },
             origin.clone(),
         );
@@ -136,11 +139,12 @@ fn extract_select(
 
     // 7. Apply projection.
     let result_name = interner.intern("result");
+    let thir_projection = arena.to_thir(select.projection);
     current = alloc(
         arena,
         Plan::Project {
             input: current,
-            exprs: vec![(result_name, select.projection)],
+            exprs: vec![(result_name, thir_projection)],
         },
         origin,
     );
@@ -170,17 +174,18 @@ fn extract_from_nodes(
 
         // Per-root modifiers.
         if let Some(filter) = node.filter {
+            let thir_filter = arena.to_thir(filter);
             scan_id = alloc(
                 arena,
                 Plan::Filter {
                     input: scan_id,
-                    pred: filter,
+                    pred: thir_filter,
                 },
                 origin.clone(),
             );
         }
         if !node.order_by.is_empty() {
-            let specs = extract_order_specs(&node.order_by);
+            let specs = extract_order_specs(&node.order_by, arena);
             scan_id = alloc(
                 arena,
                 Plan::Sort {
@@ -191,12 +196,14 @@ fn extract_from_nodes(
             );
         }
         if let Some(range) = &node.range {
+            let skip = range.start.map(|e| arena.to_thir(e));
+            let fetch = range.end.map(|e| arena.to_thir(e));
             scan_id = alloc(
                 arena,
                 Plan::Limit {
                     input: scan_id,
-                    skip: range.start,
-                    fetch: range.end,
+                    skip,
+                    fetch,
                 },
                 origin.clone(),
             );
@@ -233,7 +240,7 @@ fn extract_single_from(
     arena: &mut PlanArena,
     origin: &PlanOrigin,
 ) -> PlanId {
-    let source = resolve_source_ref(node.source, node.label, hir);
+    let source = resolve_source_ref(node.source, node.label, hir, arena);
 
     alloc(
         arena,
@@ -252,7 +259,7 @@ fn extract_single_from(
 /// - `Res::Def` → table-backed source (the DefId points to a struct)
 /// - `Res::Local` → local variable holding a collection
 /// - Other expressions → function/method call returning a collection
-fn resolve_source_ref(source_expr: ExprId, label: Symbol, hir: &Crate) -> SourceRef {
+fn resolve_source_ref(source_expr: ExprId, label: Symbol, hir: &Crate, arena: &PlanArena) -> SourceRef {
     match hir.expr(source_expr) {
         Some(Expr::Path { res }) => match res {
             yelang_hir::res::Res::Def { def_id } => SourceRef::Table {
@@ -263,7 +270,7 @@ fn resolve_source_ref(source_expr: ExprId, label: Symbol, hir: &Crate) -> Source
             _ => SourceRef::Local { name: label },
         },
         // Non-path expressions (calls, etc.) → Call source.
-        _ => SourceRef::Call { func: source_expr },
+        _ => SourceRef::Call { func: arena.to_thir(source_expr) },
     }
 }
 
@@ -275,10 +282,11 @@ fn extract_link_paths(
     links: &[SelectLinkPath],
     hir: &Crate,
     interner: &Interner,
+    arena: &PlanArena,
 ) -> Vec<TraversePath> {
     links
         .iter()
-        .map(|path| extract_link_path(path, hir, interner))
+        .map(|path| extract_link_path(path, hir, interner, arena))
         .collect()
 }
 
@@ -286,13 +294,14 @@ fn extract_link_path(
     path: &SelectLinkPath,
     hir: &Crate,
     interner: &Interner,
+    arena: &PlanArena,
 ) -> TraversePath {
     let anchor = path.start.var.symbol;
 
     let segments = path
         .segments
         .iter()
-        .map(|seg| extract_link_segment(seg, hir, interner))
+        .map(|seg| extract_link_segment(seg, hir, interner, arena))
         .collect();
 
     TraversePath { anchor, segments }
@@ -302,6 +311,7 @@ fn extract_link_segment(
     seg: &SelectLinkSegment,
     hir: &Crate,
     _interner: &Interner,
+    arena: &PlanArena,
 ) -> TraverseSegment {
     let direction = match seg.direction {
         EdgeDirection::Forward => Direction::Forward,
@@ -327,11 +337,11 @@ fn extract_link_segment(
         edge,
         direction,
         target,
-        edge_pred: seg.edge.modifiers.filter,
-        target_pred: seg.target.modifiers.filter,
+        edge_pred: seg.edge.modifiers.filter.map(|e| arena.to_thir(e)),
+        target_pred: seg.target.modifiers.filter.map(|e| arena.to_thir(e)),
         hop_range: seg.edge.hops.as_ref().map(|h| PlanRange {
-            start: h.start,
-            end: h.end,
+            start: h.start.map(|e| arena.to_thir(e)),
+            end: h.end.map(|e| arena.to_thir(e)),
             inclusive: h.inclusive,
         }),
     }
@@ -354,7 +364,7 @@ fn extract_group_by(
         .iter()
         .map(|key| {
             let name = key.name.map(|ident| ident.symbol).unwrap_or(fallback);
-            (name, key.expr)
+            (name, arena.to_thir(key.expr))
         })
         .collect();
 
@@ -398,7 +408,7 @@ fn decompose_projection_aggregates(
 
     // Walk the projection expression to find aggregate calls.
     let mut aggs = Vec::new();
-    collect_aggregate_calls(projection, hir, interner, &mut aggs);
+    collect_aggregate_calls(projection, hir, interner, arena, &mut aggs);
 
     if aggs.is_empty() {
         return;
@@ -428,6 +438,7 @@ fn collect_aggregate_calls(
     expr: ExprId,
     hir: &Crate,
     interner: &Interner,
+    arena: &PlanArena,
     out: &mut Vec<AggCall>,
 ) {
     let Some(expr_node) = hir.expr(expr) else {
@@ -446,17 +457,17 @@ fn collect_aggregate_calls(
             let output = interner.intern(&format!("_{}", name));
 
             let kind = match name {
-                "sum" => Some(AggKind::Sum { expr }),
+                "sum" => Some(AggKind::Sum { expr: arena.to_thir(expr) }),
                 "count" => Some(AggKind::Count),
-                "avg" => Some(AggKind::Avg { expr }),
-                "min" => Some(AggKind::Min { expr }),
-                "max" => Some(AggKind::Max { expr }),
+                "avg" => Some(AggKind::Avg { expr: arena.to_thir(expr) }),
+                "min" => Some(AggKind::Min { expr: arena.to_thir(expr) }),
+                "max" => Some(AggKind::Max { expr: arena.to_thir(expr) }),
                 "aggregate" => {
                     // User-defined aggregate via .aggregate(Marker).
                     let marker = args.first().copied();
                     Some(AggKind::UserAggregate {
                         impl_def: yelang_arena::DefId::new(1), // TODO: resolve
-                        args: marker.map(|m| vec![m]).unwrap_or_default(),
+                        args: marker.map(|m| vec![arena.to_thir(m)]).unwrap_or_default(),
                         input_expr: None,
                     })
                 }
@@ -469,50 +480,50 @@ fn collect_aggregate_calls(
 
             // Recurse into arguments (there may be nested aggregates).
             for &arg in args {
-                collect_aggregate_calls(arg, hir, interner, out);
+                collect_aggregate_calls(arg, hir, interner, arena, out);
             }
         }
 
         // Recurse into sub-expressions.
         Expr::Binary { left, right, .. } => {
-            collect_aggregate_calls(*left, hir, interner, out);
-            collect_aggregate_calls(*right, hir, interner, out);
+            collect_aggregate_calls(*left, hir, interner, arena, out);
+            collect_aggregate_calls(*right, hir, interner, arena, out);
         }
         Expr::Unary { expr: inner, .. } => {
-            collect_aggregate_calls(*inner, hir, interner, out);
+            collect_aggregate_calls(*inner, hir, interner, arena, out);
         }
         Expr::Call { func, args } => {
-            collect_aggregate_calls(*func, hir, interner, out);
+            collect_aggregate_calls(*func, hir, interner, arena, out);
             for &arg in args {
-                collect_aggregate_calls(arg, hir, interner, out);
+                collect_aggregate_calls(arg, hir, interner, arena, out);
             }
         }
         Expr::Field { expr: base, .. } => {
-            collect_aggregate_calls(*base, hir, interner, out);
+            collect_aggregate_calls(*base, hir, interner, arena, out);
         }
         Expr::Index { expr: base, index } => {
-            collect_aggregate_calls(*base, hir, interner, out);
-            collect_aggregate_calls(*index, hir, interner, out);
+            collect_aggregate_calls(*base, hir, interner, arena, out);
+            collect_aggregate_calls(*index, hir, interner, arena, out);
         }
         Expr::Cast { expr: inner, .. } | Expr::TypeAscription { expr: inner, .. } => {
-            collect_aggregate_calls(*inner, hir, interner, out);
+            collect_aggregate_calls(*inner, hir, interner, arena, out);
         }
         Expr::Struct { fields, rest, .. } => {
             for field in fields {
-                collect_aggregate_calls(field.expr, hir, interner, out);
+                collect_aggregate_calls(field.expr, hir, interner, arena, out);
             }
             if let Some(rest_expr) = rest {
-                collect_aggregate_calls(*rest_expr, hir, interner, out);
+                collect_aggregate_calls(*rest_expr, hir, interner, arena, out);
             }
         }
         Expr::Object { fields } => {
             for field in fields {
-                collect_aggregate_calls(field.expr, hir, interner, out);
+                collect_aggregate_calls(field.expr, hir, interner, arena, out);
             }
         }
         Expr::Tuple { exprs } | Expr::Array { exprs } => {
             for &e in exprs {
-                collect_aggregate_calls(e, hir, interner, out);
+                collect_aggregate_calls(e, hir, interner, arena, out);
             }
         }
         Expr::If {
@@ -520,15 +531,15 @@ fn collect_aggregate_calls(
             then_branch,
             else_branch,
         } => {
-            collect_aggregate_calls(*cond, hir, interner, out);
-            collect_aggregate_calls(*then_branch, hir, interner, out);
+            collect_aggregate_calls(*cond, hir, interner, arena, out);
+            collect_aggregate_calls(*then_branch, hir, interner, arena, out);
             if let Some(else_expr) = else_branch {
-                collect_aggregate_calls(*else_expr, hir, interner, out);
+                collect_aggregate_calls(*else_expr, hir, interner, arena, out);
             }
         }
         Expr::Block { block } => {
             if let Some(tail) = block.expr {
-                collect_aggregate_calls(tail, hir, interner, out);
+                collect_aggregate_calls(tail, hir, interner, arena, out);
             }
         }
         Expr::Comprehension {
@@ -537,12 +548,12 @@ fn collect_aggregate_calls(
             condition,
             ..
         } => {
-            collect_aggregate_calls(*element, hir, interner, out);
+            collect_aggregate_calls(*element, hir, interner, arena, out);
             for var in variables {
-                collect_aggregate_calls(var.source, hir, interner, out);
+                collect_aggregate_calls(var.source, hir, interner, arena, out);
             }
             if let Some(cond) = condition {
-                collect_aggregate_calls(*cond, hir, interner, out);
+                collect_aggregate_calls(*cond, hir, interner, arena, out);
             }
         }
 
@@ -555,11 +566,11 @@ fn collect_aggregate_calls(
 // Order by → OrderSpec
 // ---------------------------------------------------------------------------
 
-fn extract_order_specs(parts: &[OrderByPart]) -> Vec<OrderSpec> {
+fn extract_order_specs(parts: &[OrderByPart], arena: &PlanArena) -> Vec<OrderSpec> {
     parts
         .iter()
         .map(|part| OrderSpec {
-            expr: part.expr,
+            expr: arena.to_thir(part.expr),
             desc: matches!(part.direction, SortDirection::Desc),
         })
         .collect()
@@ -609,7 +620,7 @@ pub fn extract_expr_as_plan(
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     let expr = hir.expr(expr_id)?;
-    let origin = PlanOrigin::MethodCall(expr_id);
+    let origin = PlanOrigin::MethodCall(arena.to_thir(expr_id));
 
     match expr {
         // ── Queryable method call ──────────────────────────────────────
@@ -706,7 +717,7 @@ fn extract_method_call(
     lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
-    let origin = PlanOrigin::MethodCall(call_expr);
+    let origin = PlanOrigin::MethodCall(arena.to_thir(call_expr));
     let method_name = method.as_str(interner);
 
     // Extract the receiver as a plan (the collection being operated on).
@@ -717,9 +728,10 @@ fn extract_method_call(
         "filter" => {
             // .filter(|x| pred) — args[0] is the closure
             let pred = args.first().copied()?;
+            let thir_pred = arena.to_thir(pred);
             Some(alloc(
                 arena,
-                Plan::Filter { input, pred },
+                Plan::Filter { input, pred: thir_pred },
                 origin,
             ))
         }
@@ -728,11 +740,12 @@ fn extract_method_call(
         "map" => {
             // .map(|x| expr) — args[0] is the closure
             let func = args.first().copied()?;
+            let thir_func = arena.to_thir(func);
             Some(alloc(
                 arena,
                 Plan::Map {
                     input,
-                    func,
+                    func: thir_func,
                     flatten_depth: 0,
                 },
                 origin,
@@ -742,11 +755,12 @@ fn extract_method_call(
         // ── FlatMap ────────────────────────────────────────────────────
         "flat_map" => {
             let func = args.first().copied()?;
+            let thir_func = arena.to_thir(func);
             Some(alloc(
                 arena,
                 Plan::Map {
                     input,
-                    func,
+                    func: thir_func,
                     flatten_depth: 1,
                 },
                 origin,
@@ -758,6 +772,7 @@ fn extract_method_call(
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -765,7 +780,7 @@ fn extract_method_call(
                     right,
                     kind: JoinKind::Inner,
                     on: vec![], // TODO: decompose the closure into equi-join keys
-                    filter: Some(on_expr),
+                    filter: Some(thir_on),
                 },
                 origin,
             ))
@@ -775,6 +790,7 @@ fn extract_method_call(
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -782,7 +798,7 @@ fn extract_method_call(
                     right,
                     kind: JoinKind::Left,
                     on: vec![],
-                    filter: Some(on_expr),
+                    filter: Some(thir_on),
                 },
                 origin,
             ))
@@ -792,6 +808,7 @@ fn extract_method_call(
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -799,7 +816,7 @@ fn extract_method_call(
                     right,
                     kind: JoinKind::Semi,
                     on: vec![],
-                    filter: Some(on_expr),
+                    filter: Some(thir_on),
                 },
                 origin,
             ))
@@ -809,6 +826,7 @@ fn extract_method_call(
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
+            let thir_on = arena.to_thir(on_expr);
             Some(alloc(
                 arena,
                 Plan::Join {
@@ -816,7 +834,7 @@ fn extract_method_call(
                     right,
                     kind: JoinKind::Anti,
                     on: vec![],
-                    filter: Some(on_expr),
+                    filter: Some(thir_on),
                 },
                 origin,
             ))
@@ -826,13 +844,14 @@ fn extract_method_call(
         "group_by" => {
             // .group_by(|x| key_expr) — args[0] is the key closure
             let key_expr = args.first().copied()?;
+            let thir_key = arena.to_thir(key_expr);
             let key_name = interner.intern("_key");
             let into = interner.intern("_groups");
             Some(alloc(
                 arena,
                 Plan::Aggregate {
                     input,
-                    keys: vec![(key_name, key_expr)],
+                    keys: vec![(key_name, thir_key)],
                     aggs: vec![],
                     into,
                 },
@@ -843,12 +862,13 @@ fn extract_method_call(
         // ── Order by ───────────────────────────────────────────────────
         "order_by" | "sort_by" => {
             let key_expr = args.first().copied()?;
+            let thir_key = arena.to_thir(key_expr);
             Some(alloc(
                 arena,
                 Plan::Sort {
                     input,
                     specs: vec![OrderSpec {
-                        expr: key_expr,
+                        expr: thir_key,
                         desc: false,
                     }],
                 },
@@ -858,12 +878,13 @@ fn extract_method_call(
 
         "order_by_desc" | "sort_by_desc" => {
             let key_expr = args.first().copied()?;
+            let thir_key = arena.to_thir(key_expr);
             Some(alloc(
                 arena,
                 Plan::Sort {
                     input,
                     specs: vec![OrderSpec {
-                        expr: key_expr,
+                        expr: thir_key,
                         desc: true,
                     }],
                 },
@@ -883,11 +904,12 @@ fn extract_method_call(
 
         "distinct_by" | "unique_by" => {
             let key_expr = args.first().copied()?;
+            let thir_key = arena.to_thir(key_expr);
             Some(alloc(
                 arena,
                 Plan::Distinct {
                     input,
-                    on: Some(vec![key_expr]),
+                    on: Some(vec![thir_key]),
                 },
                 origin,
             ))
@@ -896,12 +918,13 @@ fn extract_method_call(
         // ── Limit / Skip / Take ────────────────────────────────────────
         "take" => {
             let n = args.first().copied()?;
+            let thir_n = arena.to_thir(n);
             Some(alloc(
                 arena,
                 Plan::Limit {
                     input,
                     skip: None,
-                    fetch: Some(n),
+                    fetch: Some(thir_n),
                 },
                 origin,
             ))
@@ -909,11 +932,12 @@ fn extract_method_call(
 
         "skip" => {
             let n = args.first().copied()?;
+            let thir_n = arena.to_thir(n);
             Some(alloc(
                 arena,
                 Plan::Limit {
                     input,
-                    skip: Some(n),
+                    skip: Some(thir_n),
                     fetch: None,
                 },
                 origin,
@@ -921,16 +945,29 @@ fn extract_method_call(
         }
 
         // ── Aggregates (scalar) ────────────────────────────────────────
-        "sum" => Some(scalar_agg(input, AggKind::Sum { expr: call_expr }, interner, arena, origin)),
+        "sum" => {
+            let thir_expr = arena.to_thir(call_expr);
+            Some(scalar_agg(input, AggKind::Sum { expr: thir_expr }, interner, arena, origin))
+        }
         "count" => Some(scalar_agg(input, AggKind::Count, interner, arena, origin)),
-        "avg" => Some(scalar_agg(input, AggKind::Avg { expr: call_expr }, interner, arena, origin)),
-        "min" => Some(scalar_agg(input, AggKind::Min { expr: call_expr }, interner, arena, origin)),
-        "max" => Some(scalar_agg(input, AggKind::Max { expr: call_expr }, interner, arena, origin)),
+        "avg" => {
+            let thir_expr = arena.to_thir(call_expr);
+            Some(scalar_agg(input, AggKind::Avg { expr: thir_expr }, interner, arena, origin))
+        }
+        "min" => {
+            let thir_expr = arena.to_thir(call_expr);
+            Some(scalar_agg(input, AggKind::Min { expr: thir_expr }, interner, arena, origin))
+        }
+        "max" => {
+            let thir_expr = arena.to_thir(call_expr);
+            Some(scalar_agg(input, AggKind::Max { expr: thir_expr }, interner, arena, origin))
+        }
 
         // ── Aggregate with marker ──────────────────────────────────────
         "aggregate" => {
             // .aggregate(Marker) — args[0] is the aggregate marker/impl
             let marker = args.first().copied()?;
+            let thir_marker = arena.to_thir(marker);
             let output = interner.intern("_agg");
             Some(alloc(
                 arena,
@@ -942,7 +979,7 @@ fn extract_method_call(
                         kind: AggKind::UserAggregate {
                             // TODO: resolve the DefId of the Aggregate impl
                             impl_def: yelang_arena::DefId::new(1),
-                            args: vec![marker],
+                            args: vec![thir_marker],
                             input_expr: None,
                         },
                     }],
@@ -1024,26 +1061,28 @@ fn extract_comprehension(
     // We build: Scan → Filter (if condition) → Map (element, flatten_depth).
 
     let var = variables.first()?;
-    let origin = PlanOrigin::MethodCall(element);
+    let origin = PlanOrigin::MethodCall(arena.to_thir(element));
 
     // Extract the source collection.
     let mut current = extract_expr_as_plan(var.source, hir, interner, lang_items, arena)?;
 
     // Apply the filter condition if present.
     if let Some(pred) = condition {
+        let thir_pred = arena.to_thir(pred);
         current = alloc(
             arena,
-            Plan::Filter { input: current, pred },
+            Plan::Filter { input: current, pred: thir_pred },
             origin.clone(),
         );
     }
 
     // Apply the projection with flatten depth.
+    let thir_element = arena.to_thir(element);
     current = alloc(
         arena,
         Plan::Map {
             input: current,
-            func: element,
+            func: thir_element,
             flatten_depth: var.flatten,
         },
         origin,
@@ -1065,19 +1104,17 @@ fn extract_intrinsic(
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
     let intrinsic_name = name.as_str(interner);
-    let origin = PlanOrigin::Intrinsic(args.first().copied().unwrap_or_else(|| {
-        // Fallback: use a dummy ExprId. This shouldn't happen in practice.
-        yelang_hir::ids::ExprId::default()
-    }));
+    let origin = PlanOrigin::Intrinsic(args.first().copied().map(|e| arena.to_thir(e)).unwrap_or_default());
 
     match intrinsic_name {
         // query_scan(table) → Scan
         "query_scan" => {
             let source_expr = args.first().copied()?;
+            let thir_source = arena.to_thir(source_expr);
             Some(alloc(
                 arena,
                 Plan::Scan {
-                    source: SourceRef::Call { func: source_expr },
+                    source: SourceRef::Call { func: thir_source },
                     filter: None,
                     projection: None,
                     range: None,
@@ -1091,9 +1128,10 @@ fn extract_intrinsic(
             let input_expr = args.first().copied()?;
             let pred = args.get(1).copied()?;
             let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
+            let thir_pred = arena.to_thir(pred);
             Some(alloc(
                 arena,
-                Plan::Filter { input, pred },
+                Plan::Filter { input, pred: thir_pred },
                 origin,
             ))
         }
@@ -1103,11 +1141,12 @@ fn extract_intrinsic(
             let input_expr = args.first().copied()?;
             let func = args.get(1).copied()?;
             let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
+            let thir_func = arena.to_thir(func);
             Some(alloc(
                 arena,
                 Plan::Map {
                     input,
-                    func,
+                    func: thir_func,
                     flatten_depth: 0,
                 },
                 origin,
@@ -1119,11 +1158,12 @@ fn extract_intrinsic(
             let input_expr = args.first().copied()?;
             let func = args.get(1).copied()?;
             let input = extract_expr_as_plan(input_expr, hir, interner, lang_items, arena)?;
+            let thir_func = arena.to_thir(func);
             Some(alloc(
                 arena,
                 Plan::Map {
                     input,
-                    func,
+                    func: thir_func,
                     flatten_depth: 1,
                 },
                 origin,

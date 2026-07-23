@@ -47,9 +47,11 @@ pub struct ThirBodies {
     pub bodies: SlotMap<ThirBodyId, ThirBody>,
     /// Lowered query sub-expressions, keyed by HIR QueryId.
     pub query_lowerings: FxHashMap<QueryId, QueryLowering>,
-    /// Mapping from HIR expression ids to THIR expression ids.
-    /// Used by the plan extraction to convert HIR ExprId → ThirExprId.
+    /// HIR ExprId → THIR ThirExprId.
     pub expr_mapping: FxHashMap<ExprId, ThirExprId>,
+    /// THIR ThirExprId → HIR ExprId (reverse of expr_mapping).
+    /// Used by the analysis module to walk HIR expressions from THIR refs.
+    pub reverse_expr_mapping: FxHashMap<ThirExprId, ExprId>,
 }
 
 impl ThirBodies {

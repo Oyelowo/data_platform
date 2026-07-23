@@ -26,7 +26,7 @@ use yelang_interner::Symbol;
 
 use crate::analysis::referenced_fields;
 use crate::plan::{
-    DepJoinKind, JoinKind, Plan, PlanArena, PlanId,
+    DepJoinKind, ExprRef, JoinKind, Plan, PlanArena, PlanId,
 };
 use crate::tree::Transformed;
 
@@ -257,25 +257,24 @@ fn eliminate_recursive(
         } => {
             let new_input = eliminate_recursive(*input, state, arena, hir);
 
-            // If we're inside an unnesting, add outer refs to group keys.
+            // BTW 2025: Γ_{A; a:f}(T) → Γ_{A ∪ A(D); a:f}(unnest(T))
+            // Add outer ref columns to group-by keys so aggregation is
+            // per-outer-binding. ExprRef::default() is a sentinel meaning
+            // "column reference to the key's Symbol name."
+            let mut new_keys = keys.clone();
             if let Some(info) = state.current() {
-                let new_keys = keys.clone();
                 for &outer_ref in &info.outer_refs {
-                    // Check if this outer ref is already in the keys.
                     let already_present = new_keys.iter().any(|&(name, _)| name == outer_ref);
                     if !already_present {
-                        // TODO: create a proper expression reference for the
-                        // outer ref column. For now, use a placeholder.
-                        // In a full implementation, this would be a column
-                        // reference expression in the HIR.
+                        new_keys.push((outer_ref, ExprRef::default()));
                     }
                 }
             }
 
-            if new_input != *input {
+            if new_input != *input || new_keys.len() != keys.len() {
                 let new_plan = Plan::Aggregate {
                     input: new_input,
-                    keys: keys.clone(),
+                    keys: new_keys,
                     aggs: aggs.clone(),
                     into: *into,
                 };
@@ -457,7 +456,7 @@ fn eliminate_dependent_join(
     node: PlanId,
     outer: PlanId,
     inner: PlanId,
-    pred: Option<yelang_hir::ids::ExprId>,
+    pred: Option<ExprRef>,
     kind: DepJoinKind,
     state: &mut UnnestingState,
     arena: &mut PlanArena,
@@ -495,7 +494,7 @@ fn eliminate_dependent_join(
 
     // Step 5: Add equivalences from the join predicate to the union-find.
     if let Some(pred_expr) = pred {
-        add_predicate_equivalences(pred_expr, state, hir);
+        add_predicate_equivalences(pred_expr, arena, state, hir);
     }
 
     // Step 6: Unnest the RIGHT (inner) side under this unnesting's umbrella.
@@ -525,7 +524,7 @@ fn eliminate_dependent_join(
 fn compute_outer_refs(
     outer: PlanId,
     inner: PlanId,
-    pred: Option<yelang_hir::ids::ExprId>,
+    pred: Option<ExprRef>,
     arena: &PlanArena,
     hir: &Crate,
 ) -> Vec<Symbol> {
@@ -541,7 +540,7 @@ fn compute_outer_refs(
     let mut inner_refs = yelang_arena::FxHashSet::new();
 
     if let Some(pred_expr) = pred {
-        for f in referenced_fields(pred_expr, hir).iter() {
+        for f in referenced_fields(arena.to_hir(pred_expr), hir).iter() {
             inner_refs.insert(*f);
         }
     }
@@ -568,7 +567,7 @@ fn collect_plan_refs(
         return;
     };
 
-    let plan_refs = crate::analysis::plan_referenced_fields(plan, hir);
+    let plan_refs = crate::analysis::plan_referenced_fields(plan, arena, hir);
     for f in plan_refs.iter() {
         out.insert(*f);
     }
@@ -585,14 +584,15 @@ fn collect_plan_refs(
 /// field accesses: `a.x == b.y` → `union(x, y)`.
 /// Also recurses through `And` conjunctions.
 fn add_predicate_equivalences(
-    pred: yelang_hir::ids::ExprId,
+    pred: ExprRef,
+    arena: &PlanArena,
     state: &mut UnnestingState,
     hir: &Crate,
 ) {
     let Some(info) = state.current_mut() else {
         return;
     };
-    collect_equivalences(pred, hir, &mut info.cclasses);
+    collect_equivalences(arena.to_hir(pred), hir, &mut info.cclasses);
 }
 
 /// Recursively collect field equivalences from an expression.
@@ -665,7 +665,7 @@ fn collect_equivalences(
 fn convert_to_regular_join(
     outer: PlanId,
     inner: PlanId,
-    pred: Option<yelang_hir::ids::ExprId>,
+    pred: Option<ExprRef>,
     kind: DepJoinKind,
     arena: &mut PlanArena,
 ) -> PlanId {
@@ -693,7 +693,7 @@ fn convert_to_regular_join(
 fn finalize_unnesting(
     outer: PlanId,
     inner: PlanId,
-    pred: Option<yelang_hir::ids::ExprId>,
+    pred: Option<ExprRef>,
     kind: DepJoinKind,
     outer_refs: &[Symbol],
     state: &UnnestingState,
@@ -729,7 +729,7 @@ fn finalize_unnesting(
         input: outer,
         exprs: outer_refs
             .iter()
-            .map(|&name| (name, yelang_hir::ids::ExprId::default()))
+            .map(|&name| (name, ExprRef::default()))
             .collect(),
     });
 

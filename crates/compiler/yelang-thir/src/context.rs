@@ -118,9 +118,14 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Consume the context and return the accumulated [`ThirBodies`],
-    /// including the `expr_mapping` and `query_lowerings` side tables.
+    /// including the `expr_mapping`, `reverse_expr_mapping`, and
+    /// `query_lowerings` side tables.
     pub fn finish(mut self) -> ThirBodies {
-        self.bodies.expr_mapping = self.expr_mapping;
+        self.bodies.expr_mapping = self.expr_mapping.clone();
+        // Build the reverse mapping.
+        for (&hir_id, &thir_id) in self.expr_mapping.iter() {
+            self.bodies.reverse_expr_mapping.insert(thir_id, hir_id);
+        }
         self.bodies
     }
 }

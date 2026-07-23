@@ -172,77 +172,77 @@ fn collect_fields(expr: ExprId, hir: &Crate, out: &mut FxHashSet<Symbol>) {
 // ---------------------------------------------------------------------------
 
 /// Collect all field names referenced by a plan node's own expressions.
-pub fn plan_referenced_fields(plan: &Plan, hir: &Crate) -> FxHashSet<Symbol> {
+pub fn plan_referenced_fields(plan: &Plan, arena: &PlanArena, hir: &Crate) -> FxHashSet<Symbol> {
     let mut fields = FxHashSet::new();
 
     match plan {
         Plan::Filter { pred, .. } => {
-            fields = referenced_fields(*pred, hir);
+            fields = referenced_fields(arena.to_hir(*pred), hir);
         }
         Plan::Project { exprs, .. } => {
             for &(_, expr) in exprs {
-                for f in referenced_fields(expr, hir).iter() {
+                for f in referenced_fields(arena.to_hir(expr), hir).iter() {
                     fields.insert(*f);
                 }
             }
         }
         Plan::Map { func, .. } => {
-            fields = referenced_fields(*func, hir);
+            fields = referenced_fields(arena.to_hir(*func), hir);
         }
         Plan::Aggregate { keys, aggs, .. } => {
             for &(_, key_expr) in keys {
-                for f in referenced_fields(key_expr, hir).iter() {
+                for f in referenced_fields(arena.to_hir(key_expr), hir).iter() {
                     fields.insert(*f);
                 }
             }
             for agg in aggs {
-                collect_agg_fields(&agg.kind, hir, &mut fields);
+                collect_agg_fields(&agg.kind, arena, hir, &mut fields);
             }
         }
         Plan::Sort { specs, .. } => {
             for spec in specs {
-                for f in referenced_fields(spec.expr, hir).iter() {
+                for f in referenced_fields(arena.to_hir(spec.expr), hir).iter() {
                     fields.insert(*f);
                 }
             }
         }
         Plan::Limit { skip, fetch, .. } => {
             if let Some(s) = skip {
-                for f in referenced_fields(*s, hir).iter() {
+                for f in referenced_fields(arena.to_hir(*s), hir).iter() {
                     fields.insert(*f);
                 }
             }
             if let Some(f_expr) = fetch {
-                for f in referenced_fields(*f_expr, hir).iter() {
+                for f in referenced_fields(arena.to_hir(*f_expr), hir).iter() {
                     fields.insert(*f);
                 }
             }
         }
         Plan::Distinct { on: Some(on), .. } => {
             for &expr in on {
-                for f in referenced_fields(expr, hir).iter() {
+                for f in referenced_fields(arena.to_hir(expr), hir).iter() {
                     fields.insert(*f);
                 }
             }
         }
         Plan::Join { on, filter, .. } => {
             for &(left, right) in on {
-                for f in referenced_fields(left, hir).iter() {
+                for f in referenced_fields(arena.to_hir(left), hir).iter() {
                     fields.insert(*f);
                 }
-                for f in referenced_fields(right, hir).iter() {
+                for f in referenced_fields(arena.to_hir(right), hir).iter() {
                     fields.insert(*f);
                 }
             }
             if let Some(f) = filter {
-                for sym in referenced_fields(*f, hir).iter() {
+                for sym in referenced_fields(arena.to_hir(*f), hir).iter() {
                     fields.insert(*sym);
                 }
             }
         }
         Plan::Scan { filter, .. } => {
             if let Some(f) = filter {
-                for sym in referenced_fields(*f, hir).iter() {
+                for sym in referenced_fields(arena.to_hir(*f), hir).iter() {
                     fields.insert(*sym);
                 }
             }
@@ -251,12 +251,12 @@ pub fn plan_referenced_fields(plan: &Plan, hir: &Crate) -> FxHashSet<Symbol> {
             for path in paths {
                 for seg in &path.segments {
                     if let Some(pred) = seg.edge_pred {
-                        for f in referenced_fields(pred, hir).iter() {
+                        for f in referenced_fields(arena.to_hir(pred), hir).iter() {
                             fields.insert(*f);
                         }
                     }
                     if let Some(pred) = seg.target_pred {
-                        for f in referenced_fields(pred, hir).iter() {
+                        for f in referenced_fields(arena.to_hir(pred), hir).iter() {
                             fields.insert(*f);
                         }
                     }
@@ -269,25 +269,25 @@ pub fn plan_referenced_fields(plan: &Plan, hir: &Crate) -> FxHashSet<Symbol> {
     fields
 }
 
-fn collect_agg_fields(kind: &crate::plan::AggKind, hir: &Crate, out: &mut FxHashSet<Symbol>) {
+fn collect_agg_fields(kind: &crate::plan::AggKind, arena: &PlanArena, hir: &Crate, out: &mut FxHashSet<Symbol>) {
     use crate::plan::AggKind;
     match kind {
         AggKind::Sum { expr }
         | AggKind::Avg { expr }
         | AggKind::Min { expr }
         | AggKind::Max { expr } => {
-            for f in referenced_fields(*expr, hir).iter() {
+            for f in referenced_fields(arena.to_hir(*expr), hir).iter() {
                 out.insert(*f);
             }
         }
         AggKind::UserAggregate { args, input_expr, .. } => {
             for &arg in args {
-                for f in referenced_fields(arg, hir).iter() {
+                for f in referenced_fields(arena.to_hir(arg), hir).iter() {
                     out.insert(*f);
                 }
             }
             if let Some(expr) = input_expr {
-                for f in referenced_fields(*expr, hir).iter() {
+                for f in referenced_fields(arena.to_hir(*expr), hir).iter() {
                     out.insert(*f);
                 }
             }

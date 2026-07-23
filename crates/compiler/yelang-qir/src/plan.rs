@@ -14,17 +14,17 @@
 
 use std::sync::Arc;
 
-use yelang_arena::{DefId, Id, IndexVec, SecondaryMap};
+use yelang_arena::{DefId, FxHashMap, Id, IndexVec, SecondaryMap};
 use yelang_hir::ids::{ExprId, QueryId};
 use yelang_interner::Symbol;
+use yelang_thir::ids::ThirExprId;
 
 /// Expression reference used throughout the plan tree.
 ///
-/// Currently HIR [`ExprId`]. The THIR infrastructure is in place
-/// (`ThirBodies::query_lowerings`, `ThirBodies::expr_mapping`) for
-/// incremental migration to [`yelang_thir::ids::ThirExprId`] once
-/// the analysis module is also migrated to walk THIR expressions.
-pub type ExprRef = ExprId;
+/// Uses THIR [`ThirExprId`] — the typed, desugared IR. The extraction
+/// converts HIR `ExprId` → `ThirExprId` via [`PlanArena::to_thir`].
+/// The analysis converts back via [`PlanArena::to_hir`].
+pub type ExprRef = ThirExprId;
 
 // ---------------------------------------------------------------------------
 // PlanId
@@ -54,6 +54,10 @@ pub struct PlanArena {
     pub meta: SecondaryMap<PlanId, PlanMeta>,
     /// Provenance: which THIR expression or HIR query produced each node.
     pub origin: SecondaryMap<PlanId, PlanOrigin>,
+    /// HIR ExprId → THIR ThirExprId. Populated from ThirBodies before extraction.
+    pub expr_mapping: FxHashMap<ExprId, ExprRef>,
+    /// THIR ThirExprId → HIR ExprId. Used by the analysis to walk HIR exprs.
+    pub reverse_expr_mapping: FxHashMap<ExprRef, ExprId>,
 }
 
 impl PlanArena {
@@ -62,7 +66,27 @@ impl PlanArena {
             nodes: IndexVec::new(),
             meta: SecondaryMap::new(),
             origin: SecondaryMap::new(),
+            expr_mapping: FxHashMap::default(),
+            reverse_expr_mapping: FxHashMap::default(),
         }
+    }
+
+    /// Convert an HIR ExprId to a THIR ExprRef.
+    /// Returns a default (invalid) ThirExprId if no mapping exists.
+    pub fn to_thir(&self, hir_id: ExprId) -> ExprRef {
+        self.expr_mapping.get(&hir_id).copied().unwrap_or_default()
+    }
+
+    /// Convert a THIR ExprRef back to an HIR ExprId.
+    /// Returns a default (invalid) ExprId if no mapping exists.
+    pub fn to_hir(&self, thir_id: ExprRef) -> ExprId {
+        self.reverse_expr_mapping.get(&thir_id).copied().unwrap_or_default()
+    }
+
+    /// Populate the expression mappings from THIR bodies.
+    pub fn load_expr_mappings(&mut self, bodies: &yelang_thir::ThirBodies) {
+        self.expr_mapping = bodies.expr_mapping.clone();
+        self.reverse_expr_mapping = bodies.reverse_expr_mapping.clone();
     }
 
     /// Allocate a plan node and return its [`PlanId`].

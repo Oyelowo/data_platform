@@ -56,7 +56,7 @@ impl OptRule for PushDownFilter {
                 on,
                 filter: join_filter,
             } => {
-                let pred_fields = referenced_fields(*pred, ctx.hir);
+                let pred_fields = referenced_fields(arena.to_hir(*pred), ctx.hir);
 
                 let can_push_left =
                     predicate_can_evaluate_against(&pred_fields, *left, arena, ctx.hir);
