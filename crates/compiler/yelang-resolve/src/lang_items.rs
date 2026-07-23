@@ -91,6 +91,30 @@ pub enum LangItem {
     Queryable,
     Aggregate,
 
+    // Queryable method lang items (for DefId-based dispatch in QIR lowering)
+    QueryableMap,
+    QueryableFilter,
+    QueryableFlatMap,
+    QueryableOrderBy,
+    QueryableGroupBy,
+    QueryableDistinct,
+    QueryableTake,
+    QueryableSkip,
+    QueryableAggregate,
+    QueryableSum,
+    QueryableCount,
+    QueryableAvg,
+    QueryableMin,
+    QueryableMax,
+    QueryableFold,
+    QueryableReduce,
+    QueryableExecute,
+    QueryableJoin,
+    QueryableLeftJoin,
+    QueryableSemiJoin,
+    QueryableAntiJoin,
+    QueryableUnion,
+
     // ------------------------------------------------------------------------
     // Special types
     // ------------------------------------------------------------------------
@@ -183,6 +207,30 @@ impl LangItem {
             "queryable" => Queryable,
             "aggregate" => Aggregate,
 
+            // Queryable methods
+            "queryable_map" => QueryableMap,
+            "queryable_filter" => QueryableFilter,
+            "queryable_flat_map" => QueryableFlatMap,
+            "queryable_order_by" => QueryableOrderBy,
+            "queryable_group_by" => QueryableGroupBy,
+            "queryable_distinct" => QueryableDistinct,
+            "queryable_take" => QueryableTake,
+            "queryable_skip" => QueryableSkip,
+            "queryable_aggregate" => QueryableAggregate,
+            "queryable_sum" => QueryableSum,
+            "queryable_count" => QueryableCount,
+            "queryable_avg" => QueryableAvg,
+            "queryable_min" => QueryableMin,
+            "queryable_max" => QueryableMax,
+            "queryable_fold" => QueryableFold,
+            "queryable_reduce" => QueryableReduce,
+            "queryable_execute" => QueryableExecute,
+            "queryable_join" => QueryableJoin,
+            "queryable_left_join" => QueryableLeftJoin,
+            "queryable_semi_join" => QueryableSemiJoin,
+            "queryable_anti_join" => QueryableAntiJoin,
+            "queryable_union" => QueryableUnion,
+
             // Special types
             "owned_box" => Box,
             "phantom_data" => PhantomData,
@@ -259,6 +307,28 @@ impl LangItem {
             FromIterator => "from_iterator",
             Queryable => "queryable",
             Aggregate => "aggregate",
+            QueryableMap => "queryable_map",
+            QueryableFilter => "queryable_filter",
+            QueryableFlatMap => "queryable_flat_map",
+            QueryableOrderBy => "queryable_order_by",
+            QueryableGroupBy => "queryable_group_by",
+            QueryableDistinct => "queryable_distinct",
+            QueryableTake => "queryable_take",
+            QueryableSkip => "queryable_skip",
+            QueryableAggregate => "queryable_aggregate",
+            QueryableSum => "queryable_sum",
+            QueryableCount => "queryable_count",
+            QueryableAvg => "queryable_avg",
+            QueryableMin => "queryable_min",
+            QueryableMax => "queryable_max",
+            QueryableFold => "queryable_fold",
+            QueryableReduce => "queryable_reduce",
+            QueryableExecute => "queryable_execute",
+            QueryableJoin => "queryable_join",
+            QueryableLeftJoin => "queryable_left_join",
+            QueryableSemiJoin => "queryable_semi_join",
+            QueryableAntiJoin => "queryable_anti_join",
+            QueryableUnion => "queryable_union",
             Box => "owned_box",
             PhantomData => "phantom_data",
             Formatter => "formatter",
@@ -285,6 +355,12 @@ impl LangItem {
             }
             Drop | Clone | Default | Debug | Display | Iterator | IntoIterator | FromIterator
             | Queryable | Aggregate => "standard trait",
+            QueryableMap | QueryableFilter | QueryableFlatMap | QueryableOrderBy
+            | QueryableGroupBy | QueryableDistinct | QueryableTake | QueryableSkip
+            | QueryableAggregate | QueryableSum | QueryableCount | QueryableAvg
+            | QueryableMin | QueryableMax | QueryableFold | QueryableReduce
+            | QueryableExecute | QueryableJoin | QueryableLeftJoin | QueryableSemiJoin
+            | QueryableAntiJoin | QueryableUnion => "queryable method",
             DerefTarget => "associated type",
             Box | PhantomData | Formatter | Array => "special type",
             Panic | PanicBoundsCheck | DropInPlace => "panic/unwinding item",
@@ -300,23 +376,35 @@ impl LangItem {
 #[derive(Debug, Clone, Default)]
 pub struct LangItems {
     map: FxHashMap<LangItem, DefId>,
+    /// Reverse map: DefId → LangItem. Built lazily on first `get_by_def_id` call.
+    reverse: FxHashMap<DefId, LangItem>,
 }
 
 impl LangItems {
     pub fn new() -> Self {
         Self {
             map: FxHashMap::default(),
+            reverse: FxHashMap::default(),
         }
     }
 
     /// Register a lang item.  Returns the previous `DefId` if one existed.
     pub fn insert(&mut self, item: LangItem, def_id: DefId) -> Option<DefId> {
+        self.reverse.insert(def_id, item);
         self.map.insert(item, def_id)
     }
 
     /// Look up a lang item.
     pub fn get(&self, item: LangItem) -> Option<DefId> {
         self.map.get(&item).copied()
+    }
+
+    /// Reverse lookup: given a DefId, find its LangItem (if any).
+    ///
+    /// Used by QIR lowering to dispatch on method DefId instead of
+    /// matching method name strings.
+    pub fn get_by_def_id(&self, def_id: DefId) -> Option<LangItem> {
+        self.reverse.get(&def_id).copied()
     }
 
     /// Iterate over all registered lang items.

@@ -199,10 +199,23 @@ fn main() {
 
 // ===========================================================================
 // From select.md: index selector [0]
-// NOTE: `select users[0].id from users@u:User` requires the type checker
-// to support indexing into query source collections. This is a known
-// limitation — the test is omitted until the type checker supports it.
 // ===========================================================================
+
+#[test]
+fn index_selector() {
+    // select users[0].id from users@u:User → scalar
+    let src = r#"
+struct User { id: i32, name: String }
+fn users() -> [User] { [] }
+fn main() -> i32 {
+    select users[0].id from users@u:User
+}
+"#;
+    let (arena, roots, _) = plan_queries(src);
+    assert_eq!(roots.len(), 1);
+    let s = spine(&arena, roots[0]);
+    assert!(s.contains(&"Scan"), "spine: {:?}", s);
+}
 
 // ===========================================================================
 // From semantics.md: range does not change types

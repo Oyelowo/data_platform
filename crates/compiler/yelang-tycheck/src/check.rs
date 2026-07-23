@@ -366,6 +366,14 @@ fn check_from_node(fcx: &mut FnCtxt<'_>, span: yelang_lexer::Span, from: &yelang
     // Register the root label so later `links` paths can anchor from it.
     fcx.register_root_label(from.label, from.binder);
 
+    // Store the collection type for this label so the projection can
+    // reference it directly (e.g., `users[0].id`).
+    // Use the concrete array type (not the potentially-unresolved source_ty).
+    let collection_ty = fcx.mk_array_ty(elem_ty);
+    if let Some(scope) = fcx.query_scopes.last_mut() {
+        scope.label_to_source_ty.insert(from.label, collection_ty);
+    }
+
     // Record the first root's element type for `group by` member typing.
     if let Some(scope) = fcx.query_scopes.last_mut() {
         if scope.root_element_ty.is_none() {
@@ -938,6 +946,22 @@ fn check_path(fcx: &mut FnCtxt<'_>, res: &Res) -> TyId {
             }
         }
         Res::Def { def_id } => {
+            // In a query context, root labels shadow top-level function
+            // definitions. e.g., `from users@u:User` makes `users` in the
+            // projection refer to the collection `[User]`, not `fn() -> [User]`.
+            //
+            // Guard: only intercept when NOT checking a call's func expression
+            // (the from-source `users()` call must still resolve to the function).
+            if !fcx.in_call_func {
+                if let Some(scope) = fcx.query_scopes.last() {
+                    if let Some(Some(item)) = fcx.tcx.crate_hir().items.get(*def_id) {
+                        if let Some(&source_ty) = scope.label_to_source_ty.get(&item.ident.symbol)
+                        {
+                            return source_ty;
+                        }
+                    }
+                }
+            }
             if let Some(ty) = fcx.item_ty(*def_id) {
                 ty
             } else {
@@ -1089,7 +1113,11 @@ fn check_call(fcx: &mut FnCtxt<'_>, func: ExprId, args: &[ExprId]) -> TyId {
     }
 
     let func_span = expr_span(fcx, func);
+    // Set in_call_func so root-label shadowing doesn't intercept the
+    // function path (e.g., `users()` in `from users@u:User`).
+    fcx.in_call_func = true;
     let func_ty = check_expr(fcx, func);
+    fcx.in_call_func = false;
     let interner = fcx.tcx.interner();
 
     match interner.ty(func_ty) {
@@ -1347,6 +1375,25 @@ fn check_index(fcx: &mut FnCtxt<'_>, expr: ExprId, index: ExprId) -> TyId {
 
     match interner.ty(expr_ty) {
         Ty::Array(ty, _) | Ty::Slice(ty) => ty,
+        // Array<T> ADT (created by mk_array_ty for query collections).
+        Ty::Adt(adt, args) => {
+            if fcx
+                .tcx
+                .lang_item(yelang_resolve::lang_items::LangItem::Array)
+                .map(|array_def| adt.def_id == array_def)
+                .unwrap_or(false)
+            {
+                args.first()
+                    .map(|a| a.expect_type())
+                    .unwrap_or_else(|| fcx.mk_error())
+            } else {
+                fcx.report_type_error(
+                    base_span,
+                    TypeError::Custom(format!("cannot index a value of type `{:?}`", expr_ty)),
+                );
+                fcx.mk_error()
+            }
+        }
         Ty::Infer(InferTy::TyVar(_)) => {
             let elem_ty = fcx.new_ty_var();
             let expected = fcx.mk_slice(elem_ty);

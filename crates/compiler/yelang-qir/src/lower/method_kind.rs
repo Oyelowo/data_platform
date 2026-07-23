@@ -1,8 +1,14 @@
 //! Centralized Queryable method dispatch.
 //!
-//! Maps method names to a type-safe enum, eliminating scattered string
-//! matching throughout the extraction code. The extraction first verifies
-//! `trait_def_id == LangItem::Queryable`, then uses this enum to dispatch.
+//! Dispatch priority:
+//! 1. **DefId-based** (preferred): resolve method DefId → `LangItem` → `QueryableMethod`
+//!    via `from_lang_item()`. Requires `@lang("queryable_*")` on stdlib methods.
+//! 2. **Name-based** (fallback): `from_name()` for methods without lang items yet.
+//!
+//! The lowering first verifies `trait_def_id == LangItem::Queryable`, then
+//! dispatches via lang item when available, falling back to name matching.
+
+use yelang_resolve::lang_items::LangItem;
 
 /// Known `Queryable` trait methods and their plan-level semantics.
 ///
@@ -53,6 +59,11 @@ pub enum QueryableMethod {
     // ── Set operations ─────────────────────────────────────────────────
     Union,
     UnionAll,
+
+    // ── Eager evaluation ───────────────────────────────────────────────
+    Fold,
+    Reduce,
+    Execute,
 }
 
 impl QueryableMethod {
@@ -114,5 +125,37 @@ impl QueryableMethod {
             self,
             Self::Join | Self::InnerJoin | Self::LeftJoin | Self::SemiJoin | Self::AntiJoin
         )
+    }
+
+    /// Resolve from a `LangItem` (DefId-based dispatch).
+    ///
+    /// Preferred over `from_name()` — uses the `@lang("queryable_*")`
+    /// annotation on the method's DefId instead of matching name strings.
+    pub fn from_lang_item(item: LangItem) -> Option<Self> {
+        Some(match item {
+            LangItem::QueryableMap => Self::Map,
+            LangItem::QueryableFilter => Self::Filter,
+            LangItem::QueryableFlatMap => Self::FlatMap,
+            LangItem::QueryableOrderBy => Self::OrderBy,
+            LangItem::QueryableGroupBy => Self::GroupBy,
+            LangItem::QueryableDistinct => Self::Distinct,
+            LangItem::QueryableTake => Self::Take,
+            LangItem::QueryableSkip => Self::Skip,
+            LangItem::QueryableAggregate => Self::Aggregate,
+            LangItem::QueryableSum => Self::Sum,
+            LangItem::QueryableCount => Self::Count,
+            LangItem::QueryableAvg => Self::Avg,
+            LangItem::QueryableMin => Self::Min,
+            LangItem::QueryableMax => Self::Max,
+            LangItem::QueryableFold => Self::Fold,
+            LangItem::QueryableReduce => Self::Reduce,
+            LangItem::QueryableExecute => Self::Execute,
+            LangItem::QueryableJoin => Self::Join,
+            LangItem::QueryableLeftJoin => Self::LeftJoin,
+            LangItem::QueryableSemiJoin => Self::SemiJoin,
+            LangItem::QueryableAntiJoin => Self::AntiJoin,
+            LangItem::QueryableUnion => Self::Union,
+            _ => return None,
+        })
     }
 }

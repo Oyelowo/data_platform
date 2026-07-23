@@ -16,48 +16,60 @@
 @lang("queryable")
 trait Queryable<T> {
     // Lazy transformations.
+    @lang("queryable_map")
     fn map<U>(self, f: fn(T) -> U) -> Queryable<U>;
+    @lang("queryable_filter")
     fn filter(self, pred: fn(&T) -> bool) -> Queryable<T>;
+    @lang("queryable_flat_map")
     fn flat_map<U>(self, f: fn(T) -> Queryable<U>) -> Queryable<U>;
 
     // Ordering, grouping, slicing.
+    @lang("queryable_order_by")
     fn order_by<K>(self, key: fn(T) -> K) -> Seq<T>;
+    @lang("queryable_group_by")
     fn group_by<K>(self, key: fn(T) -> K) -> Queryable<Group<K, T>>;
+    @lang("queryable_distinct")
     fn distinct(self) -> Queryable<T>;
+    @lang("queryable_take")
     fn take(self, n: usize) -> Queryable<T>;
+    @lang("queryable_skip")
     fn skip(self, n: usize) -> Queryable<T>;
 
-    // Core aggregation hook. Explicit `Acc`/`Out` parameters avoid associated
-    // types in the bootstrap pipeline.
+    // Core aggregation hook.
+    @lang("queryable_aggregate")
     fn aggregate<A, Acc, Out>(self, agg: A) -> Out
     where A: Aggregate<T, Acc, Out>;
 
-    // Sugar methods. The QIR lowering inlines their default bodies, which all
-    // reduce to `self.aggregate(Marker)`. User overrides are respected.
+    // Sugar methods.
+    @lang("queryable_sum")
     fn sum(self) -> T
     where Self: Sized
     {
         self.aggregate(Sum {})
     }
 
+    @lang("queryable_count")
     fn count(self) -> usize
     where Self: Sized
     {
         self.aggregate(Count {})
     }
 
+    @lang("queryable_avg")
     fn avg(self) -> f64
     where Self: Sized
     {
         self.aggregate(Avg {})
     }
 
+    @lang("queryable_min")
     fn min(self) -> Option<T>
     where Self: Sized
     {
         self.aggregate(Min {})
     }
 
+    @lang("queryable_max")
     fn max(self) -> Option<T>
     where Self: Sized
     {
@@ -65,10 +77,13 @@ trait Queryable<T> {
     }
 
     // Eager fold/reduce.
+    @lang("queryable_fold")
     fn fold<Acc>(self, init: Acc, f: fn(Acc, T) -> Acc) -> Acc;
+    @lang("queryable_reduce")
     fn reduce(self, f: fn(T, T) -> T) -> Option<T>;
 
     // Force materialization.
+    @lang("queryable_execute")
     fn execute(self) -> Vec<T>;
 }
 

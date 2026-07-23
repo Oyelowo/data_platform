@@ -87,6 +87,10 @@ pub struct QueryScope {
     /// Element type of the first `from` root. Used to build the `members` field
     /// of a `group by` result.
     pub root_element_ty: Option<TyId>,
+    /// Collection type for each root label. Maps label symbol → source type
+    /// (e.g., `users` → `[User]`). Used when the projection references a
+    /// root label directly (e.g., `users[0].id`).
+    pub label_to_source_ty: FxHashMap<Symbol, TyId>,
 }
 
 /// The function body type-checking context.
@@ -116,6 +120,10 @@ pub struct FnCtxt<'a> {
     pub errors: Vec<(Span, TypeError)>,
     /// Stack of active query scopes. Only the topmost scope is active.
     pub query_scopes: Vec<QueryScope>,
+    /// True when checking a Call expression's func sub-expression.
+    /// Prevents root-label shadowing from intercepting the function path
+    /// in `from users@u:User` (the source call must resolve to the function).
+    pub in_call_func: bool,
     /// Map from generic parameter `DefId` to its `Ty::Param` inside this body.
     param_map: FxHashMap<DefId, TyId>,
 }
@@ -147,6 +155,7 @@ impl<'a> FnCtxt<'a> {
             obligations: Vec::new(),
             errors: Vec::new(),
             query_scopes: Vec::new(),
+            in_call_func: false,
             param_map,
         }
     }

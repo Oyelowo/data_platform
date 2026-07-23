@@ -1021,6 +1021,23 @@ fn lower_method_call(
                 origin,
             ))
         }
+
+        // ── Eager evaluation (fold/reduce/execute) ────────────────────
+        // These are terminal operations that don't produce query plans.
+        // They become opaque Extension barriers.
+        QueryableMethod::Fold | QueryableMethod::Reduce | QueryableMethod::Execute => {
+            Some(alloc(
+                arena,
+                Plan::Extension {
+                    node: std::sync::Arc::new(OpaqueMethod {
+                        name: method_name.to_string(),
+                        input,
+                        call: call_expr,
+                    }),
+                },
+                origin,
+            ))
+        }
     }
 }
 
