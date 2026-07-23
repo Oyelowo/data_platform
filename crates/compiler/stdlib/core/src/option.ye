@@ -1,0 +1,152 @@
+// Yelang `Option<T>` — an optional value.
+//
+// `Option` is recognized by the compiler via `@lang("option")`, with its two
+// variants tagged `@lang("option_some")` and `@lang("option_none")`. The type is
+// used throughout the stdlib (iterator state, query `min`/`max`/`reduce`, etc.).
+//
+// Yelang has no borrow checker, so combinators take `self` by value. Methods that
+// mutate in place in Rust (`take`, `replace`) consume the option here; see the
+// per-method notes.
+
+@lang("option")
+enum Option<T> {
+    @lang("option_some")
+    Some(T),
+    @lang("option_none")
+    None,
+}
+
+impl<T> Option<T> {
+    // Predicates.
+    fn is_some(self) -> bool {
+        match self {
+            Option::Some(_) => true,
+            Option::None => false,
+        }
+    }
+
+    fn is_none(self) -> bool {
+        match self {
+            Option::Some(_) => false,
+            Option::None => true,
+        }
+    }
+
+    // Extraction.
+    fn unwrap(self) -> T {
+        match self {
+            Option::Some(x) => x,
+            // TODO: lower to `panic!("called Option::unwrap() on a None value")`.
+            Option::None => loop {},
+        }
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+        match self {
+            Option::Some(x) => x,
+            Option::None => default,
+        }
+    }
+
+    fn unwrap_or_else(self, f: fn() -> T) -> T {
+        match self {
+            Option::Some(x) => x,
+            Option::None => f(),
+        }
+    }
+
+    // Combinators.
+    fn map<U>(self, f: fn(T) -> U) -> Option<U> {
+        match self {
+            Option::Some(x) => Option::Some(f(x)),
+            Option::None => Option::None,
+        }
+    }
+
+    fn and_then<U>(self, f: fn(T) -> Option<U>) -> Option<U> {
+        match self {
+            Option::Some(x) => f(x),
+            Option::None => Option::None,
+        }
+    }
+
+    fn or(self, other: Option<T>) -> Option<T> {
+        match self {
+            Option::Some(x) => Option::Some(x),
+            Option::None => other,
+        }
+    }
+
+    fn or_else(self, f: fn() -> Option<T>) -> Option<T> {
+        match self {
+            Option::Some(x) => Option::Some(x),
+            Option::None => f(),
+        }
+    }
+
+    // Conversion to `Result`.
+    fn ok_or<E>(self, err: E) -> Result<T, E> {
+        match self {
+            Option::Some(x) => Result::Ok(x),
+            Option::None => Result::Err(err),
+        }
+    }
+
+    fn ok_or_else<E>(self, f: fn() -> E) -> Result<T, E> {
+        match self {
+            Option::Some(x) => Result::Ok(x),
+            Option::None => Result::Err(f()),
+        }
+    }
+
+    // View the contained value as a single-element iterator.
+    fn iter(self) -> OptionIter<T> {
+        OptionIter { value: self }
+    }
+
+    // NOTE: Rust's `take`/`replace` use `&mut self`. Yelang passes `self` by value
+    // (no borrow checker), so these consume the option and hand back the displaced
+    // value. A future `&mut self` form can restore true in-place semantics.
+    fn take(self) -> Option<T> {
+        self
+    }
+
+    fn replace(self, new: T) -> Option<T> {
+        let _ = new;
+        self
+    }
+
+    // Combine two options into an option of a pair.
+    fn zip<U>(self, other: Option<U>) -> Option<(T, U)> {
+        match (self, other) {
+            (Option::Some(x), Option::Some(y)) => Option::Some((x, y)),
+            (Option::None, _) => Option::None,
+            (_, Option::None) => Option::None,
+        }
+    }
+}
+
+// `Option<Option<T>>` can be collapsed one level.
+impl<T> Option<Option<T>> {
+    fn flatten(self) -> Option<T> {
+        match self {
+            Option::Some(inner) => inner,
+            Option::None => Option::None,
+        }
+    }
+}
+
+// Iterator adapter yielded by `Option::iter`. Holds the remaining value; the first
+// `next` produces it, subsequent calls yield `None`.
+struct OptionIter<T> {
+    value: Option<T>,
+}
+
+impl<T> Iterator<T> for OptionIter<T> {
+    fn next(self) -> Option<(OptionIter<T>, T)> {
+        match self.value {
+            Option::Some(x) => Option::Some((OptionIter { value: Option::None }, x)),
+            Option::None => Option::None,
+        }
+    }
+}

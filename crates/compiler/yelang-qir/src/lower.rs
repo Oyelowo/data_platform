@@ -34,6 +34,12 @@ use yelang_hir::ids::{ExprId, PatId, QueryId};
 use yelang_hir::Crate;
 use yelang_interner::{Interner, Symbol};
 use yelang_resolve::lang_items::{LangItem, LangItems};
+use yelang_thir::ids::{ThirExprId, ThirPatId};
+use yelang_thir::query::{
+    ThirDirection, ThirFromNode, ThirGroupBy, ThirLinkPath, ThirLinkSegment, ThirOrderByPart,
+    ThirSelectQuery,
+};
+use yelang_thir::{ThirBodies, ThirExpr, ThirPat};
 
 use crate::plan::{
     AggCall, AggKind, Direction, EdgeRef, GroupKey, JoinKind, NodeRef, Plan, PlanArena,
@@ -44,20 +50,33 @@ use crate::plan::{
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Extract a logical plan tree from a HIR query.
+/// Extract a logical plan tree from a query.
 ///
 /// Returns the root [`PlanId`] of the extracted tree, allocated in `arena`.
+///
+/// When `thir_bodies` is `Some` and contains a lowered [`ThirSelectQuery`] for
+/// `query_id`, the plan is built directly from THIR (no HIR query dependency).
+/// Otherwise it falls back to reading the HIR query node.
 pub fn lower_query(
     query_id: QueryId,
     hir: &Crate,
+    thir_bodies: Option<&ThirBodies>,
     interner: &Interner,
     lang_items: &LangItems,
     arena: &mut PlanArena,
 ) -> Option<PlanId> {
+    // Prefer the THIR query structure when available.
+    if let Some(bodies) = thir_bodies {
+        if let Some(select) = bodies.thir_queries.get(&query_id) {
+            return Some(lower_select(select, query_id, bodies, interner, arena));
+        }
+    }
+
+    // Fall back to the HIR query node.
     let query = hir.query(query_id)?;
     match &query.kind {
         QueryKind::Select(select) => {
-            Some(lower_select(select, query_id, hir, interner, lang_items, arena))
+            Some(lower_select_hir(select, query_id, hir, interner, lang_items, arena))
         }
         QueryKind::Create(_)
         | QueryKind::Update(_)
@@ -69,10 +88,317 @@ pub fn lower_query(
 }
 
 // ---------------------------------------------------------------------------
-// Select extraction
+// Select extraction (THIR-driven)
 // ---------------------------------------------------------------------------
 
+/// Build a logical plan tree directly from a [`ThirSelectQuery`].
+///
+/// All sub-expressions are already THIR expression IDs ([`ExprRef`]), so no
+/// HIR→THIR conversion is needed. Aggregate decomposition over the projection
+/// is a HIR-based post-process and is not performed here (see the HIR fallback
+/// path [`lower_select_hir`]).
 fn lower_select(
+    select: &ThirSelectQuery,
+    query_id: QueryId,
+    thir_bodies: &ThirBodies,
+    interner: &Interner,
+    arena: &mut PlanArena,
+) -> PlanId {
+    let origin = PlanOrigin::QuerySyntax(query_id);
+
+    // 1. Build scan(s) from `from` nodes.
+    let mut current = lower_from_nodes_thir(&select.from, thir_bodies, arena, &origin);
+
+    // 2. Apply `links` traversals.
+    if !select.links.is_empty() {
+        let paths = lower_link_paths_thir(&select.links, thir_bodies);
+        current = alloc(
+            arena,
+            Plan::Traverse {
+                input: current,
+                paths,
+            },
+            origin.clone(),
+        );
+    }
+
+    // 3. Apply pipeline `where` (post-links filter).
+    if let Some(pred) = select.where_clause {
+        current = alloc(
+            arena,
+            Plan::Filter { input: current, pred },
+            origin.clone(),
+        );
+    }
+
+    // 4. Apply `group by`.
+    if let Some(group_by) = &select.group_by {
+        current = lower_group_by_thir(current, group_by, arena, &origin);
+    }
+
+    // 5. Apply `order by`.
+    if !select.order_by.is_empty() {
+        let specs = lower_order_specs_thir(&select.order_by);
+        current = alloc(
+            arena,
+            Plan::Sort {
+                input: current,
+                specs,
+            },
+            origin.clone(),
+        );
+    }
+
+    // 6. Apply `range`.
+    if let Some(range) = &select.range {
+        current = alloc(
+            arena,
+            Plan::Limit {
+                input: current,
+                skip: range.start,
+                fetch: range.end,
+            },
+            origin.clone(),
+        );
+    }
+
+    // 7. Apply projection.
+    let result_name = interner.intern("result");
+    current = alloc(
+        arena,
+        Plan::Project {
+            input: current,
+            exprs: vec![(result_name, select.projection)],
+        },
+        origin,
+    );
+
+    current
+}
+
+// ---------------------------------------------------------------------------
+// THIR from nodes → Scan (+ optional Filter, Sort, Limit)
+// ---------------------------------------------------------------------------
+
+fn lower_from_nodes_thir(
+    from: &[ThirFromNode],
+    thir_bodies: &ThirBodies,
+    arena: &mut PlanArena,
+    origin: &PlanOrigin,
+) -> PlanId {
+    debug_assert!(!from.is_empty(), "select must have at least one from node");
+
+    let mut scans: Vec<PlanId> = Vec::with_capacity(from.len());
+
+    for node in from {
+        let source = resolve_source_ref_thir(node.source, node.label, thir_bodies);
+        let mut scan_id = alloc(
+            arena,
+            Plan::Scan {
+                source,
+                filter: None,
+                projection: None,
+                range: None,
+            },
+            origin.clone(),
+        );
+
+        // Per-root modifiers.
+        if let Some(filter) = node.filter {
+            scan_id = alloc(
+                arena,
+                Plan::Filter {
+                    input: scan_id,
+                    pred: filter,
+                },
+                origin.clone(),
+            );
+        }
+        if !node.order_by.is_empty() {
+            let specs = lower_order_specs_thir(&node.order_by);
+            scan_id = alloc(
+                arena,
+                Plan::Sort {
+                    input: scan_id,
+                    specs,
+                },
+                origin.clone(),
+            );
+        }
+        if let Some(range) = &node.range {
+            scan_id = alloc(
+                arena,
+                Plan::Limit {
+                    input: scan_id,
+                    skip: range.start,
+                    fetch: range.end,
+                },
+                origin.clone(),
+            );
+        }
+
+        scans.push(scan_id);
+    }
+
+    if scans.len() == 1 {
+        return scans[0];
+    }
+
+    // Multiple roots: cross-join left-to-right.
+    let mut result = scans[0];
+    for &right in &scans[1..] {
+        result = alloc(
+            arena,
+            Plan::Join {
+                left: result,
+                right,
+                kind: JoinKind::Cross,
+                on: vec![],
+                filter: None,
+            },
+            origin.clone(),
+        );
+    }
+    result
+}
+
+/// Determine the [`SourceRef`] for a THIR `from` node's source expression.
+///
+/// - `ThirExpr::Var` → table-backed source (the DefId points to a struct)
+/// - `ThirExpr::Local` → local variable holding a collection
+/// - Other expressions → function/method call returning a collection
+fn resolve_source_ref_thir(
+    source: ThirExprId,
+    label: Symbol,
+    thir_bodies: &ThirBodies,
+) -> SourceRef {
+    match thir_bodies.exprs.get(source) {
+        Some(ThirExpr::Var(def_id)) => SourceRef::Table {
+            def: *def_id,
+            name: label,
+        },
+        Some(ThirExpr::Local(_)) => SourceRef::Local { name: label },
+        // Non-path expressions (calls, etc.) → Call source.
+        _ => SourceRef::Call { func: source },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THIR links → TraversePath
+// ---------------------------------------------------------------------------
+
+fn lower_link_paths_thir(links: &[ThirLinkPath], thir_bodies: &ThirBodies) -> Vec<TraversePath> {
+    links
+        .iter()
+        .map(|path| lower_link_path_thir(path, thir_bodies))
+        .collect()
+}
+
+fn lower_link_path_thir(path: &ThirLinkPath, thir_bodies: &ThirBodies) -> TraversePath {
+    let anchor = path.anchor.label;
+
+    let segments = path
+        .segments
+        .iter()
+        .map(|seg| lower_link_segment_thir(seg, thir_bodies))
+        .collect();
+
+    TraversePath { anchor, segments }
+}
+
+fn lower_link_segment_thir(seg: &ThirLinkSegment, thir_bodies: &ThirBodies) -> TraverseSegment {
+    let direction = match seg.direction {
+        ThirDirection::Forward => Direction::Forward,
+        ThirDirection::Backward => Direction::Backward,
+        ThirDirection::Both => Direction::Both,
+    };
+
+    let edge = EdgeRef {
+        // TODO: resolve the actual DefId from the edge type annotation.
+        def: yelang_arena::DefId::new(1),
+        label: seg.edge.label,
+        binder: binder_symbol_thir(seg.edge.binder, thir_bodies),
+    };
+
+    let target = NodeRef {
+        // TODO: resolve the actual DefId from the target type annotation.
+        def: yelang_arena::DefId::new(1),
+        label: seg.target.label,
+        binder: binder_symbol_thir(seg.target.binder, thir_bodies),
+    };
+
+    TraverseSegment {
+        edge,
+        direction,
+        target,
+        edge_pred: seg.edge.filter,
+        target_pred: seg.target.filter,
+        hop_range: seg.hop_range.as_ref().map(|h| PlanRange {
+            start: h.start,
+            end: h.end,
+            inclusive: h.inclusive,
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THIR group by → Aggregate
+// ---------------------------------------------------------------------------
+
+fn lower_group_by_thir(
+    input: PlanId,
+    group_by: &ThirGroupBy,
+    arena: &mut PlanArena,
+    origin: &PlanOrigin,
+) -> PlanId {
+    let keys: Vec<(Symbol, GroupKey)> = group_by
+        .keys
+        .iter()
+        .map(|(name, expr)| (*name, GroupKey::Expr(*expr)))
+        .collect();
+
+    alloc(
+        arena,
+        Plan::Aggregate {
+            input,
+            keys,
+            // Aggregate calls are populated by the HIR-based projection
+            // decomposition pass (not run on the THIR path).
+            aggs: vec![],
+            into: group_by.into,
+        },
+        origin.clone(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// THIR order by → SortSpec
+// ---------------------------------------------------------------------------
+
+fn lower_order_specs_thir(parts: &[ThirOrderByPart]) -> Vec<SortSpec> {
+    parts
+        .iter()
+        .map(|part| SortSpec {
+            key: SortKey::Expr(part.expr),
+            desc: part.desc,
+        })
+        .collect()
+}
+
+/// Extract the binder symbol from a THIR [`ThirPatId`].
+fn binder_symbol_thir(pat_id: ThirPatId, thir_bodies: &ThirBodies) -> Symbol {
+    match thir_bodies.pat(pat_id) {
+        Some(ThirPat::Binding { name, .. }) => *name,
+        // Fallback for non-binding patterns (wildcard, etc.)
+        _ => Symbol::from(1u32),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Select extraction (HIR fallback)
+// ---------------------------------------------------------------------------
+
+fn lower_select_hir(
     select: &SelectQuery,
     query_id: QueryId,
     hir: &Crate,
@@ -470,9 +796,17 @@ fn collect_aggregate_calls(
                     // User-defined aggregate via .aggregate(Marker).
                     let marker = args.first().copied();
                     Some(AggKind::UserAggregate {
-                        impl_def: yelang_arena::DefId::new(1), // TODO: resolve
+                        impl_def: yelang_arena::DefId::new(1), // TODO: resolve from trait impl
                         args: marker.map(|m| vec![arena.to_thir(m)]).unwrap_or_default(),
                         input_expr: None,
+                        // TODO: resolve from the trait impl's properties() method
+                        // via constant evaluation. For now, use conservative defaults.
+                        properties: crate::plan::AggProperties {
+                            class: crate::plan::AggClass::Holistic,
+                            associative: false,
+                            commutative: false,
+                            invertible: false,
+                        },
                     })
                 }
                 _ => None,
@@ -674,7 +1008,7 @@ pub fn lower_expr_as_plan(
         }
 
         // ── Nested select query ────────────────────────────────────────
-        Expr::Query(query_id) => lower_query(*query_id, hir, interner, lang_items, arena),
+        Expr::Query(query_id) => lower_query(*query_id, hir, None, interner, lang_items, arena),
 
         // ── Path reference (table or local variable) ───────────────────
         Expr::Path { res } => {
@@ -1001,6 +1335,13 @@ fn lower_method_call(
                             impl_def: yelang_arena::DefId::new(1),
                             args: vec![thir_marker],
                             input_expr: None,
+                            // TODO: resolve from trait impl's properties()
+                            properties: crate::plan::AggProperties {
+                                class: crate::plan::AggClass::Holistic,
+                                associative: false,
+                                commutative: false,
+                                invertible: false,
+                            },
                         },
                     }],
                     into: interner.intern("_groups"),

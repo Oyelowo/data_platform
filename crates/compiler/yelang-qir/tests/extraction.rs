@@ -38,7 +38,7 @@ fn plan_queries(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>, Interner) {
         if slot.is_none() {
             continue;
         }
-        if let Some(root) = lower_query(query_id, &hir, &interner, &hir.lang_items, &mut arena) {
+        if let Some(root) = lower_query(query_id, &hir, None, &interner, &hir.lang_items, &mut arena) {
             let optimized = optimizer.optimize(root, &mut arena);
             roots.push(optimized);
         }

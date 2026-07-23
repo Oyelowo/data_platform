@@ -1,0 +1,24 @@
+// Yelang formatting traits.
+//
+// `Debug` and `Display` are recognized by the compiler via `@lang("debug")` and
+// `@lang("display")`. Both write into an opaque `Formatter` and report failure
+// through `Result<(), Error>`.
+//
+// `Formatter` and `Error` are opaque handles: their representation is supplied by
+// the runtime, so they are declared as empty (compiler-managed) structs.
+
+@lang("debug")
+trait Debug {
+    fn fmt(self, f: Formatter) -> Result<(), Error>;
+}
+
+@lang("display")
+trait Display {
+    fn fmt(self, f: Formatter) -> Result<(), Error>;
+}
+
+// Opaque sink that accumulates formatted output.
+struct Formatter {}
+
+// Opaque formatting error.
+struct Error {}

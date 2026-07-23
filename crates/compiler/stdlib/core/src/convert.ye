@@ -1,0 +1,29 @@
+// Yelang value-conversion traits.
+//
+// Recognized by the compiler via `@lang("from")`, `@lang("into")`,
+// `@lang("try_from")`, and `@lang("try_into")`.
+//
+// `From`/`Into` are infallible; `TryFrom`/`TryInto` are fallible and surface
+// errors through `Result` with an associated `Error` type.
+
+@lang("from")
+trait From<T> {
+    fn from(value: T) -> Self;
+}
+
+@lang("into")
+trait Into<T> {
+    fn into(self) -> T;
+}
+
+@lang("try_from")
+trait TryFrom<T> {
+    type Error;
+    fn try_from(value: T) -> Result<Self, Self::Error>;
+}
+
+@lang("try_into")
+trait TryInto<T> {
+    type Error;
+    fn try_into(self) -> Result<T, Self::Error>;
+}

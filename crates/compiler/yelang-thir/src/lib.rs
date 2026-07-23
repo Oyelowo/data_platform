@@ -2,9 +2,9 @@
 //!
 //! THIR sits between HIR and QIR. It is fully typed and desugared:
 //! method calls are plain function calls with an explicit `self` argument,
-//! query syntax is represented by `ThirExpr::Query(QueryId)`, and surface
-//! sugar such as `for` loops is already lowered (HIR lowers `for` to
-//! `Loop` + `Match`).
+//! query syntax is represented by `ThirExpr::Query(ThirSelectQuery)` with
+//! all sub-expressions lowered to THIR, and surface sugar such as `for`
+//! loops is already lowered (HIR lowers `for` to `Loop` + `Match`).
 
 pub mod body;
 pub mod context;
@@ -16,6 +16,7 @@ pub mod lower_expr;
 pub mod lower_pat;
 pub mod lower_stmt;
 pub mod pat;
+pub mod query;
 pub mod stmt;
 pub mod ty;
 
@@ -26,5 +27,9 @@ pub use expr::{ThirArm, ThirExpr};
 pub use ids::{ThirBodyId, ThirExprId, ThirPatId, ThirStmtId};
 pub use lower::lower_body;
 pub use pat::ThirPat;
+pub use query::{
+    ThirDirection, ThirFromNode, ThirGroupBy, ThirLinkNode, ThirLinkPath, ThirLinkSegment,
+    ThirOrderByPart, ThirRange, ThirSelectQuery,
+};
 pub use stmt::ThirStmt;
 pub use ty::ThirTyId;

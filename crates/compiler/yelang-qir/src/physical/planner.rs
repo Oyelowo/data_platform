@@ -142,21 +142,10 @@ fn lower_node(
 
             let est_card = logical.meta(*input).and_then(|m| m.est_cardinality);
 
-            // Choose algorithm based on aggregate metadata.
-            // User-defined aggregates with `merge` support can be parallelized
-            // (partial aggregation per shard, merge at coordinator).
-            let all_parallelizable = aggs.iter().all(|agg| match &agg.kind {
-                crate::plan::AggKind::Count
-                | crate::plan::AggKind::Sum { .. }
-                | crate::plan::AggKind::Avg { .. }
-                | crate::plan::AggKind::Min { .. }
-                | crate::plan::AggKind::Max { .. } => true,
-                // User-defined aggregates: parallelizable if they have merge
-                // (all Aggregate trait impls do, by definition).
-                crate::plan::AggKind::UserAggregate { .. } => true,
-                // Opaque aggregates: cannot be parallelized.
-                crate::plan::AggKind::Opaque { .. } => false,
-            });
+            // Choose algorithm based on declared algebraic properties.
+            // Each AggKind carries AggProperties from the Aggregate trait impl.
+            // `is_parallelizable()` checks: associative && class != Holistic.
+            let all_parallelizable = aggs.iter().all(|agg| agg.kind.is_parallelizable());
 
             let algorithm = if executor.is_distributed() && all_parallelizable && !keys.is_empty()
             {

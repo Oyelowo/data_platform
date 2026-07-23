@@ -1,0 +1,155 @@
+// Yelang operator traits.
+//
+// Each trait is recognized by the compiler via its `@lang` attribute; the
+// corresponding operator syntax (`+`, `-`, `==`, `<`, `[]`, `*`, ...) is lowered
+// to a call to the trait method. Concrete primitive impls are provided
+// intrinsically by the compiler (see `aggregate_impls.ye`, which uses `+` and `<`
+// directly on `i32`/`i64`/`f64`), so this module only declares the trait surface.
+//
+// Associated types use `type Output;`; the right-hand operand defaults to `Self`
+// via the `Rhs = Self` default type parameter.
+
+// Arithmetic.
+@lang("add")
+trait Add<Rhs = Self> {
+    type Output;
+    fn add(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("sub")
+trait Sub<Rhs = Self> {
+    type Output;
+    fn sub(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("mul")
+trait Mul<Rhs = Self> {
+    type Output;
+    fn mul(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("div")
+trait Div<Rhs = Self> {
+    type Output;
+    fn div(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("rem")
+trait Rem<Rhs = Self> {
+    type Output;
+    fn rem(self, rhs: Rhs) -> Self::Output;
+}
+
+// Unary.
+@lang("neg")
+trait Neg {
+    type Output;
+    fn neg(self) -> Self::Output;
+}
+
+@lang("not")
+trait Not {
+    type Output;
+    fn not(self) -> Self::Output;
+}
+
+// Bitwise / shifts.
+@lang("bitand")
+trait BitAnd<Rhs = Self> {
+    type Output;
+    fn bitand(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("bitor")
+trait BitOr<Rhs = Self> {
+    type Output;
+    fn bitor(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("bitxor")
+trait BitXor<Rhs = Self> {
+    type Output;
+    fn bitxor(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("shl")
+trait Shl<Rhs = Self> {
+    type Output;
+    fn shl(self, rhs: Rhs) -> Self::Output;
+}
+
+@lang("shr")
+trait Shr<Rhs = Self> {
+    type Output;
+    fn shr(self, rhs: Rhs) -> Self::Output;
+}
+
+// Equality and ordering.
+@lang("partial_eq")
+trait PartialEq<Rhs = Self> {
+    fn eq(self, other: Rhs) -> bool;
+    fn ne(self, other: Rhs) -> bool {
+        !self.eq(other)
+    }
+}
+
+@lang("eq")
+trait Eq: PartialEq<Self> {}
+
+@lang("partial_ord")
+trait PartialOrd<Rhs = Self>: PartialEq<Rhs> {
+    fn partial_cmp(self, other: Rhs) -> Option<Ordering>;
+}
+
+@lang("ord")
+trait Ord: PartialOrd<Self> + Eq {
+    fn cmp(self, other: Self) -> Ordering;
+}
+
+// Indexing and dereferencing.
+@lang("index")
+trait Index<Idx> {
+    type Output;
+    fn index(self, index: Idx) -> Self::Output;
+}
+
+@lang("index_mut")
+trait IndexMut<Idx>: Index<Idx> {
+    fn index_mut(self, index: Idx) -> Self::Output;
+}
+
+@lang("deref")
+trait Deref {
+    type Target;
+    fn deref(self) -> Self::Target;
+}
+
+// Result of a three-way comparison.
+enum Ordering {
+    Less,
+    Equal,
+    Greater,
+}
+
+impl Ordering {
+    fn is_lt(self) -> bool {
+        match self {
+            Ordering::Less => true,
+            _ => false,
+        }
+    }
+
+    fn is_eq(self) -> bool {
+        match self {
+            Ordering::Equal => true,
+            _ => false,
+        }
+    }
+
+    fn is_gt(self) -> bool {
+        match self {
+            Ordering::Greater => true,
+            _ => false,
+        }
+    }
+}

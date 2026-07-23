@@ -880,6 +880,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "yelang-mir"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "slotmap",
+ "yelang-arena",
+ "yelang-ast",
+ "yelang-hir",
+ "yelang-interner",
+ "yelang-lexer",
+ "yelang-thir",
+ "yelang-ty",
+]
+
+[[package]]
 name = "yelang-qir"
 version = "0.1.0"
 dependencies = [

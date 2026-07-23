@@ -1,8 +1,8 @@
 // Yelang user-defined aggregate protocol.
 //
 // Any type implementing `Aggregate` can be used with `Queryable::aggregate`.
-// The planner decides how to execute the aggregate in parallel based solely on
-// the value returned by `class()`.
+// The planner decides how to execute the aggregate in parallel based on
+// the algebraic properties declared by `properties()`.
 //
 // The trait uses explicit type parameters rather than associated types so that
 // accumulator and output types are visible to the query pipeline without
@@ -16,12 +16,46 @@ trait Aggregate<In, Acc, Out> {
     fn step(&self, acc: Acc, item: In) -> Acc;
     fn merge(&self, a: Acc, b: Acc) -> Acc;
     fn finish(&self, acc: Acc) -> Out;
-    fn class(&self) -> AggregateClass;
+
+    /// Algebraic properties of this aggregate.
+    ///
+    /// The compiler uses these to decide:
+    /// - Whether partial aggregation can be parallelized across shards
+    /// - Whether inputs can be reordered
+    /// - Whether the aggregate can be decomposed (e.g., AVG = SUM/COUNT)
+    /// - Whether sliding windows can use incremental updates
+    fn properties(&self) -> AggregateProperties;
 }
 
-// Aggregate classification: the only thing the planner reads from the trait.
+/// Algebraic properties declared by an aggregate implementation.
+///
+/// These enable the optimizer to make reliable decisions instead of
+/// guessing from method names or treating aggregates as opaque.
+struct AggregateProperties {
+    /// Classification: how the aggregate relates to its inputs.
+    class: AggregateClass,
+    /// merge(merge(a,b),c) == merge(a,merge(b,c))
+    /// Required for parallel partial aggregation across shards.
+    associative: bool,
+    /// merge(a,b) == merge(b,a)
+    /// Allows reordering inputs without changing the result.
+    commutative: bool,
+    /// Can undo a step: enables sliding windows via incremental update.
+    /// e.g., SUM: window_sum -= old_value; window_sum += new_value
+    invertible: bool,
+}
+
+/// Aggregate classification.
 enum AggregateClass {
+    /// Computable from partial results. Can be split across shards.
+    /// Examples: Sum, Count, Min, Max, Product.
     Distributive,
+    /// Computable from fixed-size intermediate state.
+    /// Can be decomposed into Distributive components.
+    /// Example: Avg = Sum / Count.
     Algebraic,
+    /// Requires all data. Cannot be parallelized.
+    /// Must gather to a single node before computing.
+    /// Examples: Median, Percentile, Mode.
     Holistic,
 }

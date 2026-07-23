@@ -1,24 +1,34 @@
-//! Primitive types and operations for Yelang.
-//!
-//! Mirrors Rust's core primitive types: integers, floats, bool, char, unit.
+// Yelang primitive types and operations.
+//
+// Mirrors Rust's core primitive types: integers, floats, bool, char, unit.
+// `Primitive` is a marker trait recognized by the compiler via `@lang("primitive")`.
+// It replaces the former Rust-host `primitives.rs` so the whole primitive surface
+// lives in Yelang.
 
-/// Marker trait for all primitive types.
-pub trait Primitive {}
+@lang("primitive")
+trait Primitive {}
 
+// Signed integers.
 impl Primitive for i8 {}
 impl Primitive for i16 {}
 impl Primitive for i32 {}
 impl Primitive for i64 {}
 impl Primitive for i128 {}
 impl Primitive for isize {}
+
+// Unsigned integers.
 impl Primitive for u8 {}
 impl Primitive for u16 {}
 impl Primitive for u32 {}
 impl Primitive for u64 {}
 impl Primitive for u128 {}
 impl Primitive for usize {}
+
+// Floating point.
 impl Primitive for f32 {}
 impl Primitive for f64 {}
+
+// Other primitives.
 impl Primitive for bool {}
 impl Primitive for char {}
 impl Primitive for () {}

@@ -11,6 +11,7 @@ use yelang_interner::Symbol;
 
 use crate::expr::ThirExpr;
 use crate::ids::{ThirBodyId, ThirExprId, ThirPatId};
+use crate::pat::ThirPat;
 
 #[derive(Debug, Clone)]
 pub struct ThirBody {
@@ -49,8 +50,15 @@ pub struct ThirBodies {
     /// All THIR expressions produced during lowering.
     /// The QIR analysis walks these directly — no HIR dependency.
     pub exprs: SlotMap<ThirExprId, ThirExpr>,
+    /// All THIR patterns produced during lowering.
+    /// The QIR lowering reads binder patterns (e.g. `from`/`links` binders)
+    /// directly from here — no HIR dependency.
+    pub pats: SlotMap<ThirPatId, ThirPat>,
     /// Lowered query sub-expressions, keyed by HIR QueryId.
     pub query_lowerings: FxHashMap<QueryId, QueryLowering>,
+    /// THIR query structures, keyed by HIR QueryId.
+    /// The QIR lowering reads these directly — no HIR dependency.
+    pub thir_queries: FxHashMap<QueryId, crate::query::ThirSelectQuery>,
     /// HIR ExprId → THIR ThirExprId.
     pub expr_mapping: FxHashMap<ExprId, ThirExprId>,
 }
@@ -63,5 +71,10 @@ impl ThirBodies {
     /// Look up the lowered sub-expressions for a query.
     pub fn query_lowering(&self, query_id: QueryId) -> Option<&QueryLowering> {
         self.query_lowerings.get(&query_id)
+    }
+
+    /// Look up a THIR pattern by its [`ThirPatId`].
+    pub fn pat(&self, id: ThirPatId) -> Option<&ThirPat> {
+        self.pats.get(id)
     }
 }

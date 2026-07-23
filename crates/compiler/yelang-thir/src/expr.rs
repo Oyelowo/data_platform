@@ -3,7 +3,6 @@
 use yelang_arena::DefId;
 use yelang_ast::{AssignOpKind, BinaryOp, Label, Mutability, UnaryOp};
 use yelang_hir::hir::core::Lit;
-use yelang_hir::ids::QueryId;
 use yelang_hir::res::Res;
 use yelang_interner::Symbol;
 
@@ -95,8 +94,9 @@ pub enum ThirExpr {
     Deref { expr: ThirExprId },
     /// `expr is Type` type test.
     IsType { expr: ThirExprId, ty: ThirTyId },
-    /// Query syntax (`select ... from ...`), referencing the HIR query side table.
-    Query(QueryId),
+    /// Query syntax (`select ... from ...`) with all sub-expressions
+    /// lowered to THIR. The QIR lowering reads this directly.
+    Query(Box<crate::query::ThirSelectQuery>),
     /// Compiler-known intrinsic call: `@name(args)`.
     Intrinsic { name: Symbol, args: Vec<ThirExprId> },
     /// Error recovery.

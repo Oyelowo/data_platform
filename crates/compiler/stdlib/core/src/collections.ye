@@ -1,0 +1,19 @@
+// Yelang built-in collection types.
+//
+// These types are managed by the compiler/runtime: their layout and operations
+// are provided intrinsically, so they are declared here as empty structs. `Array`
+// is the lang-item array type (`@lang("array")`) and backs the transitional
+// `Queryable` impl in `query.ye`; `Vec` is the growable array returned by
+// `Queryable::execute`.
+
+@lang("array")
+struct Array<T> {}
+
+// Growable, heap-allocated array.
+struct Vec<T> {}
+
+// Owned, growable UTF-8 string.
+struct String {}
+
+// Hash map from keys to values.
+struct HashMap<K, V> {}

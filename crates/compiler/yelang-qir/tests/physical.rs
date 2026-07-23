@@ -41,7 +41,7 @@ fn plan_optimize_and_physical(
         if slot.is_none() {
             continue;
         }
-        if let Some(root) = lower_query(qid, &hir, &interner, &hir.lang_items, &mut plan_arena) {
+        if let Some(root) = lower_query(qid, &hir, None, &interner, &hir.lang_items, &mut plan_arena) {
             let optimized = optimizer.optimize(root, &mut plan_arena);
             let phys_root = yelang_qir::physical::planner::plan_physical(
                 optimized,

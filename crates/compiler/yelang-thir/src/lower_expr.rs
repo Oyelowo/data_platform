@@ -229,10 +229,10 @@ impl<'a> LoweringContext<'a> {
             },
 
             yelang_hir::hir::expr::Expr::Query(query_id) => {
-                // Lower the query's sub-expressions and store them in the
-                // query_lowerings side table for the plan extraction to use.
-                self.lower_query_subexprs(*query_id)?;
-                ThirExpr::Query(*query_id)
+                let thir_query = self.lower_select_query(*query_id)?;
+                // Store for QIR lowering to read directly (no HIR dependency).
+                self.bodies.thir_queries.insert(*query_id, thir_query.clone());
+                ThirExpr::Query(Box::new(thir_query))
             }
 
             yelang_hir::hir::expr::Expr::Intrinsic { name, args } => ThirExpr::Intrinsic {
@@ -310,17 +310,24 @@ impl<'a> LoweringContext<'a> {
     ///
     /// This makes the typed THIR expressions available to the plan
     /// extraction pass, so the plan tree can reference THIR expr IDs
-    /// instead of HIR expr IDs.
-    fn lower_query_subexprs(&mut self, query_id: yelang_hir::ids::QueryId) -> Result<(), LoweringError> {
-        use crate::body::QueryLowering;
+    /// Lower a HIR `SelectQuery` into a THIR `ThirSelectQuery`.
+    ///
+    /// All sub-expressions (projection, where, order by, group by, from
+    /// sources, links) are lowered to THIR expression IDs. The QIR
+    /// lowering reads the `ThirSelectQuery` directly — no HIR dependency.
+    fn lower_select_query(
+        &mut self,
+        query_id: yelang_hir::ids::QueryId,
+    ) -> Result<crate::query::ThirSelectQuery, LoweringError> {
+        use crate::query::*;
         use yelang_hir::hir::query::QueryKind;
 
         let Some(query) = self.hir.query(query_id) else {
-            return Ok(());
+            return Err(LoweringError::Unsupported { message: "query not found".into(), span: yelang_lexer::Span::default() });
         };
 
         let QueryKind::Select(select) = &query.kind else {
-            return Ok(()); // Mutations not yet lowered.
+            return Err(LoweringError::Unsupported { message: "non-select query not yet supported".into(), span: yelang_lexer::Span::default() });
         };
 
         // Lower the projection.
@@ -329,19 +336,28 @@ impl<'a> LoweringContext<'a> {
         // Lower the pipeline where clause.
         let where_clause = self.lower_opt_expr(select.where_clause)?;
 
-        // Lower order by expressions.
-        let order_by: Vec<_> = select
+        // Lower order by.
+        let order_by: Vec<ThirOrderByPart> = select
             .order_by
             .iter()
-            .map(|part| self.lower_expr(part.expr))
-            .collect::<Result<_, _>>()?;
+            .map(|part| {
+                Ok(ThirOrderByPart {
+                    expr: self.lower_expr(part.expr)?,
+                    desc: matches!(
+                        part.direction,
+                        yelang_ast::query::SortDirection::Desc
+                    ),
+                })
+            })
+            .collect::<Result<_, LoweringError>>()?;
 
-        // Lower group by keys.
-        let group_by_keys: Vec<_> = select
+        // Lower group by.
+        let group_by: Option<ThirGroupBy> = select
             .group_by
             .as_ref()
             .map(|gb| {
-                gb.keys
+                let keys: Vec<(yelang_interner::Symbol, ThirExprId)> = gb
+                    .keys
                     .iter()
                     .map(|key| {
                         let name = key
@@ -350,51 +366,136 @@ impl<'a> LoweringContext<'a> {
                             .unwrap_or_else(|| yelang_interner::Symbol::from(1u32));
                         self.lower_expr(key.expr).map(|expr| (name, expr))
                     })
-                    .collect::<Result<Vec<_>, _>>()
+                    .collect::<Result<_, _>>()?;
+                Ok(ThirGroupBy {
+                    keys,
+                    into: gb.into.symbol,
+                })
             })
-            .transpose()?
-            .unwrap_or_default();
+            .transpose()?;
 
-        // Lower from source expressions.
-        let from_sources: Vec<_> = select
+        // Lower from nodes.
+        let from: Vec<ThirFromNode> = select
             .from
             .iter()
-            .map(|node| self.lower_expr(node.source))
-            .collect::<Result<_, _>>()?;
+            .map(|node| {
+                let source = self.lower_expr(node.source)?;
+                let filter = self.lower_opt_expr(node.filter)?;
+                let order_by: Vec<ThirOrderByPart> = node
+                    .order_by
+                    .iter()
+                    .map(|part| {
+                        Ok(ThirOrderByPart {
+                            expr: self.lower_expr(part.expr)?,
+                            desc: matches!(
+                                part.direction,
+                                yelang_ast::query::SortDirection::Desc
+                            ),
+                        })
+                    })
+                    .collect::<Result<_, LoweringError>>()?;
+                let range = node
+                    .range
+                    .as_ref()
+                    .map(|r| {
+                        Ok(ThirRange {
+                            start: r.start.map(|e| self.lower_expr(e)).transpose()?,
+                            end: r.end.map(|e| self.lower_expr(e)).transpose()?,
+                            inclusive: r.inclusive,
+                        })
+                    })
+                    .transpose()?;
+                // Lower the binder pattern.
+                let binder = self.lower_pat(node.binder);
+                Ok(ThirFromNode {
+                    source,
+                    label: node.label,
+                    binder,
+                    elem_ty: None, // TODO: lower type annotation
+                    filter,
+                    order_by,
+                    range,
+                })
+            })
+            .collect::<Result<_, LoweringError>>()?;
 
-        // Lower per-root filters.
-        let from_filters: Vec<_> = select
-            .from
+        // Lower links paths.
+        let links: Vec<ThirLinkPath> = select
+            .links
             .iter()
-            .map(|node| self.lower_opt_expr(node.filter))
-            .collect::<Result<_, _>>()?;
+            .map(|path| {
+                let anchor = ThirLinkNode {
+                    label: path.start.var.symbol,
+                    binder: self.lower_pat(path.start.binder),
+                    ty: None,
+                    filter: self.lower_opt_expr(path.start.modifiers.filter)?,
+                };
+                let segments: Vec<ThirLinkSegment> = path
+                    .segments
+                    .iter()
+                    .map(|seg| {
+                        let direction = match seg.direction {
+                            yelang_ast::query::EdgeDirection::Forward => ThirDirection::Forward,
+                            yelang_ast::query::EdgeDirection::Backward => ThirDirection::Backward,
+                            yelang_ast::query::EdgeDirection::Bidirectional => ThirDirection::Both,
+                        };
+                        let edge = ThirLinkNode {
+                            label: seg.edge.var.symbol,
+                            binder: self.lower_pat(seg.edge.binder),
+                            ty: None,
+                            filter: self.lower_opt_expr(seg.edge.modifiers.filter)?,
+                        };
+                        let target = ThirLinkNode {
+                            label: seg.target.var.symbol,
+                            binder: self.lower_pat(seg.target.binder),
+                            ty: None,
+                            filter: self.lower_opt_expr(seg.target.modifiers.filter)?,
+                        };
+                        let hop_range = seg
+                            .edge
+                            .hops
+                            .as_ref()
+                            .map(|h| {
+                                Ok(ThirRange {
+                                    start: h.start.map(|e| self.lower_expr(e)).transpose()?,
+                                    end: h.end.map(|e| self.lower_expr(e)).transpose()?,
+                                    inclusive: h.inclusive,
+                                })
+                            })
+                            .transpose()?;
+                        Ok(ThirLinkSegment {
+                            direction,
+                            edge,
+                            target,
+                            hop_range,
+                        })
+                    })
+                    .collect::<Result<_, LoweringError>>()?;
+                Ok(ThirLinkPath { anchor, segments })
+            })
+            .collect::<Result<_, LoweringError>>()?;
 
-        // Lower range expressions.
-        let (range_start, range_end) = select
+        // Lower range.
+        let range = select
             .range
             .as_ref()
             .map(|r| {
-                let start = r.start.map(|e| self.lower_expr(e)).transpose()?;
-                let end = r.end.map(|e| self.lower_expr(e)).transpose()?;
-                Ok::<_, LoweringError>((start, end))
+                Ok(ThirRange {
+                    start: r.start.map(|e| self.lower_expr(e)).transpose()?,
+                    end: r.end.map(|e| self.lower_expr(e)).transpose()?,
+                    inclusive: r.inclusive,
+                })
             })
-            .transpose()?
-            .unwrap_or((None, None));
+            .transpose()?;
 
-        self.bodies.query_lowerings.insert(
-            query_id,
-            QueryLowering {
-                projection,
-                where_clause,
-                order_by,
-                group_by_keys,
-                from_sources,
-                from_filters,
-                range_start,
-                range_end,
-            },
-        );
-
-        Ok(())
+        Ok(ThirSelectQuery {
+            projection,
+            from,
+            links,
+            where_clause,
+            group_by,
+            order_by,
+            range,
+        })
     }
 }

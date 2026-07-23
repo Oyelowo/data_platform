@@ -1,0 +1,121 @@
+// Yelang `Result<T, E>` — success or failure.
+//
+// Recognized by the compiler via `@lang("result")`, with variants tagged
+// `@lang("result_ok")` and `@lang("result_err")`. Used by the formatting traits
+// (`fmt.ye`) and the fallible conversion traits (`convert.ye`).
+//
+// As with `Option`, combinators take `self` by value (Yelang has no borrow
+// checker).
+
+@lang("result")
+enum Result<T, E> {
+    @lang("result_ok")
+    Ok(T),
+    @lang("result_err")
+    Err(E),
+}
+
+impl<T, E> Result<T, E> {
+    // Predicates.
+    fn is_ok(self) -> bool {
+        match self {
+            Result::Ok(_) => true,
+            Result::Err(_) => false,
+        }
+    }
+
+    fn is_err(self) -> bool {
+        match self {
+            Result::Ok(_) => false,
+            Result::Err(_) => true,
+        }
+    }
+
+    // Extraction.
+    fn unwrap(self) -> T {
+        match self {
+            Result::Ok(x) => x,
+            // TODO: lower to `panic!("called Result::unwrap() on an Err value")`.
+            Result::Err(_) => loop {},
+        }
+    }
+
+    fn unwrap_err(self) -> E {
+        match self {
+            // TODO: lower to `panic!("called Result::unwrap_err() on an Ok value")`.
+            Result::Ok(_) => loop {},
+            Result::Err(e) => e,
+        }
+    }
+
+    fn unwrap_or(self, default: T) -> T {
+        match self {
+            Result::Ok(x) => x,
+            Result::Err(_) => default,
+        }
+    }
+
+    fn unwrap_or_else(self, f: fn(E) -> T) -> T {
+        match self {
+            Result::Ok(x) => x,
+            Result::Err(e) => f(e),
+        }
+    }
+
+    // Combinators.
+    fn map<U>(self, f: fn(T) -> U) -> Result<U, E> {
+        match self {
+            Result::Ok(x) => Result::Ok(f(x)),
+            Result::Err(e) => Result::Err(e),
+        }
+    }
+
+    fn map_err<F>(self, f: fn(E) -> F) -> Result<T, F> {
+        match self {
+            Result::Ok(x) => Result::Ok(x),
+            Result::Err(e) => Result::Err(f(e)),
+        }
+    }
+
+    fn and_then<U>(self, f: fn(T) -> Result<U, E>) -> Result<U, E> {
+        match self {
+            Result::Ok(x) => f(x),
+            Result::Err(e) => Result::Err(e),
+        }
+    }
+
+    fn or_else<F>(self, f: fn(E) -> Result<T, F>) -> Result<T, F> {
+        match self {
+            Result::Ok(x) => Result::Ok(x),
+            Result::Err(e) => f(e),
+        }
+    }
+
+    // Conversions to `Option`.
+    fn ok(self) -> Option<T> {
+        match self {
+            Result::Ok(x) => Option::Some(x),
+            Result::Err(_) => Option::None,
+        }
+    }
+
+    fn err(self) -> Option<E> {
+        match self {
+            Result::Ok(_) => Option::None,
+            Result::Err(e) => Option::Some(e),
+        }
+    }
+}
+
+// `Option<Result<T, E>>` can be flipped into `Result<Option<T>, E>`.
+impl<T, E> Option<Result<T, E>> {
+    fn transpose(self) -> Result<Option<T>, E> {
+        match self {
+            Option::Some(inner) => match inner {
+                Result::Ok(x) => Result::Ok(Option::Some(x)),
+                Result::Err(e) => Result::Err(e),
+            },
+            Option::None => Result::Ok(Option::None),
+        }
+    }
+}

@@ -23,7 +23,7 @@ impl Aggregate<i32, SumAcc<i32>, i32> for Sum {
         SumAcc { value: a.value + b.value }
     }
     fn finish(&self, acc: SumAcc<i32>) -> i32 { acc.value }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 impl Aggregate<i64, SumAcc<i64>, i64> for Sum {
@@ -35,7 +35,7 @@ impl Aggregate<i64, SumAcc<i64>, i64> for Sum {
         SumAcc { value: a.value + b.value }
     }
     fn finish(&self, acc: SumAcc<i64>) -> i64 { acc.value }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 impl Aggregate<f64, SumAcc<f64>, f64> for Sum {
@@ -47,7 +47,7 @@ impl Aggregate<f64, SumAcc<f64>, f64> for Sum {
         SumAcc { value: a.value + b.value }
     }
     fn finish(&self, acc: SumAcc<f64>) -> f64 { acc.value }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 struct Product;
@@ -63,7 +63,7 @@ impl Aggregate<i32, ProductAcc<i32>, i32> for Product {
         ProductAcc { value: a.value * b.value }
     }
     fn finish(&self, acc: ProductAcc<i32>) -> i32 { acc.value }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 impl Aggregate<i64, ProductAcc<i64>, i64> for Product {
@@ -75,7 +75,7 @@ impl Aggregate<i64, ProductAcc<i64>, i64> for Product {
         ProductAcc { value: a.value * b.value }
     }
     fn finish(&self, acc: ProductAcc<i64>) -> i64 { acc.value }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 impl Aggregate<f64, ProductAcc<f64>, f64> for Product {
@@ -87,7 +87,7 @@ impl Aggregate<f64, ProductAcc<f64>, f64> for Product {
         ProductAcc { value: a.value * b.value }
     }
     fn finish(&self, acc: ProductAcc<f64>) -> f64 { acc.value }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 struct Count;
@@ -103,7 +103,7 @@ impl<T> Aggregate<T, CountAcc, usize> for Count {
         CountAcc { count: a.count + b.count }
     }
     fn finish(&self, acc: CountAcc) -> usize { acc.count }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 struct Avg;
@@ -121,7 +121,7 @@ impl Aggregate<i32, AvgAcc<i32>, f64> for Avg {
     fn finish(&self, acc: AvgAcc<i32>) -> f64 {
         acc.sum as f64 / acc.count as f64
     }
-    fn class(&self) -> AggregateClass { AggregateClass::Algebraic }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Algebraic, associative: true, commutative: true, invertible: false } }
 }
 
 impl Aggregate<i64, AvgAcc<i64>, f64> for Avg {
@@ -135,7 +135,7 @@ impl Aggregate<i64, AvgAcc<i64>, f64> for Avg {
     fn finish(&self, acc: AvgAcc<i64>) -> f64 {
         acc.sum as f64 / acc.count as f64
     }
-    fn class(&self) -> AggregateClass { AggregateClass::Algebraic }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Algebraic, associative: true, commutative: true, invertible: false } }
 }
 
 impl Aggregate<f64, AvgAcc<f64>, f64> for Avg {
@@ -149,7 +149,7 @@ impl Aggregate<f64, AvgAcc<f64>, f64> for Avg {
     fn finish(&self, acc: AvgAcc<f64>) -> f64 {
         acc.sum / acc.count as f64
     }
-    fn class(&self) -> AggregateClass { AggregateClass::Algebraic }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Algebraic, associative: true, commutative: true, invertible: false } }
 }
 
 struct Min;
@@ -171,7 +171,7 @@ impl<T: Ord> Aggregate<T, Option<T>, Option<T>> for Min {
         }
     }
     fn finish(&self, acc: Option<T>) -> Option<T> { acc }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }
 
 // Maximum over any ordered type: distributive.
@@ -190,5 +190,5 @@ impl<T: Ord> Aggregate<T, Option<T>, Option<T>> for Max {
         }
     }
     fn finish(&self, acc: Option<T>) -> Option<T> { acc }
-    fn class(&self) -> AggregateClass { AggregateClass::Distributive }
+    fn properties(&self) -> AggregateProperties { AggregateProperties { class: AggregateClass::Distributive, associative: true, commutative: true, invertible: true } }
 }

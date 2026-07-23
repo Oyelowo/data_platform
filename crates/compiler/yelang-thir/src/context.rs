@@ -122,6 +122,7 @@ impl<'a> LoweringContext<'a> {
     /// `query_lowerings` side tables.
     pub fn finish(mut self) -> ThirBodies {
         self.bodies.exprs = self.exprs;
+        self.bodies.pats = self.pats;
         self.bodies.expr_mapping = self.expr_mapping;
         self.bodies
     }

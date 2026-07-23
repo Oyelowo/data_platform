@@ -20,7 +20,7 @@ mod op;
 mod source;
 mod user;
 
-pub use agg::{AggCall, AggKind};
+pub use agg::{AggCall, AggClass, AggKind, AggProperties};
 pub use arena::{Partitioning, PlanArena, PlanId, PlanMeta, PlanOrigin, TagPlan};
 pub use join::{DepJoinKind, JoinKind};
 pub use keys::{

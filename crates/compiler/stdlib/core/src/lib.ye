@@ -1,12 +1,46 @@
 // Yelang core standard library.
 //
 // This module is loaded as a prelude into every crate. It defines the lang-item
-// traits that the compiler recognizes, plus the built-in aggregate markers.
+// traits that the compiler recognizes, the core enums (`Option`, `Result`), the
+// operator and conversion traits, the built-in collection types, and the
+// built-in aggregate markers.
 
+// Foundational lang-item traits and types.
+pub mod primitives;
+pub mod clone;
+pub mod ops;
+pub mod option;
+pub mod result;
+pub mod fmt;
+pub mod convert;
+pub mod collections;
+
+// Iteration and lazy query pipeline.
 pub mod iter;
 pub mod query;
 pub mod aggregate;
 pub mod aggregate_impls;
+
+// Re-export the primitive marker trait.
+pub use primitives::Primitive;
+
+// Core enums and ordering.
+pub use option::{Option, OptionIter};
+pub use result::Result;
+pub use ops::{
+    Add, Sub, Mul, Div, Rem, Neg, Not,
+    BitAnd, BitOr, BitXor, Shl, Shr,
+    PartialEq, Eq, PartialOrd, Ord,
+    Index, IndexMut, Deref, Ordering,
+};
+
+// Value semantics and conversions.
+pub use clone::{Clone, Copy, Default};
+pub use fmt::{Debug, Display, Formatter, Error};
+pub use convert::{From, Into, TryFrom, TryInto};
+
+// Built-in collections.
+pub use collections::{Array, Vec, String, HashMap};
 
 // Re-export the query and aggregate traits so user code can say `Queryable[T]`
 // without importing.
