@@ -26,7 +26,7 @@ pub mod optimize;
 pub mod plan;
 pub mod tree;
 
-pub use extract::extract_query;
+pub use extract::{extract_expr_as_plan, extract_query};
 pub use optimize::{OptRule, Optimizer};
 pub use plan::{
     AggCall, AggKind, DepJoinKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec,

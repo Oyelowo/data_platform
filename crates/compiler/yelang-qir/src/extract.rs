@@ -21,17 +21,18 @@
 //! ```
 
 use yelang_ast::query::{EdgeDirection, SortDirection};
+use yelang_hir::hir::expr::{ComprehensionKind, ComprehensionVar, Expr};
 use yelang_hir::hir::query::{
     FromNode, GroupByClause, OrderByPart, QueryKind, SelectLinkPath,
     SelectLinkSegment, SelectQuery,
 };
-use yelang_hir::ids::{PatId, QueryId};
+use yelang_hir::ids::{ExprId, PatId, QueryId};
 use yelang_hir::Crate;
 use yelang_interner::{Interner, Symbol};
 
 use crate::plan::{
-    Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec, Plan, PlanArena, PlanId,
-    PlanOrigin, PlanRange, SourceRef, TraversePath, TraverseSegment,
+    AggCall, AggKind, Direction, EdgeRef, ExprRef, JoinKind, NodeRef, OrderSpec, Plan, PlanArena,
+    PlanId, PlanOrigin, PlanRange, SourceRef, TraversePath, TraverseSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -369,4 +370,544 @@ fn binder_symbol(pat_id: PatId, hir: &Crate) -> Symbol {
     // the identifier symbol. For now, return a placeholder.
     let _ = (pat_id, hir);
     Symbol::from(1u32)
+}
+
+// ===========================================================================
+// Method chain / expression extraction
+// ===========================================================================
+
+/// Try to interpret an HIR expression as a collection-producing plan.
+///
+/// This is the second entry point into the plan tree (alongside
+/// [`extract_query`]). It handles:
+/// - `Queryable` method chains: `.filter()`, `.map()`, `.join()`, …
+/// - Comprehensions (desugared selectors): `[*]`, `[where …]`, `[**]`
+/// - `@intrinsic(query_*)` calls
+/// - Table/path references → `Scan`
+/// - Nested `select` queries → recursive [`extract_query`]
+///
+/// Returns `None` if the expression cannot be interpreted as a collection
+/// plan (e.g. a scalar literal, a non-Queryable function call).
+pub fn extract_expr_as_plan(
+    expr_id: ExprId,
+    hir: &Crate,
+    interner: &Interner,
+    arena: &mut PlanArena,
+) -> Option<PlanId> {
+    let expr = hir.expr(expr_id)?;
+    let origin = PlanOrigin::MethodCall(expr_id);
+
+    match expr {
+        // ── Queryable method call ──────────────────────────────────────
+        Expr::MethodCall {
+            receiver,
+            method,
+            args,
+            trait_def_id: _,
+        } => extract_method_call(expr_id, *receiver, method.symbol, args, hir, interner, arena),
+
+        // ── Comprehension (desugared selector) ─────────────────────────
+        Expr::Comprehension {
+            kind: ComprehensionKind::List,
+            element,
+            variables,
+            condition,
+        } => extract_comprehension(*element, variables, *condition, hir, interner, arena),
+
+        // ── Intrinsic call ─────────────────────────────────────────────
+        Expr::Intrinsic { name, args } => {
+            extract_intrinsic(name.symbol, args, hir, interner, arena)
+        }
+
+        // ── Nested select query ────────────────────────────────────────
+        Expr::Query(query_id) => extract_query(*query_id, hir, interner, arena),
+
+        // ── Path reference (table or local variable) ───────────────────
+        Expr::Path { res: _ } => {
+            // A path to a table or collection variable → Scan.
+            // TODO: resolve the DefId to determine if it's a @table struct.
+            let name = Symbol::from(1u32); // placeholder
+            Some(alloc(
+                arena,
+                Plan::Scan {
+                    source: SourceRef::Local { name },
+                    filter: None,
+                    projection: None,
+                    range: None,
+                },
+                origin,
+            ))
+        }
+
+        // ── Anything else: not a collection plan ───────────────────────
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Method call → Plan node
+// ---------------------------------------------------------------------------
+
+fn extract_method_call(
+    call_expr: ExprId,
+    receiver: ExprId,
+    method: Symbol,
+    args: &[ExprId],
+    hir: &Crate,
+    interner: &Interner,
+    arena: &mut PlanArena,
+) -> Option<PlanId> {
+    let origin = PlanOrigin::MethodCall(call_expr);
+    let method_name = method.as_str(interner);
+
+    // Extract the receiver as a plan (the collection being operated on).
+    let input = extract_expr_as_plan(receiver, hir, interner, arena)?;
+
+    match method_name {
+        // ── Filter ─────────────────────────────────────────────────────
+        "filter" => {
+            // .filter(|x| pred) — args[0] is the closure
+            let pred = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Filter { input, pred },
+                origin,
+            ))
+        }
+
+        // ── Map ────────────────────────────────────────────────────────
+        "map" => {
+            // .map(|x| expr) — args[0] is the closure
+            let func = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Map {
+                    input,
+                    func,
+                    flatten_depth: 0,
+                },
+                origin,
+            ))
+        }
+
+        // ── FlatMap ────────────────────────────────────────────────────
+        "flat_map" => {
+            let func = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Map {
+                    input,
+                    func,
+                    flatten_depth: 1,
+                },
+                origin,
+            ))
+        }
+
+        // ── Joins ──────────────────────────────────────────────────────
+        "join" | "inner_join" => {
+            let right_expr = args.first().copied()?;
+            let on_expr = args.get(1).copied()?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Join {
+                    left: input,
+                    right,
+                    kind: JoinKind::Inner,
+                    on: vec![], // TODO: decompose the closure into equi-join keys
+                    filter: Some(on_expr),
+                },
+                origin,
+            ))
+        }
+
+        "left_join" => {
+            let right_expr = args.first().copied()?;
+            let on_expr = args.get(1).copied()?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Join {
+                    left: input,
+                    right,
+                    kind: JoinKind::Left,
+                    on: vec![],
+                    filter: Some(on_expr),
+                },
+                origin,
+            ))
+        }
+
+        "semi_join" => {
+            let right_expr = args.first().copied()?;
+            let on_expr = args.get(1).copied()?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Join {
+                    left: input,
+                    right,
+                    kind: JoinKind::Semi,
+                    on: vec![],
+                    filter: Some(on_expr),
+                },
+                origin,
+            ))
+        }
+
+        "anti_join" => {
+            let right_expr = args.first().copied()?;
+            let on_expr = args.get(1).copied()?;
+            let right = extract_expr_as_plan(right_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Join {
+                    left: input,
+                    right,
+                    kind: JoinKind::Anti,
+                    on: vec![],
+                    filter: Some(on_expr),
+                },
+                origin,
+            ))
+        }
+
+        // ── Group by ───────────────────────────────────────────────────
+        "group_by" => {
+            // .group_by(|x| key_expr) — args[0] is the key closure
+            let key_expr = args.first().copied()?;
+            let key_name = interner.intern("_key");
+            let into = interner.intern("_groups");
+            Some(alloc(
+                arena,
+                Plan::Aggregate {
+                    input,
+                    keys: vec![(key_name, key_expr)],
+                    aggs: vec![],
+                    into,
+                },
+                origin,
+            ))
+        }
+
+        // ── Order by ───────────────────────────────────────────────────
+        "order_by" | "sort_by" => {
+            let key_expr = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Sort {
+                    input,
+                    specs: vec![OrderSpec {
+                        expr: key_expr,
+                        desc: false,
+                    }],
+                },
+                origin,
+            ))
+        }
+
+        "order_by_desc" | "sort_by_desc" => {
+            let key_expr = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Sort {
+                    input,
+                    specs: vec![OrderSpec {
+                        expr: key_expr,
+                        desc: true,
+                    }],
+                },
+                origin,
+            ))
+        }
+
+        // ── Distinct ───────────────────────────────────────────────────
+        "distinct" | "unique" => Some(alloc(
+            arena,
+            Plan::Distinct {
+                input,
+                on: None,
+            },
+            origin,
+        )),
+
+        "distinct_by" | "unique_by" => {
+            let key_expr = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Distinct {
+                    input,
+                    on: Some(vec![key_expr]),
+                },
+                origin,
+            ))
+        }
+
+        // ── Limit / Skip / Take ────────────────────────────────────────
+        "take" => {
+            let n = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Limit {
+                    input,
+                    skip: None,
+                    fetch: Some(n),
+                },
+                origin,
+            ))
+        }
+
+        "skip" => {
+            let n = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Limit {
+                    input,
+                    skip: Some(n),
+                    fetch: None,
+                },
+                origin,
+            ))
+        }
+
+        // ── Aggregates (scalar) ────────────────────────────────────────
+        "sum" => Some(scalar_agg(input, AggKind::Sum { expr: call_expr }, interner, arena, origin)),
+        "count" => Some(scalar_agg(input, AggKind::Count, interner, arena, origin)),
+        "avg" => Some(scalar_agg(input, AggKind::Avg { expr: call_expr }, interner, arena, origin)),
+        "min" => Some(scalar_agg(input, AggKind::Min { expr: call_expr }, interner, arena, origin)),
+        "max" => Some(scalar_agg(input, AggKind::Max { expr: call_expr }, interner, arena, origin)),
+
+        // ── Aggregate with marker ──────────────────────────────────────
+        "aggregate" => {
+            // .aggregate(Marker) — args[0] is the aggregate marker/impl
+            let marker = args.first().copied()?;
+            let output = interner.intern("_agg");
+            Some(alloc(
+                arena,
+                Plan::Aggregate {
+                    input,
+                    keys: vec![],
+                    aggs: vec![AggCall {
+                        output,
+                        kind: AggKind::UserAggregate {
+                            // TODO: resolve the DefId of the Aggregate impl
+                            impl_def: yelang_arena::DefId::new(1),
+                            args: vec![marker],
+                            input_expr: None,
+                        },
+                    }],
+                    into: interner.intern("_groups"),
+                },
+                origin,
+            ))
+        }
+
+        // ── Union ──────────────────────────────────────────────────────
+        "union" | "union_all" => {
+            let other_expr = args.first().copied()?;
+            let other = extract_expr_as_plan(other_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Union {
+                    inputs: vec![input, other],
+                },
+                origin,
+            ))
+        }
+
+        // ── Unknown method: opaque barrier ─────────────────────────────
+        _ => Some(alloc(
+            arena,
+            Plan::Extension {
+                node: std::sync::Arc::new(OpaqueMethod {
+                    name: method_name.to_string(),
+                    input,
+                    call: call_expr,
+                }),
+            },
+            origin,
+        )),
+    }
+}
+
+/// Build a scalar aggregate (no grouping keys, single aggregate call).
+fn scalar_agg(
+    input: PlanId,
+    kind: AggKind,
+    interner: &Interner,
+    arena: &mut PlanArena,
+    origin: PlanOrigin,
+) -> PlanId {
+    let output = interner.intern("_result");
+    alloc(
+        arena,
+        Plan::Aggregate {
+            input,
+            keys: vec![],
+            aggs: vec![AggCall { output, kind }],
+            into: interner.intern("_groups"),
+        },
+        origin,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Comprehension → Plan
+// ---------------------------------------------------------------------------
+
+fn extract_comprehension(
+    element: ExprId,
+    variables: &[ComprehensionVar],
+    condition: Option<ExprId>,
+    hir: &Crate,
+    interner: &Interner,
+    arena: &mut PlanArena,
+) -> Option<PlanId> {
+    // A comprehension like `users@u[where u.age > 18][*].name` desugars to:
+    //   Comprehension {
+    //     element: <projection expr>,
+    //     variables: [ComprehensionVar { source: users, flatten: 0, .. }],
+    //     condition: Some(u.age > 18),
+    //   }
+    //
+    // We build: Scan → Filter (if condition) → Map (element, flatten_depth).
+
+    let var = variables.first()?;
+    let origin = PlanOrigin::MethodCall(element);
+
+    // Extract the source collection.
+    let mut current = extract_expr_as_plan(var.source, hir, interner, arena)?;
+
+    // Apply the filter condition if present.
+    if let Some(pred) = condition {
+        current = alloc(
+            arena,
+            Plan::Filter { input: current, pred },
+            origin.clone(),
+        );
+    }
+
+    // Apply the projection with flatten depth.
+    current = alloc(
+        arena,
+        Plan::Map {
+            input: current,
+            func: element,
+            flatten_depth: var.flatten,
+        },
+        origin,
+    );
+
+    Some(current)
+}
+
+// ---------------------------------------------------------------------------
+// Intrinsic → Plan
+// ---------------------------------------------------------------------------
+
+fn extract_intrinsic(
+    name: Symbol,
+    args: &[ExprId],
+    hir: &Crate,
+    interner: &Interner,
+    arena: &mut PlanArena,
+) -> Option<PlanId> {
+    let intrinsic_name = name.as_str(interner);
+    let origin = PlanOrigin::Intrinsic(args.first().copied().unwrap_or_else(|| {
+        // Fallback: use a dummy ExprId. This shouldn't happen in practice.
+        yelang_hir::ids::ExprId::default()
+    }));
+
+    match intrinsic_name {
+        // query_scan(table) → Scan
+        "query_scan" => {
+            let source_expr = args.first().copied()?;
+            Some(alloc(
+                arena,
+                Plan::Scan {
+                    source: SourceRef::Call { func: source_expr },
+                    filter: None,
+                    projection: None,
+                    range: None,
+                },
+                origin,
+            ))
+        }
+
+        // query_filter(input, pred) → Filter
+        "query_filter" => {
+            let input_expr = args.first().copied()?;
+            let pred = args.get(1).copied()?;
+            let input = extract_expr_as_plan(input_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Filter { input, pred },
+                origin,
+            ))
+        }
+
+        // query_map(input, func) → Map
+        "query_map" => {
+            let input_expr = args.first().copied()?;
+            let func = args.get(1).copied()?;
+            let input = extract_expr_as_plan(input_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Map {
+                    input,
+                    func,
+                    flatten_depth: 0,
+                },
+                origin,
+            ))
+        }
+
+        // query_flat_map(input, func) → Map with flatten
+        "query_flat_map" => {
+            let input_expr = args.first().copied()?;
+            let func = args.get(1).copied()?;
+            let input = extract_expr_as_plan(input_expr, hir, interner, arena)?;
+            Some(alloc(
+                arena,
+                Plan::Map {
+                    input,
+                    func,
+                    flatten_depth: 1,
+                },
+                origin,
+            ))
+        }
+
+        // Unrecognized intrinsic: not a collection plan.
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OpaqueMethod — UserDefinedPlanNode for unrecognized methods
+// ---------------------------------------------------------------------------
+
+/// A user-defined or unrecognized Queryable method that acts as an
+/// optimization barrier.
+#[derive(Debug)]
+struct OpaqueMethod {
+    name: String,
+    input: PlanId,
+    #[allow(dead_code)]
+    call: ExprId,
+}
+
+impl crate::plan::UserDefinedPlanNode for OpaqueMethod {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn inputs(&self) -> Vec<PlanId> {
+        vec![self.input]
+    }
+
+    fn output_fields(&self) -> Vec<Symbol> {
+        vec![]
+    }
 }
