@@ -21,3 +21,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 rstest = { workspace = true }
+yelang-resolve = { path = "../yelang-resolve" }
+yelang-tycheck = { path = "../yelang-tycheck" }
