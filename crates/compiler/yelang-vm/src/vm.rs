@@ -13,7 +13,7 @@ use crate::value::Value;
 #[derive(Debug)]
 struct CallFrame {
     /// The function being executed.
-    function_id: u64,
+    _function_id: u64,
     /// The instruction pointer to return to after the call.
     return_ip: usize,
     /// The base index into the locals array for this frame.
@@ -629,7 +629,7 @@ impl Vm {
 
         // Push the call frame.
         self.call_stack.push(CallFrame {
-            function_id: 0, // TODO: track function IDs
+            _function_id: 0, // TODO: track function IDs
             return_ip,
             local_base,
         });

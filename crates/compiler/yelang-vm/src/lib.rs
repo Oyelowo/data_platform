@@ -12,10 +12,14 @@
 //! can JIT-compile to machine code via Cranelift. The VM handles cold
 //! paths and provides the "flying start" (Umbra model).
 
+pub mod compile;
 pub mod instruction;
+pub mod query_compile;
 pub mod value;
 pub mod vm;
 
+pub use compile::compile_mir;
 pub use instruction::{CompiledFunction, CompiledProgram, Instruction};
+pub use query_compile::compile_query;
 pub use value::Value;
 pub use vm::{Vm, VmError};
