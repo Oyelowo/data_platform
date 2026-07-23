@@ -1,27 +1,12 @@
 //! Predicate pushdown — push `Filter` nodes below joins, traversals,
 //! and into scans.
-//!
-//! This is the highest-impact optimization: it reduces the number of
-//! rows processed by downstream operators.
 
-use crate::optimize::{ApplyOrder, OptRule};
+use crate::analysis::{predicate_can_evaluate_against, referenced_fields};
+use crate::optimize::{ApplyOrder, OptContext, OptRule};
 use crate::plan::{JoinKind, Plan, PlanArena, PlanId};
 use crate::tree::Transformed;
 
-// ---------------------------------------------------------------------------
-// PushDownFilter
-// ---------------------------------------------------------------------------
-
 /// Push `Filter` nodes as far down the plan tree as possible.
-///
-/// Rules:
-/// - `Filter(p, Scan)` → merge `p` into `Scan.filter`.
-/// - `Filter(p, Join(L, R))` → push `p` into `L` (conservative; full
-///   column-reference analysis is TODO).
-///
-/// For now, this implements the Scan pushdown case (the simplest and
-/// most common). Join pushdown requires column-reference analysis which
-/// will be added with the metadata pass.
 pub struct PushDownFilter;
 
 impl OptRule for PushDownFilter {
@@ -33,8 +18,7 @@ impl OptRule for PushDownFilter {
         ApplyOrder::TopDown
     }
 
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed {
-        // Clone the plan to release the immutable borrow on `arena`.
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, ctx: &OptContext) -> Transformed {
         let plan = arena.plan(id).clone();
 
         let Plan::Filter { input, pred } = &plan else {
@@ -64,8 +48,7 @@ impl OptRule for PushDownFilter {
                 Transformed::yes(new_id)
             }
 
-            // Filter → Join (cross or inner): push filter to left side.
-            // TODO: analyze column references to decide left vs right.
+            // Filter → Join: push to the correct side using column analysis.
             Plan::Join {
                 left,
                 right,
@@ -73,19 +56,42 @@ impl OptRule for PushDownFilter {
                 on,
                 filter: join_filter,
             } => {
-                let new_left = arena.alloc(Plan::Filter {
-                    input: *left,
-                    pred: *pred,
-                });
-                let new_join = Plan::Join {
-                    left: new_left,
-                    right: *right,
-                    kind: *kind,
-                    on: on.clone(),
-                    filter: *join_filter,
-                };
-                let new_id = arena.alloc(new_join);
-                Transformed::yes(new_id)
+                let pred_fields = referenced_fields(*pred, ctx.hir);
+
+                let can_push_left =
+                    predicate_can_evaluate_against(&pred_fields, *left, arena, ctx.hir);
+                let can_push_right =
+                    predicate_can_evaluate_against(&pred_fields, *right, arena, ctx.hir);
+
+                if can_push_left && !can_push_right {
+                    let new_left = arena.alloc(Plan::Filter {
+                        input: *left,
+                        pred: *pred,
+                    });
+                    let new_join = Plan::Join {
+                        left: new_left,
+                        right: *right,
+                        kind: *kind,
+                        on: on.clone(),
+                        filter: *join_filter,
+                    };
+                    Transformed::yes(arena.alloc(new_join))
+                } else if can_push_right && !can_push_left {
+                    let new_right = arena.alloc(Plan::Filter {
+                        input: *right,
+                        pred: *pred,
+                    });
+                    let new_join = Plan::Join {
+                        left: *left,
+                        right: new_right,
+                        kind: *kind,
+                        on: on.clone(),
+                        filter: *join_filter,
+                    };
+                    Transformed::yes(arena.alloc(new_join))
+                } else {
+                    Transformed::no(id)
+                }
             }
 
             _ => Transformed::no(id),

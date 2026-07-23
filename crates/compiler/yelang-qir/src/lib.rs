@@ -21,6 +21,7 @@
 //! - [`PlanMeta`] — per-node algebraic metadata (correlation, partitioning, ordering)
 //! - [`AggKind`] — three-tier aggregate recognition (known / trait-based / opaque)
 
+pub mod analysis;
 pub mod extract;
 pub mod optimize;
 pub mod plan;

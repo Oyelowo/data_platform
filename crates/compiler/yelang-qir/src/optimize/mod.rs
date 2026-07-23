@@ -8,10 +8,25 @@
 //! **once** before the fixpoint loop (see the BTW 2025 algorithm).
 
 pub mod pushdown;
+pub mod prune;
 pub mod simplify;
+
+use yelang_hir::Crate;
 
 use crate::plan::{PlanArena, PlanId};
 use crate::tree::{transform_bottom_up, transform_top_down, Transformed};
+
+// ---------------------------------------------------------------------------
+// OptContext
+// ---------------------------------------------------------------------------
+
+/// Context passed to every optimizer rule.
+///
+/// Provides access to the HIR (for expression inspection) and any other
+/// global state the rules need.
+pub struct OptContext<'a> {
+    pub hir: &'a Crate,
+}
 
 // ---------------------------------------------------------------------------
 // OptRule trait
@@ -35,11 +50,7 @@ pub trait OptRule {
     fn apply_order(&self) -> ApplyOrder;
 
     /// Attempt to rewrite the node at `id`.
-    ///
-    /// Return [`Transformed::no`] if the rule does not apply.
-    /// Return [`Transformed::yes`] with a new [`PlanId`] if the node was
-    /// replaced (the new node must be allocated in `arena`).
-    fn rewrite(&self, id: PlanId, arena: &mut PlanArena) -> Transformed;
+    fn rewrite(&self, id: PlanId, arena: &mut PlanArena, ctx: &OptContext) -> Transformed;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +81,8 @@ impl Optimizer {
     ///
     /// Decorrelation should be run **before** this (it is stateful and
     /// not a fixpoint rule).
-    pub fn optimize(&self, root: PlanId, arena: &mut PlanArena) -> PlanId {
+    pub fn optimize(&self, root: PlanId, arena: &mut PlanArena, hir: &Crate) -> PlanId {
+        let ctx = OptContext { hir };
         let mut current = root;
 
         for _pass in 0..self.max_passes {
@@ -78,14 +90,12 @@ impl Optimizer {
 
             for rule in &self.rules {
                 let result = match rule.apply_order() {
-                    ApplyOrder::TopDown => {
-                        transform_top_down(current, arena, &mut |id, arena| {
-                            rule.rewrite(id, arena)
-                        })
-                    }
+                    ApplyOrder::TopDown => transform_top_down(current, arena, &mut |id, arena| {
+                        rule.rewrite(id, arena, &ctx)
+                    }),
                     ApplyOrder::BottomUp => {
                         transform_bottom_up(current, arena, &mut |id, arena| {
-                            rule.rewrite(id, arena)
+                            rule.rewrite(id, arena, &ctx)
                         })
                     }
                 };
@@ -126,6 +136,7 @@ pub fn default_rules() -> Vec<Box<dyn OptRule>> {
         Box::new(simplify::MergeAdjacentFilters),
         // Phase 2: Pushdown
         Box::new(pushdown::PushDownFilter),
-        // Phase 3: Projection pruning (add later)
+        // Phase 3: Projection pruning
+        Box::new(prune::PruneUnusedFields),
     ]
 }
