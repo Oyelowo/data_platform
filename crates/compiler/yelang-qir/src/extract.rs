@@ -20,6 +20,10 @@
 //!               → Project / Map (projection)
 //! ```
 
+pub mod method_kind;
+pub mod resolve;
+
+use self::method_kind::QueryableMethod;
 use yelang_ast::query::{EdgeDirection, SortDirection};
 use yelang_hir::hir::expr::{ComprehensionKind, ComprehensionVar, Expr};
 use yelang_hir::hir::query::{
@@ -456,13 +460,13 @@ fn collect_aggregate_calls(
             let name = method.symbol.as_str(interner);
             let output = interner.intern(&format!("_{}", name));
 
-            let kind = match name {
-                "sum" => Some(AggKind::Sum { expr: arena.to_thir(expr) }),
-                "count" => Some(AggKind::Count),
-                "avg" => Some(AggKind::Avg { expr: arena.to_thir(expr) }),
-                "min" => Some(AggKind::Min { expr: arena.to_thir(expr) }),
-                "max" => Some(AggKind::Max { expr: arena.to_thir(expr) }),
-                "aggregate" => {
+            let kind = match QueryableMethod::from_name(name) {
+                Some(QueryableMethod::Sum) => Some(AggKind::Sum { expr: arena.to_thir(expr) }),
+                Some(QueryableMethod::Count) => Some(AggKind::Count),
+                Some(QueryableMethod::Avg) => Some(AggKind::Avg { expr: arena.to_thir(expr) }),
+                Some(QueryableMethod::Min) => Some(AggKind::Min { expr: arena.to_thir(expr) }),
+                Some(QueryableMethod::Max) => Some(AggKind::Max { expr: arena.to_thir(expr) }),
+                Some(QueryableMethod::Aggregate) => {
                     // User-defined aggregate via .aggregate(Marker).
                     let marker = args.first().copied();
                     Some(AggKind::UserAggregate {
@@ -723,9 +727,25 @@ fn extract_method_call(
     // Extract the receiver as a plan (the collection being operated on).
     let input = extract_expr_as_plan(receiver, hir, interner, lang_items, arena)?;
 
-    match method_name {
+    // Dispatch via centralized QueryableMethod enum.
+    let Some(mk) = method_kind::QueryableMethod::from_name(method_name) else {
+        // Unknown method: opaque extension barrier.
+        return Some(alloc(
+            arena,
+            Plan::Extension {
+                node: std::sync::Arc::new(OpaqueMethod {
+                    name: method_name.to_string(),
+                    input,
+                    call: call_expr,
+                }),
+            },
+            origin,
+        ));
+    };
+
+    match mk {
         // ── Filter ─────────────────────────────────────────────────────
-        "filter" => {
+        QueryableMethod::Filter => {
             // .filter(|x| pred) — args[0] is the closure
             let pred = args.first().copied()?;
             let thir_pred = arena.to_thir(pred);
@@ -737,7 +757,7 @@ fn extract_method_call(
         }
 
         // ── Map ────────────────────────────────────────────────────────
-        "map" => {
+        QueryableMethod::Map => {
             // .map(|x| expr) — args[0] is the closure
             let func = args.first().copied()?;
             let thir_func = arena.to_thir(func);
@@ -753,7 +773,7 @@ fn extract_method_call(
         }
 
         // ── FlatMap ────────────────────────────────────────────────────
-        "flat_map" => {
+        QueryableMethod::FlatMap => {
             let func = args.first().copied()?;
             let thir_func = arena.to_thir(func);
             Some(alloc(
@@ -768,7 +788,7 @@ fn extract_method_call(
         }
 
         // ── Joins ──────────────────────────────────────────────────────
-        "join" | "inner_join" => {
+        QueryableMethod::Join | QueryableMethod::InnerJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
@@ -786,7 +806,7 @@ fn extract_method_call(
             ))
         }
 
-        "left_join" => {
+        QueryableMethod::LeftJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
@@ -804,7 +824,7 @@ fn extract_method_call(
             ))
         }
 
-        "semi_join" => {
+        QueryableMethod::SemiJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
@@ -822,7 +842,7 @@ fn extract_method_call(
             ))
         }
 
-        "anti_join" => {
+        QueryableMethod::AntiJoin => {
             let right_expr = args.first().copied()?;
             let on_expr = args.get(1).copied()?;
             let right = extract_expr_as_plan(right_expr, hir, interner, lang_items, arena)?;
@@ -841,7 +861,7 @@ fn extract_method_call(
         }
 
         // ── Group by ───────────────────────────────────────────────────
-        "group_by" => {
+        QueryableMethod::GroupBy => {
             // .group_by(|x| key_expr) — args[0] is the key closure
             let key_expr = args.first().copied()?;
             let thir_key = arena.to_thir(key_expr);
@@ -860,7 +880,7 @@ fn extract_method_call(
         }
 
         // ── Order by ───────────────────────────────────────────────────
-        "order_by" | "sort_by" => {
+        QueryableMethod::OrderBy | QueryableMethod::SortBy => {
             let key_expr = args.first().copied()?;
             let thir_key = arena.to_thir(key_expr);
             Some(alloc(
@@ -876,7 +896,7 @@ fn extract_method_call(
             ))
         }
 
-        "order_by_desc" | "sort_by_desc" => {
+        QueryableMethod::OrderByDesc | QueryableMethod::SortByDesc => {
             let key_expr = args.first().copied()?;
             let thir_key = arena.to_thir(key_expr);
             Some(alloc(
@@ -893,7 +913,7 @@ fn extract_method_call(
         }
 
         // ── Distinct ───────────────────────────────────────────────────
-        "distinct" | "unique" => Some(alloc(
+        QueryableMethod::Distinct | QueryableMethod::Unique => Some(alloc(
             arena,
             Plan::Distinct {
                 input,
@@ -902,7 +922,7 @@ fn extract_method_call(
             origin,
         )),
 
-        "distinct_by" | "unique_by" => {
+        QueryableMethod::DistinctBy | QueryableMethod::UniqueBy => {
             let key_expr = args.first().copied()?;
             let thir_key = arena.to_thir(key_expr);
             Some(alloc(
@@ -916,7 +936,7 @@ fn extract_method_call(
         }
 
         // ── Limit / Skip / Take ────────────────────────────────────────
-        "take" => {
+        QueryableMethod::Take => {
             let n = args.first().copied()?;
             let thir_n = arena.to_thir(n);
             Some(alloc(
@@ -930,7 +950,7 @@ fn extract_method_call(
             ))
         }
 
-        "skip" => {
+        QueryableMethod::Skip => {
             let n = args.first().copied()?;
             let thir_n = arena.to_thir(n);
             Some(alloc(
@@ -945,26 +965,26 @@ fn extract_method_call(
         }
 
         // ── Aggregates (scalar) ────────────────────────────────────────
-        "sum" => {
+        QueryableMethod::Sum => {
             let thir_expr = arena.to_thir(call_expr);
             Some(scalar_agg(input, AggKind::Sum { expr: thir_expr }, interner, arena, origin))
         }
-        "count" => Some(scalar_agg(input, AggKind::Count, interner, arena, origin)),
-        "avg" => {
+        QueryableMethod::Count => Some(scalar_agg(input, AggKind::Count, interner, arena, origin)),
+        QueryableMethod::Avg => {
             let thir_expr = arena.to_thir(call_expr);
             Some(scalar_agg(input, AggKind::Avg { expr: thir_expr }, interner, arena, origin))
         }
-        "min" => {
+        QueryableMethod::Min => {
             let thir_expr = arena.to_thir(call_expr);
             Some(scalar_agg(input, AggKind::Min { expr: thir_expr }, interner, arena, origin))
         }
-        "max" => {
+        QueryableMethod::Max => {
             let thir_expr = arena.to_thir(call_expr);
             Some(scalar_agg(input, AggKind::Max { expr: thir_expr }, interner, arena, origin))
         }
 
         // ── Aggregate with marker ──────────────────────────────────────
-        "aggregate" => {
+        QueryableMethod::Aggregate => {
             // .aggregate(Marker) — args[0] is the aggregate marker/impl
             let marker = args.first().copied()?;
             let thir_marker = arena.to_thir(marker);
@@ -990,7 +1010,7 @@ fn extract_method_call(
         }
 
         // ── Union ──────────────────────────────────────────────────────
-        "union" | "union_all" => {
+        QueryableMethod::Union | QueryableMethod::UnionAll => {
             let other_expr = args.first().copied()?;
             let other = extract_expr_as_plan(other_expr, hir, interner, lang_items, arena)?;
             Some(alloc(
@@ -1001,19 +1021,6 @@ fn extract_method_call(
                 origin,
             ))
         }
-
-        // ── Unknown method: opaque barrier ─────────────────────────────
-        _ => Some(alloc(
-            arena,
-            Plan::Extension {
-                node: std::sync::Arc::new(OpaqueMethod {
-                    name: method_name.to_string(),
-                    input,
-                    call: call_expr,
-                }),
-            },
-            origin,
-        )),
     }
 }
 

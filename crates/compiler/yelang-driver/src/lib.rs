@@ -40,6 +40,7 @@ use yelang_qir::plan::PlanArena;
 use yelang_qir::{extract_query, Optimizer};
 use yelang_tycheck::diagnostics::Diagnostic;
 use yelang_tycheck::tcx::TyCtxt;
+use thiserror;
 
 // ---------------------------------------------------------------------------
 // Error type
