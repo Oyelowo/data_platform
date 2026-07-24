@@ -24,7 +24,7 @@ pub use agg::{AggCall, AggClass, AggKind, AggProperties};
 pub use arena::{Partitioning, PlanArena, PlanId, PlanMeta, PlanOrigin, TagPlan};
 pub use join::{DepJoinKind, JoinKind};
 pub use keys::{
-    FrameBound, FrameUnit, GroupKey, OrderSpec, PlanRange, SortKey, SortSpec, WindowFrame,
+    FrameBound, FrameUnit, GroupKey, JoinKey, OrderSpec, PlanRange, SortKey, SortSpec, WindowFrame,
     WindowFunc, WindowKind,
 };
 pub use op::Plan;

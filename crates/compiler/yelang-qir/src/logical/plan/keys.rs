@@ -17,6 +17,18 @@ pub enum GroupKey {
     Column(Symbol),
 }
 
+/// A join key: either a computed expression or a direct column reference.
+///
+/// Used by `Join` and `GroupJoin` for equi-join conditions.
+/// During decorrelation, natural join conditions on outer refs use `Column`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoinKey {
+    /// A computed expression (e.g. `a.id + 1`).
+    Expr(ExprRef),
+    /// A direct column reference by name (e.g. `u.id`).
+    Column(Symbol),
+}
+
 /// A sort key: either a computed expression or a direct column reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SortKey {

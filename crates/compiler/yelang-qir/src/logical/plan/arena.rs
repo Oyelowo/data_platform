@@ -138,6 +138,16 @@ impl PlanArena {
         self.nodes.iter_enumerated()
     }
 
+    /// Allocate a new THIR expression and return its ID.
+    pub fn alloc_thir_expr(&mut self, expr: yelang_thir::ThirExpr) -> ThirExprId {
+        self.thir_exprs.insert(expr)
+    }
+
+    /// Overwrite a THIR expression in place.
+    pub fn set_thir_expr(&mut self, id: ThirExprId, expr: yelang_thir::ThirExpr) {
+        self.thir_exprs[id] = expr;
+    }
+
     /// Returns `true` if any node in the arena is a `DependentJoin`,
     /// `ScalarSubquery`, or `Exists`. Used as a post-decorrelation assertion.
     pub fn has_correlated_nodes(&self) -> bool {

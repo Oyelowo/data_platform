@@ -5,7 +5,7 @@ use std::sync::Arc;
 use yelang_arena::{Id, IndexVec};
 use yelang_interner::Symbol;
 
-use crate::logical::plan::{AggCall, ExprRef, GroupKey, JoinKind, PlanRange, SortSpec, SourceRef, TraversePath};
+use crate::logical::plan::{AggCall, ExprRef, GroupKey, JoinKey, JoinKind, PlanRange, SortSpec, SourceRef, TraversePath};
 
 use super::algorithm::{
     AggAlgorithm, ExchangeKind, JoinAlgorithm, ScanStrategy, SortAlgorithm, TraverseStrategy,
@@ -104,7 +104,7 @@ pub enum PhysOp {
         right: PhysId,
         kind: JoinKind,
         algorithm: JoinAlgorithm,
-        on: Vec<(ExprRef, ExprRef)>,
+        on: Vec<(JoinKey, JoinKey)>,
         filter: Option<ExprRef>,
     },
 

@@ -7,7 +7,7 @@ use yelang_interner::Symbol;
 use super::agg::AggCall;
 use super::arena::PlanId;
 use super::join::{DepJoinKind, JoinKind};
-use super::keys::{GroupKey, PlanRange, SortSpec, WindowFunc};
+use super::keys::{GroupKey, JoinKey, PlanRange, SortSpec, WindowFunc};
 use super::source::{SourceRef, TraversePath};
 use super::user::UserDefinedPlanNode;
 use super::ExprRef;
@@ -75,8 +75,8 @@ pub enum Plan {
         left: PlanId,
         right: PlanId,
         kind: JoinKind,
-        /// Equi-join key pairs: `(left_key_expr, right_key_expr)`.
-        on: Vec<(ExprRef, ExprRef)>,
+        /// Equi-join key pairs: `(left_key, right_key)`.
+        on: Vec<(JoinKey, JoinKey)>,
         /// Residual (non-equi) predicate applied after the join.
         filter: Option<ExprRef>,
     },
@@ -189,7 +189,7 @@ pub enum Plan {
         left: PlanId,
         right: PlanId,
         /// Equi-join key pairs.
-        on: Vec<(ExprRef, ExprRef)>,
+        on: Vec<(JoinKey, JoinKey)>,
         /// Aggregates computed per join group.
         aggs: Vec<AggCall>,
     },

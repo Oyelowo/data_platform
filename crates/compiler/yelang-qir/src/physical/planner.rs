@@ -324,7 +324,7 @@ fn insert_join_exchanges(
     left: PhysId,
     right: PhysId,
     algorithm: JoinAlgorithm,
-    _on: &[(crate::logical::plan::ExprRef, crate::logical::plan::ExprRef)],
+    _on: &[(crate::logical::plan::JoinKey, crate::logical::plan::JoinKey)],
     _executor: &dyn Executor,
     phys: &mut PhysArena,
 ) -> (PhysId, PhysId) {

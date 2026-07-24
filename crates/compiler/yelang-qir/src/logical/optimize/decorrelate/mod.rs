@@ -1,117 +1,66 @@
-//! Subquery decorrelation — eliminate correlated subqueries by rewriting
-//! them into joins.
+//! Subquery decorrelation — BTW 2025 top-down holistic unnesting.
 //!
-//! Implements the top-down, one-pass algorithm from:
-//! - Neumann & Kemper, "Unnesting Arbitrary Queries" (BTW 2015)
-//! - Neumann, "Improving Unnesting of Complex Queries" (BTW 2025)
+//! Based on:
+//! - Neumann, "Improving Unnesting of Complex Queries", BTW 2025
+//! - Neumann, "A Formalization of Top-Down Unnesting", arXiv:2412.04294
+//! - Neumann & Kemper, "Unnesting Arbitrary Queries", BTW 2015
 //!
-//! # Algorithm overview
+//! # Algorithm (3 phases)
 //!
-//! 1. Convert `ScalarSubquery` / `Exists` nodes into `DependentJoin` nodes.
-//! 2. Walk the plan tree **top-down, one pass**.
-//! 3. For each `DependentJoin`:
-//!    a. Try simple elimination (pull correlation predicate into the join).
-//!    b. If nested, unnest the left side first (makes columns available).
-//!    c. Build a union-find of column equivalences from join predicates.
-//!    d. Unnest the right side under this unnesting's umbrella.
-//!    e. At leaves: choose domain-join or substitution via union-find.
-//! 4. Invariant: **never push different D sets across dependent joins.**
+//! **Phase 1** — Identify non-trivial dependent joins:
+//!   Annotate each DependentJoin with its accessing operators (operators
+//!   below it that reference its left-hand side columns). Trivial
+//!   DependentJoins (empty accessing set) are converted directly.
 //!
-//! After this pass, no `DependentJoin`, `ScalarSubquery`, or `Exists`
-//! nodes remain in the plan tree.
+//! **Phase 2** — Eliminate dependent joins top-to-bottom:
+//!   Process from root to leaves. Never push different D sets across
+//!   dependent joins. Try simple elimination first (merge selections,
+//!   move maps). Full unnesting uses UnnestingInfo + Unnesting state
+//!   with union-find for column equivalences.
+//!
+//! **Phase 3** — Per-operator rules:
+//!   Selection → add equivalences + recurse.
+//!   Map → recurse + rewrite.
+//!   Aggregate → add outer refs to group keys, static agg uses GroupJoin.
+//!   Window → add outer refs to PARTITION BY.
+//!   Join → split accessing left/right, handle nested DJoin recursively.
+//!   Union/Intersect/Except → replicate D on both sides.
+//!
+//! # Post-condition
+//!
+//! After `decorrelate()` returns, no `DependentJoin`, `ScalarSubquery`,
+//! or `Exists` nodes may remain in the live plan tree.
 
+mod annotate;
 mod dependent_join;
+mod domain;
 mod eliminate;
 mod equivalences;
+mod orderby_limit;
 mod outer_refs;
+mod rewrite;
+mod rules;
+mod simple;
 mod state;
 mod union_find;
 
-pub use union_find::UnionFind;
+use crate::logical::plan::{PlanArena, PlanId};
 
-use crate::logical::plan::{DepJoinKind, Plan, PlanArena, PlanId};
-use crate::tree::Transformed;
-
-use eliminate::eliminate_recursive;
+use annotate::annotate_accessing;
+use eliminate::eliminate_top_down;
 use state::UnnestingState;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/// Eliminate all correlated subqueries from the plan tree.
+/// Run the full decorrelation pipeline on a plan tree.
 ///
-/// This is a **one-shot, top-down** pass. It must run before the
-/// optimizer's fixpoint loop. After this pass, no `DependentJoin`,
-/// `ScalarSubquery`, or `Exists` nodes remain.
-///
-/// Returns the new root [`PlanId`].
+/// Returns the new root PlanId. The arena is mutated in place
+/// (new nodes are allocated; old correlated nodes become unreachable).
 pub fn decorrelate(root: PlanId, arena: &mut PlanArena) -> PlanId {
-    // Phase 1: Convert ScalarSubquery/Exists → DependentJoin.
-    let root = convert_subqueries_to_dependent_joins(root, arena);
+    // Phase 1: Annotate accessing operators.
+    let annotations = annotate_accessing(root, arena);
 
-    // Phase 2: Top-down elimination of DependentJoin nodes.
-    let mut state = UnnestingState::new();
-    eliminate_recursive(root, &mut state, arena)
-}
+    // Phase 2: Top-down elimination.
+    let mut state = UnnestingState::new(annotations);
+    let result = eliminate_top_down(root, &mut state, arena);
 
-// ---------------------------------------------------------------------------
-// Phase 1: Convert subqueries to dependent joins
-// ---------------------------------------------------------------------------
-
-/// Convert `ScalarSubquery` and `Exists` nodes into `DependentJoin` nodes.
-///
-/// This is done as a bottom-up pass before the main top-down elimination.
-fn convert_subqueries_to_dependent_joins(
-    root: PlanId,
-    arena: &mut PlanArena,
-) -> PlanId {
-    crate::tree::transform_bottom_up(root, arena, &mut |id, arena| {
-        let plan = arena.plan(id).clone();
-        match &plan {
-            Plan::ScalarSubquery { plan: inner, correlation: _ } => {
-                // A scalar subquery becomes a dependent single join.
-                // The outer side is the "current row" — represented as
-                // an Empty node with one row. The actual outer context
-                // is provided by the parent plan.
-                //
-                // For now, we create a DependentJoin with the inner plan
-                // and mark it as a Single join (at most one match per
-                // outer row).
-                let outer = arena.alloc(Plan::Empty { produce_one_row: true });
-                let dep_join = Plan::DependentJoin {
-                    outer,
-                    inner: *inner,
-                    pred: None,
-                    kind: DepJoinKind::Single,
-                };
-                let new_id = arena.alloc(dep_join);
-                Transformed::yes(new_id)
-            }
-
-            Plan::Exists {
-                plan: inner,
-                correlation: _,
-                negated,
-            } => {
-                let outer = arena.alloc(Plan::Empty { produce_one_row: true });
-                let kind = if *negated {
-                    DepJoinKind::Anti
-                } else {
-                    DepJoinKind::Semi
-                };
-                let dep_join = Plan::DependentJoin {
-                    outer,
-                    inner: *inner,
-                    pred: None,
-                    kind,
-                };
-                let new_id = arena.alloc(dep_join);
-                Transformed::yes(new_id)
-            }
-
-            _ => Transformed::no(id),
-        }
-    })
-    .id
+    result
 }

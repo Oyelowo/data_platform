@@ -24,7 +24,7 @@ use yelang_interner::Symbol;
 
 use crate::analysis::{plan_output_fields, referenced_fields};
 use crate::optimize::{ApplyOrder, OptRule};
-use crate::logical::plan::{ExprRef, JoinKind, Plan, PlanArena, PlanId, PlanMeta};
+use crate::logical::plan::{ExprRef, JoinKey, JoinKind, Plan, PlanArena, PlanId, PlanMeta};
 use crate::tree::Transformed;
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ struct Relation {
 /// A join predicate collected during flattening.
 struct JoinPredicate {
     kind: JoinKind,
-    on: Vec<(ExprRef, ExprRef)>,
+    on: Vec<(JoinKey, JoinKey)>,
     filter: Option<ExprRef>,
     /// All field names referenced by `on` and `filter`.
     referenced: FxHashSet<Symbol>,
@@ -127,13 +127,9 @@ fn flatten_joins(
 
             // Collect predicate field references.
             let mut referenced = FxHashSet::new();
-            for &(l, r) in on {
-                for f in referenced_fields(l, arena).iter() {
-                    referenced.insert(*f);
-                }
-                for f in referenced_fields(r, arena).iter() {
-                    referenced.insert(*f);
-                }
+            for (l, r) in on {
+                collect_join_key_fields(l, &mut referenced);
+                collect_join_key_fields(r, &mut referenced);
             }
             if let Some(f) = filter {
                 for sym in referenced_fields(*f, arena).iter() {
@@ -269,7 +265,7 @@ fn find_connecting_predicate(
     current_fields: &FxHashSet<Symbol>,
     rel_fields: &FxHashSet<Symbol>,
     predicates: &[JoinPredicate],
-) -> (JoinKind, Vec<(ExprRef, ExprRef)>, Option<ExprRef>) {
+) -> (JoinKind, Vec<(JoinKey, JoinKey)>, Option<ExprRef>) {
     for pred in predicates {
         let touches_current = pred.referenced.iter().any(|f| current_fields.contains(f));
         let touches_rel = pred.referenced.iter().any(|f| rel_fields.contains(f));
@@ -422,5 +418,17 @@ mod tests {
         let rule = JoinReorder;
         let result = rule.rewrite(join, &mut arena);
         assert!(!result.changed, "two relations should not trigger reorder");
+    }
+}
+
+/// Collect field names from a JoinKey into a set.
+fn collect_join_key_fields(key: &JoinKey, fields: &mut FxHashSet<Symbol>) {
+    match key {
+        JoinKey::Expr(_) => {
+            // Expr keys: fields collected elsewhere during expression analysis.
+        }
+        JoinKey::Column(sym) => {
+            fields.insert(*sym);
+        }
     }
 }

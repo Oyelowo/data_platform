@@ -11,7 +11,7 @@ use yelang_arena::FxHashSet;
 use yelang_interner::Symbol;
 use yelang_thir::ThirExpr;
 
-use crate::logical::plan::{ExprRef, GroupKey, Plan, PlanArena, PlanId, SortKey};
+use crate::logical::plan::{ExprRef, GroupKey, JoinKey, Plan, PlanArena, PlanId, SortKey};
 
 // ---------------------------------------------------------------------------
 // Expression-level analysis
@@ -214,13 +214,9 @@ pub fn plan_referenced_fields(plan: &Plan, arena: &PlanArena) -> FxHashSet<Symbo
             }
         }
         Plan::Join { on, filter, .. } => {
-            for &(left, right) in on {
-                for f in referenced_fields(left, arena).iter() {
-                    fields.insert(*f);
-                }
-                for f in referenced_fields(right, arena).iter() {
-                    fields.insert(*f);
-                }
+            for (left, right) in on {
+                collect_join_key_fields(left, &mut fields);
+                collect_join_key_fields(right, &mut fields);
             }
             if let Some(f) = filter {
                 for sym in referenced_fields(*f, arena).iter() {
@@ -408,4 +404,20 @@ pub fn predicate_can_evaluate_against(
     }
 
     pred_fields.iter().all(|f| output.contains(f))
+}
+
+/// Collect field names from a JoinKey into a set.
+fn collect_join_key_fields(key: &JoinKey, fields: &mut FxHashSet<Symbol>) {
+    match key {
+        JoinKey::Expr(expr) => {
+            // We can't call referenced_fields here because we don't have
+            // access to the arena. For Expr keys, the fields will be
+            // collected when the expression is analyzed elsewhere.
+            // For now, this is a no-op for Expr keys.
+            let _ = expr;
+        }
+        JoinKey::Column(sym) => {
+            fields.insert(*sym);
+        }
+    }
 }

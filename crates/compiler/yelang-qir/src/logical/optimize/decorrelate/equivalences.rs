@@ -1,13 +1,19 @@
-//! Predicate equivalence collection via union-find.
+//! Predicate equivalence collection via union-find (BTW 2025 §3.2).
+//!
+//! Extracts column equivalences (a = b) from predicates and adds them
+//! to the union-find. These equivalences drive the substitution decision:
+//! if an outer ref has an equivalence with an inner column, we can
+//! substitute instead of building a domain join.
 
+use yelang_interner::Symbol;
 use yelang_thir::ThirExpr;
 
 use crate::logical::plan::{ExprRef, PlanArena};
 
-use super::state::UnnestingState;
+use super::state::Unnesting;
 use super::union_find::UnionFind;
 
-/// Add column equivalences from a predicate expression to the union-find.
+/// Add column equivalences from a predicate expression to the unnesting's union-find.
 ///
 /// Walks the THIR expression tree looking for equality comparisons between
 /// field accesses: `a.x == b.y` → `union(x, y)`.
@@ -15,12 +21,9 @@ use super::union_find::UnionFind;
 pub(super) fn add_predicate_equivalences(
     pred: ExprRef,
     arena: &PlanArena,
-    state: &mut UnnestingState,
+    unnesting: &mut Unnesting,
 ) {
-    let Some(info) = state.current_mut() else {
-        return;
-    };
-    collect_equivalences(pred, arena, &mut info.cclasses);
+    collect_equivalences(pred, arena, &mut unnesting.cclasses);
 }
 
 /// Recursively collect field equivalences from a THIR expression.
@@ -84,5 +87,25 @@ fn collect_equivalences(
         }
 
         _ => {}
+    }
+}
+
+/// Populate the repr map from cclasses for the given outer refs.
+///
+/// For each outer ref, if it has an equivalence with a non-outer column,
+/// add it to repr. This enables substitution instead of domain join.
+pub(super) fn populate_repr(
+    unnesting: &mut Unnesting,
+    outer_refs: &[Symbol],
+) {
+    let outer_set: yelang_arena::FxHashSet<Symbol> = outer_refs.iter().copied().collect();
+
+    for &outer_ref in outer_refs {
+        // Find the representative of the outer ref's equivalence class.
+        let repr_sym = unnesting.cclasses.find(outer_ref);
+        if repr_sym != outer_ref && !outer_set.contains(&repr_sym) {
+            // The representative is a non-outer column → substitution possible.
+            unnesting.repr.insert(outer_ref, repr_sym);
+        }
     }
 }

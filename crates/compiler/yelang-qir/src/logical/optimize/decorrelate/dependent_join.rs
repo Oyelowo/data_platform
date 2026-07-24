@@ -1,15 +1,24 @@
-//! Dependent join elimination: unnesting + finalization.
+//! Dependent join elimination (BTW 2025 Fig 6, Ne24 Theorem 4.1).
+//!
+//! Two paths:
+//! 1. **Simple elimination** (Fig 3): merge selections, move maps, empty accessing set.
+//! 2. **Full unnesting** (Fig 6): create UnnestingInfo/Unnesting, walk inner plan,
+//!    push domain D down via per-operator rules, finalize at leaves.
 
-use yelang_arena::FxHashMap;
 use yelang_interner::Symbol;
 
 use crate::logical::plan::{DepJoinKind, ExprRef, JoinKind, Plan, PlanArena, PlanId};
 
-use super::eliminate::eliminate_recursive;
+use super::domain::{build_domain, build_domain_join_keys};
 use super::equivalences::add_predicate_equivalences;
 use super::outer_refs::compute_outer_refs;
-use super::state::{UnnestingInfo, UnnestingState};
-use super::union_find::UnionFind;
+use super::rules::unnest;
+use super::simple::try_simple_elimination;
+use super::state::{Unnesting, UnnestingInfo, UnnestingState};
+
+// ---------------------------------------------------------------------------
+// Main entry: eliminate a single DependentJoin
+// ---------------------------------------------------------------------------
 
 pub(super) fn eliminate_dependent_join(
     node: PlanId,
@@ -20,161 +29,161 @@ pub(super) fn eliminate_dependent_join(
     state: &mut UnnestingState,
     arena: &mut PlanArena,
 ) -> PlanId {
-    // Step 1: Compute outer refs (A(outer) ∩ F(inner)).
+    // Step 1: Compute outer refs (A(outer) ∩ F(inner ∪ pred)).
     let outer_refs = compute_outer_refs(outer, inner, pred, arena);
 
-    // Step 2: Try simple elimination.
-    //
-    // If the predicate only references inner columns (no correlation),
-    // the dependent join is trivially a regular join.
+    // Step 2: Trivial — no correlation.
     if outer_refs.is_empty() {
         return convert_to_regular_join(outer, inner, pred, kind, arena);
     }
 
-    // Step 3: Create the unnesting state.
+    // Step 3: Try simple elimination (BTW 2025 Fig 3).
+    if let Some(result) = try_simple_elimination(node, outer, inner, pred, kind, &outer_refs, state, arena) {
+        return result;
+    }
+
+    // Step 4: Full unnesting (BTW 2025 Fig 6).
+    djoin_elimination(node, outer, inner, pred, kind, outer_refs, state, arena)
+}
+
+// ---------------------------------------------------------------------------
+// Full unnesting (BTW 2025 Fig 6)
+// ---------------------------------------------------------------------------
+
+fn djoin_elimination(
+    node: PlanId,
+    outer: PlanId,
+    inner: PlanId,
+    pred: Option<ExprRef>,
+    kind: DepJoinKind,
+    outer_refs: Vec<Symbol>,
+    state: &mut UnnestingState,
+    arena: &mut PlanArena,
+) -> PlanId {
+    // Create UnnestingInfo (global, shared).
+    let parent_idx = if state.stack.is_empty() {
+        None
+    } else {
+        Some(state.stack.len() - 1)
+    };
+
     let info = UnnestingInfo {
         join_id: node,
-        outer_refs: outer_refs.clone(),
-        cclasses: UnionFind::new(),
-        repr: FxHashMap::default(),
-        parent: if state.stack.is_empty() {
-            None
-        } else {
-            Some(state.stack.len() - 1)
-        },
+        outer_refs,
+        domain: None,
+        parent: parent_idx,
     };
-    let _info_idx = state.push(info);
+    let info_idx = state.alloc_info(info);
 
-    // BTW 2025: merge parent's outer_refs into this unnesting.
+    // Create Unnesting (per-fragment).
+    let unnesting = Unnesting::new(info_idx);
+    state.push(unnesting);
+
+    // BTW 2025: merge parent's outer_refs.
     // "Never push different D sets across dependent joins."
     state.merge_parent_outer_refs();
 
-    // Step 4: Unnest the LEFT (outer) side first.
-    //
-    // This makes outer columns available for the inner side's unnesting.
-    let new_outer = eliminate_recursive(outer, state, arena);
+    // Get the accessing operators for this dependent join.
+    let accessing: Vec<PlanId> = state.annotations.accessing(node).to_vec();
 
-    // Step 5: Add equivalences from the join predicate to the union-find.
+    // Add equivalences from the join predicate.
     if let Some(pred_expr) = pred {
-        add_predicate_equivalences(pred_expr, arena, state);
+        if let Some(current) = state.current_mut() {
+            add_predicate_equivalences(pred_expr, arena, current);
+        }
     }
 
-    // Step 6: Unnest the RIGHT (inner) side under this unnesting's umbrella.
-    let new_inner = eliminate_recursive(inner, state, arena);
+    // Unnest the RIGHT (inner) side under this unnesting's umbrella.
+    let new_inner = unnest(inner, state, &accessing, arena);
 
-    // Step 7: Finalize — build the replacement plan.
-    //
-    // For each outer ref, try substitution via union-find first.
-    // If substitution works, no domain join is needed.
-    // Otherwise, create a domain join: D = Π_{outer_refs}(outer).
-    let result = finalize_unnesting(
-        new_outer,
-        new_inner,
-        pred,
-        kind,
-        &outer_refs,
-        state,
-        arena,
-    );
+    // Finalize: build the replacement plan.
+    let result = finalize(node, outer, new_inner, pred, kind, state, arena);
 
     state.pop();
     result
 }
 
+// ---------------------------------------------------------------------------
+// Finalize: domain join or substitution
+// ---------------------------------------------------------------------------
+
+/// Finalize the unnesting of a dependent join.
+///
+/// BTW 2025 / Ne24 Lemma 4.2:
+/// - If all outer refs have substitutions in repr → regular join (no domain).
+/// - Otherwise → domain join: D ⋈ inner, then outer ⋈_{natural_D} result.
+fn finalize(
+    _node: PlanId,
+    outer: PlanId,
+    inner: PlanId,
+    pred: Option<ExprRef>,
+    kind: DepJoinKind,
+    state: &mut UnnestingState,
+    arena: &mut PlanArena,
+) -> PlanId {
+    let current = state.current().expect("unnesting must be on stack");
+
+    // Check if all outer refs can be substituted.
+    if current.all_substitutable(state) {
+        // All outer refs substituted: no domain join needed.
+        return convert_to_regular_join(outer, inner, pred, kind, arena);
+    }
+
+    // Build domain join keys (natural join on outer refs).
+    let join_keys = build_domain_join_keys(current, state);
+
+    // Build the domain projection D = Π_{outer_refs}(outer).
+    let info_idx = current.info_idx;
+    let domain = build_domain(info_idx, state, arena);
+
+    let join_kind = dep_join_kind_to_join_kind(kind);
+
+    // D ⋈ inner (domain join — makes outer columns available in inner).
+    let domain_inner = arena.alloc(Plan::Join {
+        left: domain,
+        right: inner,
+        kind: JoinKind::Inner,
+        on: join_keys.clone(),
+        filter: None,
+    });
+
+    // outer ⋈_{natural_D} (D ⋈ inner)
+    // The natural join condition is on the outer ref columns.
+    arena.alloc(Plan::Join {
+        left: outer,
+        right: domain_inner,
+        kind: join_kind,
+        on: join_keys,
+        filter: pred,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 /// Convert a trivial dependent join (no correlation) to a regular join.
-fn convert_to_regular_join(
+pub(super) fn convert_to_regular_join(
     outer: PlanId,
     inner: PlanId,
     pred: Option<ExprRef>,
     kind: DepJoinKind,
     arena: &mut PlanArena,
 ) -> PlanId {
-    let join_kind = match kind {
-        DepJoinKind::Join | DepJoinKind::Single => JoinKind::Inner,
-        DepJoinKind::Semi => JoinKind::Semi,
-        DepJoinKind::Anti => JoinKind::Anti,
-        DepJoinKind::LeftOuter => JoinKind::Left,
-    };
-
     arena.alloc(Plan::Join {
         left: outer,
         right: inner,
-        kind: join_kind,
+        kind: dep_join_kind_to_join_kind(kind),
         on: vec![],
         filter: pred,
     })
 }
 
-/// Finalize the unnesting of a dependent join.
-///
-/// For each outer ref, check if it can be substituted via the union-find.
-/// If all can be substituted, no domain join is needed. Otherwise, create a
-/// domain projection and join.
-fn finalize_unnesting(
-    outer: PlanId,
-    inner: PlanId,
-    pred: Option<ExprRef>,
-    kind: DepJoinKind,
-    outer_refs: &[Symbol],
-    state: &UnnestingState,
-    arena: &mut PlanArena,
-) -> PlanId {
-    let info = state.current().expect("unnesting info must exist");
-
-    // Check if all outer refs can be substituted.
-    let all_substitutable = outer_refs
-        .iter()
-        .all(|r| info.repr.contains_key(r));
-
-    if all_substitutable && outer_refs.is_empty() {
-        // No outer refs: simple regular join.
-        return convert_to_regular_join(outer, inner, pred, kind, arena);
-    }
-
-    if all_substitutable {
-        // All outer refs can be substituted: no domain join needed.
-        // The inner plan has already been rewritten with substitutions.
-        // Just create a regular join with the predicate.
-        return convert_to_regular_join(outer, inner, pred, kind, arena);
-    }
-
-    // Some outer refs cannot be substituted: create a domain join.
-    //
-    // D = Π_{outer_refs}(outer)  — duplicate-free projection
-    // result = outer ⋈_{IS NOT DISTINCT FROM} (D ⋈ inner)
-    //
-    // For now, we create a simplified version:
-    // Project(outer, outer_refs) → Join with inner
-    let domain = arena.alloc(Plan::Project {
-        input: outer,
-        exprs: outer_refs
-            .iter()
-            .map(|&name| (name, ExprRef::default()))
-            .collect(),
-    });
-
-    let join_kind = match kind {
+fn dep_join_kind_to_join_kind(kind: DepJoinKind) -> JoinKind {
+    match kind {
         DepJoinKind::Join | DepJoinKind::Single => JoinKind::Inner,
         DepJoinKind::Semi => JoinKind::Semi,
         DepJoinKind::Anti => JoinKind::Anti,
         DepJoinKind::LeftOuter => JoinKind::Left,
-    };
-
-    // Join the domain with the inner plan.
-    let domain_join = arena.alloc(Plan::Join {
-        left: domain,
-        right: inner,
-        kind: JoinKind::Inner,
-        on: vec![],
-        filter: None,
-    });
-
-    // Join the outer with the domain-joined inner.
-    arena.alloc(Plan::Join {
-        left: outer,
-        right: domain_join,
-        kind: join_kind,
-        on: vec![],
-        filter: pred,
-    })
+    }
 }
