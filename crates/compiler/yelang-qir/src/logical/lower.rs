@@ -68,7 +68,7 @@ pub fn lower_query(
     // Prefer the THIR query structure when available.
     if let Some(bodies) = thir_bodies {
         if let Some(select) = bodies.thir_queries.get(&query_id) {
-            return Some(lower_select(select, query_id, bodies, interner, arena));
+            return Some(lower_select(select, PlanOrigin::QuerySyntax(query_id), bodies, interner, arena));
         }
     }
 
@@ -99,12 +99,11 @@ pub fn lower_query(
 /// path [`lower_select_hir`]).
 fn lower_select(
     select: &ThirSelectQuery,
-    query_id: QueryId,
+    origin: PlanOrigin,
     thir_bodies: &ThirBodies,
     interner: &Interner,
     arena: &mut PlanArena,
 ) -> PlanId {
-    let origin = PlanOrigin::QuerySyntax(query_id);
 
     // 1. Build scan(s) from `from` nodes.
     let mut current = lower_from_nodes_thir(&select.from, thir_bodies, arena, &origin);
@@ -162,13 +161,27 @@ fn lower_select(
         );
     }
 
-    // 7. Apply projection.
+    // 7. Extract correlated subqueries from the projection.
+    //
+    // Walk the projection expression for ThirExpr::Query nodes.
+    // For each correlated subquery, create a DependentJoin and replace
+    // the Query node with a column reference to the join's output.
+    let (mut current, projection) = extract_correlated_subqueries(
+        current,
+        select.projection,
+        thir_bodies,
+        interner,
+        arena,
+        &origin,
+    );
+
+    // 8. Apply projection.
     let result_name = interner.intern("result");
     current = alloc(
         arena,
         Plan::Project {
             input: current,
-            exprs: vec![(result_name, select.projection)],
+            exprs: vec![(result_name, projection)],
         },
         origin,
     );
@@ -1565,5 +1578,256 @@ impl crate::logical::plan::UserDefinedPlanNode for OpaqueMethod {
 
     fn output_fields(&self) -> Vec<Symbol> {
         vec![]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Correlated subquery extraction
+// ---------------------------------------------------------------------------
+
+/// Extract correlated subqueries from a projection expression.
+///
+/// Walks the THIR expression tree looking for `ThirExpr::Query` nodes.
+/// For each nested query:
+/// 1. Lowers it to a plan
+/// 2. Computes outer references (symbols from the outer plan's output
+///    that appear in the nested plan)
+/// 3. If correlated (outer_refs non-empty), creates a DependentJoin
+/// 4. Replaces the Query node with a column reference to the join's output
+///
+/// Returns the modified plan (with DependentJoins chained) and the
+/// modified projection expression.
+fn extract_correlated_subqueries(
+    mut current: PlanId,
+    projection: yelang_thir::ids::ThirExprId,
+    thir_bodies: &ThirBodies,
+    interner: &Interner,
+    arena: &mut PlanArena,
+    origin: &PlanOrigin,
+) -> (PlanId, yelang_thir::ids::ThirExprId) {
+    // Collect outer plan's output fields for correlation detection.
+    let outer_fields = crate::analysis::plan_output_fields(arena.plan(current), arena);
+
+    // Walk the projection expression and find Query nodes.
+    let mut subquery_count = 0usize;
+    let new_projection = extract_queries_from_expr(
+        projection,
+        &mut current,
+        &outer_fields,
+        thir_bodies,
+        interner,
+        arena,
+        origin,
+        &mut subquery_count,
+    );
+
+    (current, new_projection)
+}
+
+/// Recursively walk a THIR expression, extracting Query nodes.
+fn extract_queries_from_expr(
+    expr_id: yelang_thir::ids::ThirExprId,
+    current: &mut PlanId,
+    outer_fields: &yelang_arena::FxHashSet<Symbol>,
+    thir_bodies: &ThirBodies,
+    interner: &Interner,
+    arena: &mut PlanArena,
+    origin: &PlanOrigin,
+    subquery_count: &mut usize,
+) -> yelang_thir::ids::ThirExprId {
+    use yelang_thir::ThirExpr;
+
+    let expr = match arena.thir_expr(expr_id).cloned() {
+        Some(e) => e,
+        None => return expr_id,
+    };
+
+    match &expr {
+        // Found a nested query — extract it.
+        ThirExpr::Query(select_query) => {
+            // Lower the nested query to a plan.
+            let nested_plan = lower_select(
+                select_query,
+                PlanOrigin::Synthetic,
+                thir_bodies,
+                interner,
+                arena,
+            );
+
+            // Compute outer references: symbols from the outer plan
+            // that appear in the nested plan.
+            let nested_refs = crate::analysis::plan_referenced_fields(
+                arena.plan(nested_plan),
+                arena,
+            );
+            let outer_refs: Vec<Symbol> = nested_refs
+                .iter()
+                .filter(|s| outer_fields.contains(s))
+                .copied()
+                .collect();
+
+            if outer_refs.is_empty() {
+                // Not correlated — leave as a standalone scan.
+                // The nested plan becomes a Constant or is inlined.
+                // For now, just return the original expression.
+                return expr_id;
+            }
+
+            // Correlated — create a DependentJoin.
+            let output_col = interner.intern(&format!("_subquery_{}", *subquery_count));
+            *subquery_count += 1;
+
+            let dj = arena.alloc(Plan::DependentJoin {
+                outer: *current,
+                inner: nested_plan,
+                pred: None, // Correlation predicate extracted during decorrelation.
+                kind: crate::logical::plan::DepJoinKind::Single,
+            });
+            *current = dj;
+
+            // Replace the Query node with a column reference.
+            // Use a Field expression with a dummy base — the VM resolves
+            // by column name.
+            let col_ref = arena.alloc_thir_expr(ThirExpr::Var(
+                yelang_arena::DefId::from_usize(output_col.as_usize()),
+            ));
+            col_ref
+        }
+
+        // Recurse into binary expressions.
+        ThirExpr::Binary { op, left, right } => {
+            let new_left = extract_queries_from_expr(
+                *left, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+            );
+            let new_right = extract_queries_from_expr(
+                *right, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+            );
+            if new_left != *left || new_right != *right {
+                arena.alloc_thir_expr(ThirExpr::Binary {
+                    op: *op,
+                    left: new_left,
+                    right: new_right,
+                })
+            } else {
+                expr_id
+            }
+        }
+
+        // Recurse into unary expressions.
+        ThirExpr::Unary { op, expr: inner } => {
+            let new_inner = extract_queries_from_expr(
+                *inner, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+            );
+            if new_inner != *inner {
+                arena.alloc_thir_expr(ThirExpr::Unary {
+                    op: *op,
+                    expr: new_inner,
+                })
+            } else {
+                expr_id
+            }
+        }
+
+        // Recurse into field access.
+        ThirExpr::Field { base, field } => {
+            let new_base = extract_queries_from_expr(
+                *base, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+            );
+            if new_base != *base {
+                arena.alloc_thir_expr(ThirExpr::Field {
+                    base: new_base,
+                    field: *field,
+                })
+            } else {
+                expr_id
+            }
+        }
+
+        // Recurse into call arguments.
+        ThirExpr::Call { func, args } => {
+            let new_func = extract_queries_from_expr(
+                *func, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+            );
+            let new_args: Vec<_> = args
+                .iter()
+                .map(|&arg| {
+                    extract_queries_from_expr(
+                        arg, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+                    )
+                })
+                .collect();
+            if new_func != *func || new_args != *args {
+                arena.alloc_thir_expr(ThirExpr::Call {
+                    func: new_func,
+                    args: new_args,
+                })
+            } else {
+                expr_id
+            }
+        }
+
+        // Recurse into struct fields.
+        ThirExpr::Struct { path, fields, rest } => {
+            let new_fields: Vec<_> = fields
+                .iter()
+                .map(|&(name, expr)| {
+                    let new_expr = extract_queries_from_expr(
+                        expr, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+                    );
+                    (name, new_expr)
+                })
+                .collect();
+            let new_rest = rest.map(|r| {
+                extract_queries_from_expr(
+                    r, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+                )
+            });
+            let changed = new_fields != *fields || new_rest != *rest;
+            if changed {
+                arena.alloc_thir_expr(ThirExpr::Struct {
+                    path: *path,
+                    fields: new_fields,
+                    rest: new_rest,
+                })
+            } else {
+                expr_id
+            }
+        }
+
+        // Recurse into tuple fields.
+        ThirExpr::Tuple { fields } => {
+            let new_fields: Vec<_> = fields
+                .iter()
+                .map(|&f| {
+                    extract_queries_from_expr(
+                        f, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+                    )
+                })
+                .collect();
+            if new_fields != *fields {
+                arena.alloc_thir_expr(ThirExpr::Tuple { fields: new_fields })
+            } else {
+                expr_id
+            }
+        }
+
+        // Recurse into if condition.
+        ThirExpr::If { cond, then_branch, else_branch } => {
+            let new_cond = extract_queries_from_expr(
+                *cond, current, outer_fields, thir_bodies, interner, arena, origin, subquery_count,
+            );
+            if new_cond != *cond {
+                arena.alloc_thir_expr(ThirExpr::If {
+                    cond: new_cond,
+                    then_branch: *then_branch,
+                    else_branch: *else_branch,
+                })
+            } else {
+                expr_id
+            }
+        }
+
+        // Leaf nodes and nodes we don't recurse into.
+        _ => expr_id,
     }
 }
