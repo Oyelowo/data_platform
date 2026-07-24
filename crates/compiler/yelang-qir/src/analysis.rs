@@ -333,6 +333,18 @@ pub fn plan_output_fields(plan: &Plan, arena: &PlanArena) -> FxHashSet<Symbol> {
             }
         }
 
+        // Recursive CTE: output fields from the iteration side.
+        Plan::Iterate { iteration, .. } => {
+            if let Some(child) = arena.get(*iteration) {
+                plan_output_fields(child, arena)
+            } else {
+                FxHashSet::new()
+            }
+        }
+
+        // IterateScan: output fields unknown at analysis time.
+        Plan::IterateScan { .. } => FxHashSet::new(),
+
         // Join: union of both sides.
         Plan::Join { left, right, .. }
         | Plan::DependentJoin {

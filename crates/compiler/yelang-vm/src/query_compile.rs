@@ -283,18 +283,23 @@ fn build_traverse_spec(paths: &[TraversePath]) -> Option<TraverseSpec> {
 fn build_join_spec(
     kind: PhysJoinKind,
     algorithm: PhysJoinAlgorithm,
-    on: &[(yelang_qir::plan::ExprRef, yelang_qir::plan::ExprRef)],
+    on: &[(yelang_qir::plan::JoinKey, yelang_qir::plan::JoinKey)],
     plan_arena: &PlanArena,
 ) -> JoinSpec {
     let mut left_keys = Vec::with_capacity(on.len());
     let mut right_keys = Vec::with_capacity(on.len());
     let mut all_equi = true;
 
-    for (left_expr, right_expr) in on {
-        match (
-            plan_arena.field_name(*left_expr),
-            plan_arena.field_name(*right_expr),
-        ) {
+    for (left_key, right_key) in on {
+        let lk = match left_key {
+            yelang_qir::plan::JoinKey::Column(sym) => Some(*sym),
+            yelang_qir::plan::JoinKey::Expr(expr) => plan_arena.field_name(*expr),
+        };
+        let rk = match right_key {
+            yelang_qir::plan::JoinKey::Column(sym) => Some(*sym),
+            yelang_qir::plan::JoinKey::Expr(expr) => plan_arena.field_name(*expr),
+        };
+        match (lk, rk) {
             (Some(lk), Some(rk)) => {
                 left_keys.push(lk);
                 right_keys.push(rk);

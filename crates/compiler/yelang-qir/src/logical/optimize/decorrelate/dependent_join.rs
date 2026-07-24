@@ -95,6 +95,15 @@ fn djoin_elimination(
         }
     }
 
+    // Populate repr from cclasses: for each outer ref with an equivalence
+    // to a non-outer column, add it to repr (enables substitution).
+    {
+        let outer_refs: Vec<Symbol> = state.infos[info_idx].outer_refs.clone();
+        if let Some(current) = state.current_mut() {
+            super::equivalences::populate_repr(current, &outer_refs);
+        }
+    }
+
     // Unnest the RIGHT (inner) side under this unnesting's umbrella.
     let new_inner = unnest(inner, state, &accessing, arena);
 

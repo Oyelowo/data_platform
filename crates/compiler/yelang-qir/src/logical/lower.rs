@@ -122,10 +122,20 @@ fn lower_select(
     }
 
     // 3. Apply pipeline `where` (post-links filter).
+    // Also extract correlated subqueries from the WHERE predicate.
     if let Some(pred) = select.where_clause {
+        let (new_current, new_pred) = extract_correlated_subqueries(
+            current,
+            pred,
+            thir_bodies,
+            interner,
+            arena,
+            &origin,
+        );
+        current = new_current;
         current = alloc(
             arena,
-            Plan::Filter { input: current, pred },
+            Plan::Filter { input: current, pred: new_pred },
             origin.clone(),
         );
     }
@@ -1686,11 +1696,15 @@ fn extract_queries_from_expr(
             *current = dj;
 
             // Replace the Query node with a column reference.
-            // Use a Field expression with a dummy base — the VM resolves
-            // by column name.
-            let col_ref = arena.alloc_thir_expr(ThirExpr::Var(
-                yelang_arena::DefId::from_usize(output_col.as_usize()),
+            // Use Field { base, field: output_col } — the VM resolves by
+            // field name from the join output row.
+            let dummy_base = arena.alloc_thir_expr(ThirExpr::Literal(
+                yelang_hir::hir::core::Lit::Unit,
             ));
+            let col_ref = arena.alloc_thir_expr(ThirExpr::Field {
+                base: dummy_base,
+                field: output_col,
+            });
             col_ref
         }
 

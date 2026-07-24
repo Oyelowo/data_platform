@@ -228,6 +228,33 @@ pub enum Plan {
         max_iters: Option<usize>,
     },
 
+    /// Recursive CTE iteration operator (BTW 2025 §4.2).
+    ///
+    /// Represents `WITH RECURSIVE cte AS (seed UNION ALL iteration)`.
+    /// The `seed` is evaluated once, then `iteration` is evaluated
+    /// repeatedly until fixpoint, reading the previous iteration's
+    /// result via `IterateScan`.
+    Iterate {
+        /// Seed query (initial value).
+        seed: PlanId,
+        /// Iteration query (reads previous result via IterateScan).
+        iteration: PlanId,
+        /// CTE name (for IterateScan references).
+        cte_name: Symbol,
+        /// Safety bound. `None` = iterate until fixpoint.
+        max_iters: Option<usize>,
+    },
+
+    /// Scan of the previous iteration's result in a recursive CTE.
+    ///
+    /// References the `cte_name` from the enclosing `Iterate` node.
+    /// During unnesting, all IterateScan operators are marked as
+    /// accessing operators (BTW 2025 §4.2).
+    IterateScan {
+        /// CTE name to read from.
+        cte_name: Symbol,
+    },
+
     // ── User-defined / opaque ──────────────────────────────────────────
     /// A user-defined logical operator that the compiler cannot optimize
     /// through. Participates in the plan tree but acts as an optimization

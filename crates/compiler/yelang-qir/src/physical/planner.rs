@@ -307,6 +307,13 @@ fn lower_node(
                 produce_one_row: false,
             })
         }
+
+        // Recursive CTE: not yet supported in physical planning.
+        Plan::Iterate { .. } | Plan::IterateScan { .. } => {
+            phys.alloc(PhysOp::Empty {
+                produce_one_row: false,
+            })
+        }
     }
 }
 

@@ -123,6 +123,14 @@ pub(super) fn unnest(
         // Extension / Repeat: opaque barriers.
         Plan::Extension { .. } | Plan::Repeat { .. } => node,
 
+        // Iterate (recursive CTE): unnest seed and iteration sides.
+        Plan::Iterate { .. } => {
+            super::recursive::unnest_iterate(node, state, arena)
+        }
+
+        // IterateScan: leaf, finalize.
+        Plan::IterateScan { .. } => finalize_leaf(node, state, arena),
+
         // DependentJoin: handled before the match (above).
         Plan::DependentJoin { .. } => unreachable!("DependentJoin handled before match"),
     }
@@ -473,7 +481,7 @@ fn unnest_sort(
     })
 }
 
-/// Limit: recurse.
+/// Limit: recurse. Also tries ORDER BY LIMIT rewrite (§4.4).
 fn unnest_limit(
     node: PlanId,
     input: PlanId,
@@ -483,6 +491,13 @@ fn unnest_limit(
     accessing: &[PlanId],
     arena: &mut PlanArena,
 ) -> PlanId {
+    // Try ORDER BY LIMIT → ROW_NUMBER() window rewrite (§4.4).
+    if super::orderby_limit::is_orderby_limit_pattern(node, arena) {
+        if let Some(rewritten) = super::orderby_limit::try_rewrite_orderby_limit(node, state, arena) {
+            return rewritten;
+        }
+    }
+
     let child_accessing = remove_from_accessing(accessing, node);
     let new_input = unnest(input, state, &child_accessing, arena);
 

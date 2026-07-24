@@ -56,12 +56,16 @@ use state::UnnestingState;
 ///
 /// Returns the new root PlanId. The arena is mutated in place
 /// (new nodes are allocated; old correlated nodes become unreachable).
-pub fn decorrelate(root: PlanId, arena: &mut PlanArena) -> PlanId {
+pub fn decorrelate(
+    root: PlanId,
+    arena: &mut PlanArena,
+    interner: &yelang_interner::Interner,
+) -> PlanId {
     // Phase 1: Annotate accessing operators.
     let annotations = annotate_accessing(root, arena);
 
     // Phase 2: Top-down elimination.
-    let mut state = UnnestingState::new(annotations);
+    let mut state = UnnestingState::new(annotations, interner.clone());
     let result = eliminate_top_down(root, &mut state, arena);
 
     result

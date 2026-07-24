@@ -56,6 +56,9 @@ pub fn children(plan: &Plan) -> Vec<PlanId> {
         }
         Plan::DependentJoin { outer, inner, .. } => vec![*outer, *inner],
 
+        // Recursive CTE
+        Plan::Iterate { seed, iteration, .. } => vec![*seed, *iteration],
+
         // N-ary
         Plan::Union { inputs } => inputs.clone(),
 
@@ -63,7 +66,7 @@ pub fn children(plan: &Plan) -> Vec<PlanId> {
         Plan::ScalarSubquery { plan, .. } | Plan::Exists { plan, .. } => vec![*plan],
 
         // Leaves
-        Plan::Scan { .. } | Plan::Constant { .. } | Plan::Empty { .. } => vec![],
+        Plan::Scan { .. } | Plan::Constant { .. } | Plan::Empty { .. } | Plan::IterateScan { .. } => vec![],
 
         // Extension — ask the node
         Plan::Extension { node } => node.inputs(),
@@ -173,8 +176,19 @@ pub fn map_children(plan: &Plan, new_children: &[PlanId]) -> Plan {
             correlation: correlation.clone(),
             negated: *negated,
         },
+        // Recursive CTE
+        Plan::Iterate {
+            cte_name,
+            max_iters,
+            ..
+        } => Plan::Iterate {
+            seed: next(),
+            iteration: next(),
+            cte_name: *cte_name,
+            max_iters: *max_iters,
+        },
         // Leaves and Extension: no children to map.
-        Plan::Scan { .. } | Plan::Constant { .. } | Plan::Empty { .. } => plan.clone(),
+        Plan::Scan { .. } | Plan::Constant { .. } | Plan::Empty { .. } | Plan::IterateScan { .. } => plan.clone(),
         Plan::Extension { .. } => plan.clone(),
     }
 }

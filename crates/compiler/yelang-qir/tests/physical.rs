@@ -42,7 +42,7 @@ fn plan_optimize_and_physical(
             continue;
         }
         if let Some(root) = lower_query(qid, &hir, None, &interner, &hir.lang_items, &mut plan_arena) {
-            let optimized = optimizer.optimize(root, &mut plan_arena);
+            let optimized = optimizer.optimize(root, &mut plan_arena, &interner);
             let phys_root = yelang_qir::physical::planner::plan_physical(
                 optimized,
                 &plan_arena,

@@ -41,7 +41,7 @@ fn plan_and_optimize(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>) {
             continue;
         }
         if let Some(root) = lower_query(qid, &hir, None, &interner, &hir.lang_items, &mut arena) {
-            roots.push(optimizer.optimize(root, &mut arena));
+            roots.push(optimizer.optimize(root, &mut arena, &interner));
         }
     }
 
@@ -74,6 +74,8 @@ fn count_nodes(arena: &PlanArena, root: yelang_qir::PlanId, name: &str) -> usize
             Plan::Extension { .. } => "Extension",
             Plan::Constant { .. } => "Constant",
             Plan::Empty { .. } => "Empty",
+            Plan::Iterate { .. } => "Iterate",
+            Plan::IterateScan { .. } => "IterateScan",
         };
         if plan_name == name {
             count += 1;

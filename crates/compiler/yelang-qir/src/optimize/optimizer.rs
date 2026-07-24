@@ -63,9 +63,9 @@ impl Optimizer {
     ///
     /// Decorrelation runs **once** before the fixpoint loop (it is
     /// stateful and top-down, not a fixpoint rule).
-    pub fn optimize(&self, root: PlanId, arena: &mut PlanArena) -> PlanId {
+    pub fn optimize(&self, root: PlanId, arena: &mut PlanArena, interner: &yelang_interner::Interner) -> PlanId {
         // Phase 0: Decorrelation (one-shot, top-down).
-        let mut current = crate::logical::optimize::decorrelate::decorrelate(root, arena);
+        let mut current = crate::logical::optimize::decorrelate::decorrelate(root, arena, interner);
 
         // Invariant: decorrelation must eliminate all correlated nodes.
         debug_assert!(

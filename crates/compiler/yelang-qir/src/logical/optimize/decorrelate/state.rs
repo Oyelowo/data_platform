@@ -136,15 +136,18 @@ pub(super) struct UnnestingState {
     pub(super) annotations: AccessingAnnotation,
     /// CTE DAG cutting: maps original PlanId → decorrelated PlanId.
     pub(super) cache: FxHashMap<PlanId, PlanId>,
+    /// Interner for creating new symbols (e.g., _rn for ROW_NUMBER).
+    pub(super) interner: yelang_interner::Interner,
 }
 
 impl UnnestingState {
-    pub(super) fn new(annotations: AccessingAnnotation) -> Self {
+    pub(super) fn new(annotations: AccessingAnnotation, interner: yelang_interner::Interner) -> Self {
         Self {
             infos: Vec::new(),
             stack: Vec::new(),
             annotations,
             cache: FxHashMap::default(),
+            interner,
         }
     }
 

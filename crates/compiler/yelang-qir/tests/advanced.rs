@@ -39,7 +39,7 @@ fn plan_queries(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>, Interner) {
             continue;
         }
         if let Some(root) = lower_query(qid, &hir, None, &interner, &hir.lang_items, &mut arena) {
-            roots.push(optimizer.optimize(root, &mut arena));
+            roots.push(optimizer.optimize(root, &mut arena, &interner));
         }
     }
 
@@ -71,6 +71,8 @@ fn has_node(arena: &PlanArena, root: yelang_qir::PlanId, target: &str) -> bool {
             Plan::Extension { .. } => "Extension",
             Plan::Constant { .. } => "Constant",
             Plan::Empty { .. } => "Empty",
+            Plan::Iterate { .. } => "Iterate",
+            Plan::IterateScan { .. } => "IterateScan",
         };
         if name == target {
             return true;

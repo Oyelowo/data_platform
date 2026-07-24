@@ -88,7 +88,7 @@ impl TestCtx {
     }
 
     fn decorrelate(&mut self, root: yelang_qir::PlanId) -> yelang_qir::PlanId {
-        decorrelate(root, &mut self.arena)
+        decorrelate(root, &mut self.arena, &self.interner)
     }
 
     fn count_nodes(&self, root: yelang_qir::PlanId, name: &str) -> usize {
@@ -117,6 +117,8 @@ impl TestCtx {
                 Plan::Extension { .. } => "Extension",
                 Plan::Constant { .. } => "Constant",
                 Plan::Empty { .. } => "Empty",
+            Plan::Iterate { .. } => "Iterate",
+            Plan::IterateScan { .. } => "IterateScan",
             };
             if plan_name == name {
                 count += 1;

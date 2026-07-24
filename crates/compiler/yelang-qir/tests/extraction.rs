@@ -39,7 +39,7 @@ fn plan_queries(src: &str) -> (PlanArena, Vec<yelang_qir::PlanId>, Interner) {
             continue;
         }
         if let Some(root) = lower_query(query_id, &hir, None, &interner, &hir.lang_items, &mut arena) {
-            let optimized = optimizer.optimize(root, &mut arena);
+            let optimized = optimizer.optimize(root, &mut arena, &interner);
             roots.push(optimized);
         }
     }
@@ -81,6 +81,8 @@ fn name(plan: &Plan) -> &'static str {
         Plan::Extension { .. } => "Extension",
         Plan::Constant { .. } => "Constant",
         Plan::Empty { .. } => "Empty",
+            Plan::Iterate { .. } => "Iterate",
+            Plan::IterateScan { .. } => "IterateScan",
     }
 }
 
