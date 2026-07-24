@@ -33,8 +33,10 @@ pub(super) fn eliminate_dependent_join(
     let outer_refs = compute_outer_refs(outer, inner, pred, arena);
 
     // Step 2: Trivial — no correlation.
+    // Still need to eliminate any nested DependentJoins in the inner side.
     if outer_refs.is_empty() {
-        return convert_to_regular_join(outer, inner, pred, kind, arena);
+        let new_inner = super::eliminate::eliminate_top_down(inner, state, arena);
+        return convert_to_regular_join(outer, new_inner, pred, kind, arena);
     }
 
     // Step 3: Try simple elimination (BTW 2025 Fig 3).

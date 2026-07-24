@@ -32,12 +32,14 @@
 //! or `Exists` nodes may remain in the live plan tree.
 
 mod annotate;
+mod cte_dag;
 mod dependent_join;
 mod domain;
 mod eliminate;
 mod equivalences;
 mod orderby_limit;
 mod outer_refs;
+mod recursive;
 mod rewrite;
 mod rules;
 mod simple;

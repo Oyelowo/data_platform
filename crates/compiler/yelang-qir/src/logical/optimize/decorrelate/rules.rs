@@ -31,6 +31,12 @@ pub(super) fn unnest(
     accessing: &[PlanId],
     arena: &mut PlanArena,
 ) -> PlanId {
+    // DependentJoin: always eliminate, regardless of accessing set.
+    // Nested DependentJoins have their own correlation context.
+    if let Plan::DependentJoin { outer, inner, pred, kind } = arena.plan(node).clone() {
+        return eliminate_dependent_join(node, outer, inner, pred, kind, state, arena);
+    }
+
     // If no accessing operators below → finalize.
     if accessing.is_empty() {
         return finalize_leaf(node, state, arena);
@@ -108,11 +114,6 @@ pub(super) fn unnest(
             unnest_traverse(node, input, paths, state, &subtree_accessing, arena)
         }
 
-        // DependentJoin (Lemma 4.18): nested — eliminate recursively.
-        Plan::DependentJoin { outer, inner, pred, kind } => {
-            eliminate_dependent_join(node, outer, inner, pred, kind, state, arena)
-        }
-
         // ScalarSubquery / Exists: should have been converted to DependentJoin.
         Plan::ScalarSubquery { .. } | Plan::Exists { .. } => {
             // Leave as-is — will be handled by a later pass.
@@ -121,6 +122,9 @@ pub(super) fn unnest(
 
         // Extension / Repeat: opaque barriers.
         Plan::Extension { .. } | Plan::Repeat { .. } => node,
+
+        // DependentJoin: handled before the match (above).
+        Plan::DependentJoin { .. } => unreachable!("DependentJoin handled before match"),
     }
 }
 
